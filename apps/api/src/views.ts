@@ -1,4 +1,6 @@
 import {
+  sumUsd,
+  type CostBasis,
   computeProgress,
   deriveStages,
   getAvailableActions,
@@ -94,17 +96,39 @@ export async function listProjects(db: Database): Promise<ProjectSummaryView[]> 
 }
 
 async function costSummary(db: Database, project: Project): Promise<CostSummaryView> {
-  // Vendor-reported cost when available, otherwise our estimate from usage × rates.
-  const [row] = await db.$queryRaw<{ spent: string | null; calls: bigint; mock_calls: bigint }[]>`
-    SELECT SUM(COALESCE(actual_cost_usd, estimated_cost_usd))::text AS spent,
+  const rows = await db.$queryRaw<
+    { provider: string; calls: bigint; failed: bigint; mock: bigint; unpriced: bigint; reported: string | null; estimated: string | null; bases: (string | null)[] }[]
+  >`
+    SELECT provider,
            COUNT(*) AS calls,
-           COUNT(*) FILTER (WHERE is_mock) AS mock_calls
-      FROM provider_calls WHERE project_id = ${project.id}::uuid`;
+           COUNT(*) FILTER (WHERE status = 'FAILED') AS failed,
+           COUNT(*) FILTER (WHERE is_mock) AS mock,
+           COUNT(*) FILTER (WHERE cost_basis = 'UNPRICED') AS unpriced,
+           SUM(actual_cost_usd)::text AS reported,
+           SUM(estimated_cost_usd) FILTER (WHERE actual_cost_usd IS NULL)::text AS estimated,
+           ARRAY_AGG(DISTINCT cost_basis::text) AS bases
+      FROM provider_calls WHERE project_id = ${project.id}::uuid
+     GROUP BY provider ORDER BY provider`;
+  const num = (v: string | null) => (v ? Number(v) : 0);
+  const byProvider = rows.map((r) => ({
+    provider: r.provider,
+    calls: Number(r.calls),
+    totalUsd: sumUsd([num(r.reported), num(r.estimated)]),
+    costBases: r.bases.filter((b): b is CostBasis => b !== null),
+  }));
+  const vendorReportedUsd = sumUsd(rows.map((r) => num(r.reported)));
+  const estimatedUsd = sumUsd(rows.map((r) => num(r.estimated)));
   return {
-    estimatedUsd: project.estimatedCostUsd ? project.estimatedCostUsd.toNumber() : null,
-    actualUsd: row?.spent ? Number(row.spent) : 0,
-    providerCalls: Number(row?.calls ?? 0),
-    mockCalls: Number(row?.mock_calls ?? 0),
+    planningEstimateUsd: project.estimatedCostUsd ? project.estimatedCostUsd.toNumber() : null,
+    totalUsd: sumUsd([vendorReportedUsd, estimatedUsd]),
+    vendorReportedUsd,
+    estimatedUsd,
+    includesEstimates: rows.some((r) => r.bases.includes('ESTIMATED')),
+    unpricedCalls: rows.reduce((n, r) => n + Number(r.unpriced), 0),
+    providerCalls: rows.reduce((n, r) => n + Number(r.calls), 0),
+    mockCalls: rows.reduce((n, r) => n + Number(r.mock), 0),
+    failedCalls: rows.reduce((n, r) => n + Number(r.failed), 0),
+    byProvider,
   };
 }
 
@@ -116,7 +140,7 @@ export async function loadProjectDetail(
   const project = await findProject(db, idOrSlug);
   if (!project) return null;
 
-  const [languageVersions, jobs, approvals, events, costs, phaseJobsComplete, rt] = await Promise.all([
+  const [languageVersions, jobs, approvals, events, costs, phaseJobsComplete, rt, latestDossier] = await Promise.all([
     db.languageVersion.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'asc' } }),
     db.job.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
     db.approval.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
@@ -124,6 +148,7 @@ export async function loadProjectDetail(
     costSummary(db, project),
     projects.phaseJobsComplete(db, project),
     runtimes(db, [project.id]),
+    db.researchDossier.findFirst({ where: { projectId: project.id }, orderBy: { version: 'desc' }, include: { _count: { select: { claims: true } } } }),
   ]);
 
   const actions = getAvailableActions(project.status, { failedFrom: project.failedFromStatus });
@@ -145,5 +170,15 @@ export async function loadProjectDetail(
     approvals: approvals.map(toApprovalView),
     events: events.map(toEventView),
     costs,
+    research: latestDossier
+      ? {
+          id: latestDossier.id,
+          version: latestDossier.version,
+          status: latestDossier.status,
+          qualityPassed: latestDossier.qualityPassed,
+          claimCount: latestDossier._count.claims,
+          createdAt: latestDossier.createdAt.toISOString(),
+        }
+      : null,
   };
 }

@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { actorOf } from '../auth.ts';
 import type { AppContainer } from '../container.ts';
+import { loadResearchView } from '../research-views.ts';
 import { findProject, listProjects, loadProjectDetail, toJobView } from '../views.ts';
 
 const Params = z.object({ id: z.string().trim().min(1).max(100) });
@@ -43,6 +44,15 @@ export async function projectRoutes(app: FastifyInstance, c: AppContainer): Prom
     const project = await requireProject(req.params);
     await c.projects.recordApproval(project.id, ApprovalInput.parse(req.body ?? {}), actorOf(req));
     return reply.code(201).send(await detail(project.id));
+  });
+
+  /** Research dossier viewer: latest version, or ?version=N. */
+  app.get('/api/projects/:id/research', async (req) => {
+    const project = await requireProject(req.params);
+    const { version } = z.object({ version: z.coerce.number().int().min(1).optional() }).parse(req.query ?? {});
+    const view = await loadResearchView(c.db, project.id, version);
+    if (!view) throw new NotFoundError('Research dossier version', String(version));
+    return view;
   });
 
   /** Move the project back to an earlier status (e.g. re-open the script). */

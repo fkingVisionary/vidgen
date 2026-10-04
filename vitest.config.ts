@@ -11,7 +11,7 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          include: ['packages/*/src/**/*.test.ts', 'apps/api/src/**/*.test.ts'],
+          include: ['packages/*/src/**/*.test.ts', 'modules/*/src/**/*.test.ts', 'apps/api/src/**/*.test.ts'],
           exclude: ['**/*.int.test.ts', '**/node_modules/**'],
           environment: 'node',
         },
@@ -19,7 +19,7 @@ export default defineConfig({
       {
         test: {
           name: 'integration',
-          include: ['packages/*/src/**/*.int.test.ts', 'apps/api/src/**/*.int.test.ts'],
+          include: ['packages/*/src/**/*.int.test.ts', 'modules/*/src/**/*.int.test.ts', 'apps/api/src/**/*.int.test.ts'],
           exclude: ['**/node_modules/**'],
           environment: 'node',
           globalSetup: ['./test/integration-setup.ts'],

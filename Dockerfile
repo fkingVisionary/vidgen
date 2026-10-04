@@ -26,6 +26,7 @@ COPY packages/core/package.json packages/core/
 COPY packages/database/package.json packages/database/
 COPY packages/pipeline/package.json packages/pipeline/
 COPY packages/providers/package.json packages/providers/
+COPY modules/research/package.json modules/research/
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
@@ -39,6 +40,7 @@ COPY --from=build /app/packages/core/package.json packages/core/
 COPY --from=build /app/packages/database/package.json packages/database/
 COPY --from=build /app/packages/pipeline/package.json packages/pipeline/
 COPY --from=build /app/packages/providers/package.json packages/providers/
+COPY --from=build /app/modules/research/package.json modules/research/
 # Runtime deps of the API and its workspace packages (includes the prisma CLI for migrations).
 RUN pnpm install --frozen-lockfile --prod --filter "@docengine/api..." \
  && pnpm store prune

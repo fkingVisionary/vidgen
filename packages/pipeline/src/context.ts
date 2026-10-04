@@ -1,6 +1,7 @@
-import { estimateCost, roundUsd } from '@docengine/core';
+import { estimateCost, roundUsd, type CostBasis, type Rate } from '@docengine/core';
 import type { Database, Job, LanguageVersion, Prisma, Project } from '@docengine/database';
-import { SLOT_KINDS, type CallMeta, type ProviderSet, type ProviderSlot } from '@docengine/providers';
+import { ProviderError, SLOT_KINDS, type CallMeta, type ProviderSet, type ProviderSlot } from '@docengine/providers';
+import { EVENT } from './events.ts';
 import type { Logger } from './logger.ts';
 
 export interface CallProviderOptions<T> {
@@ -32,6 +33,35 @@ export interface StageContext {
   ): Promise<T>;
   /** True if any provider call made through this context was served by a MOCK. */
   usedMockProvider(): boolean;
+  /** Record a progress note on the project's activity log (visible live in the dashboard). */
+  progress(message: string, data?: Record<string, unknown>): Promise<void>;
+}
+
+/**
+ * Prices a call and says where the number comes from. Costs are never
+ * invented: a vendor-reported amount wins; otherwise usage × rate card is an
+ * ESTIMATE; usage with no rate (or no usage at all) is UNPRICED.
+ */
+export function priceCall(meta: CallMeta, rates: readonly Rate[]): {
+  estimatedCostUsd: number | null;
+  actualCostUsd: number | null;
+  costBasis: CostBasis;
+  costNote: string | null;
+  unpriced: CallMeta['usage'];
+} {
+  const estimate = estimateCost(meta.provider, meta.model, meta.usage, rates);
+  const estimatedCostUsd = meta.usage.length > 0 ? roundUsd(estimate.costUsd) : null;
+  const actualCostUsd = meta.actualCostUsd === undefined ? null : roundUsd(meta.actualCostUsd);
+  let costBasis: CostBasis;
+  let note = meta.costNote ?? null;
+  if (meta.mock) costBasis = 'MOCK';
+  else if (actualCostUsd !== null) costBasis = 'VENDOR_REPORTED';
+  else if (meta.usage.length === 0 || estimate.unpriced.length > 0) {
+    costBasis = 'UNPRICED';
+    const missing = estimate.unpriced.map((u) => `${u.quantity} ${u.unit}`).join(', ') || 'no usage reported';
+    note = `${note ? `${note}. ` : ''}No price configured for: ${missing}`;
+  } else costBasis = 'ESTIMATED';
+  return { estimatedCostUsd, actualCostUsd, costBasis, costNote: note, unpriced: estimate.unpriced };
 }
 
 const toJson = (value: unknown): Prisma.InputJsonValue | undefined =>
@@ -55,6 +85,13 @@ export function createStageContext(args: {
     ...args,
     usedMockProvider: () => usedMock,
 
+    async progress(message, data = {}) {
+      await db.projectEvent.create({
+        data: { projectId: job.projectId, jobId: job.id, type: EVENT.JOB_PROGRESS, message, data: toJson(data) ?? {} },
+      });
+      logger.info(data, message);
+    },
+
     async callProvider(slot, operation, fn, opts = {}) {
       const info = providers[slot].info;
       if (info.mock) usedMock = true;
@@ -77,9 +114,9 @@ export function createStageContext(args: {
         const result = await fn();
         const durationMs = Math.round(performance.now() - started);
         const { meta } = result;
-        const cost = estimateCost(meta.provider, meta.model, meta.usage, info.rates);
-        if (cost.unpriced.length > 0) {
-          logger.warn({ provider: meta.provider, model: meta.model, unpriced: cost.unpriced }, 'provider usage has no price; cost under-reported');
+        const price = priceCall(meta, info.rates);
+        if (price.costBasis === 'UNPRICED') {
+          logger.warn({ provider: meta.provider, model: meta.model, unpriced: price.unpriced }, 'provider usage has no price; cost under-reported');
         }
         await db.providerCall.update({
           where: { id: call.id },
@@ -88,21 +125,42 @@ export function createStageContext(args: {
             model: meta.model ?? null,
             isMock: meta.mock,
             providerJobId: 'providerJobId' in result && typeof result.providerJobId === 'string' ? result.providerJobId : null,
+            providerRequestId: meta.providerRequestId ?? null,
             usage: toJson(meta.usage) ?? [],
             response: toJson(opts.summarize?.(result)),
-            estimatedCostUsd: roundUsd(cost.costUsd),
-            actualCostUsd: meta.actualCostUsd === undefined ? null : roundUsd(meta.actualCostUsd),
+            estimatedCostUsd: price.estimatedCostUsd,
+            actualCostUsd: price.actualCostUsd,
+            costBasis: price.costBasis,
+            costNote: price.costNote,
             completedAt: new Date(),
             durationMs,
           },
         });
-        logger.info({ provider: meta.provider, operation, durationMs, mock: meta.mock, costUsd: cost.costUsd }, 'provider call succeeded');
+        logger.info({ provider: meta.provider, operation, model: meta.model, durationMs, mock: meta.mock, costUsd: price.estimatedCostUsd, costBasis: price.costBasis }, 'provider call succeeded');
         return result;
       } catch (err) {
         const durationMs = Math.round(performance.now() - started);
+        // A failed call may still have been billed (e.g. truncated or invalid LLM output): record its usage.
+        const billed = err instanceof ProviderError && err.meta ? priceCall(err.meta, info.rates) : null;
         await db.providerCall.update({
           where: { id: call.id },
-          data: { status: 'FAILED', error: errorMessage(err), completedAt: new Date(), durationMs },
+          data: {
+            status: 'FAILED',
+            error: errorMessage(err),
+            completedAt: new Date(),
+            durationMs,
+            ...(billed && err instanceof ProviderError && err.meta
+              ? {
+                  model: err.meta.model ?? null,
+                  usage: toJson(err.meta.usage) ?? [],
+                  providerRequestId: err.meta.providerRequestId ?? null,
+                  estimatedCostUsd: billed.estimatedCostUsd,
+                  actualCostUsd: billed.actualCostUsd,
+                  costBasis: billed.costBasis,
+                  costNote: billed.costNote,
+                }
+              : {}),
+          },
         });
         logger.warn({ provider: info.name, operation, durationMs, err: errorMessage(err) }, 'provider call failed');
         throw err;

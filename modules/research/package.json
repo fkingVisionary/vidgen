@@ -1,0 +1,21 @@
+{
+  "name": "@docengine/research",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Research stage: discovers and retrieves sources, extracts verified evidence, builds a versioned, source-backed research dossier and runs the quality gate.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@docengine/core": "workspace:*",
+    "@docengine/database": "workspace:*",
+    "@docengine/pipeline": "workspace:*",
+    "@docengine/providers": "workspace:*",
+    "zod": "catalog:"
+  }
+}

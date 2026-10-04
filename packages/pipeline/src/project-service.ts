@@ -142,6 +142,18 @@ export class ProjectService {
       const resolution = resolveApproval(project.status, input.gate, input.decision, { phaseJobsComplete: complete });
       if (!resolution.ok) throw new ConflictError(resolution.reason);
 
+      // Attach the exact artifact version under review and record the decision on it.
+      let dossierId: string | null = null;
+      if (input.gate === 'RESEARCH') {
+        const dossier = await tx.researchDossier.findFirst({ where: { projectId, status: 'IN_REVIEW' }, orderBy: { version: 'desc' } });
+        if (dossier) {
+          dossierId = dossier.id;
+          if (input.decision !== 'FLAGGED') {
+            await tx.researchDossier.update({ where: { id: dossier.id }, data: { status: input.decision === 'APPROVED' ? 'APPROVED' : 'REJECTED' } });
+          }
+        }
+      }
+
       const approval = await tx.approval.create({
         data: {
           projectId,
@@ -150,6 +162,7 @@ export class ProjectService {
           notes: input.notes ?? null,
           decidedBy: actor,
           projectStatus: project.status,
+          dossierId,
         },
       });
       await this.event(tx, projectId, EVENT.APPROVAL_RECORDED, `${input.gate}: ${input.decision}`, {

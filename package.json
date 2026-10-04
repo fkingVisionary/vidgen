@@ -24,7 +24,8 @@
     "db:migrate": "pnpm --filter @docengine/database migrate:dev",
     "db:deploy": "pnpm --filter @docengine/database migrate:deploy",
     "db:seed": "pnpm --filter @docengine/database seed",
-    "db:studio": "pnpm --filter @docengine/database studio"
+    "db:studio": "pnpm --filter @docengine/database studio",
+    "research:run": "pnpm --filter @docengine/api research"
   },
   "devDependencies": {
     "@docengine/database": "workspace:*",

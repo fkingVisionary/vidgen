@@ -6,6 +6,7 @@ import type {
   JobView,
   ProjectDetailView,
   ProjectSummaryView,
+  ResearchView,
   RewindInput,
 } from '@docengine/core';
 
@@ -43,4 +44,6 @@ export const api = {
   approve: (id: string, input: ApprovalInput) => request<ProjectDetailView>('POST', `/api/projects/${id}/approvals`, input),
   rewind: (id: string, input: RewindInput) => request<ProjectDetailView>('POST', `/api/projects/${id}/rewind`, input),
   retryJob: (jobId: string) => request<JobView>('POST', `/api/jobs/${jobId}/retry`),
+  research: (id: string, version?: number) =>
+    request<ResearchView>('GET', `/api/projects/${encodeURIComponent(id)}/research${version ? `?version=${version}` : ''}`),
 };

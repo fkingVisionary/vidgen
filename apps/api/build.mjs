@@ -20,7 +20,7 @@ const externalizeNpm = {
 };
 
 const result = await build({
-  entryPoints: { server: 'src/server.ts', worker: 'src/worker.ts', seed: 'src/seed.ts' },
+  entryPoints: { server: 'src/server.ts', worker: 'src/worker.ts', seed: 'src/seed.ts', research: 'src/research-cli.ts' },
   outdir: 'dist',
   bundle: true,
   platform: 'node',

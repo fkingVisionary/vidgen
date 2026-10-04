@@ -10,13 +10,24 @@ import { buildApp } from './app.ts';
 import { createContainer, type AppContainer } from './container.ts';
 import { DEMO_PROJECT_SLUG, seedDemoProject } from './demo.ts';
 import { parseEnv } from './env.ts';
+import { ALL_MOCK, createProviders } from '@docengine/providers';
+import { FAKE_CORPUS_GATE, FakeResearchAI, FakeResearchProvider } from '@docengine/research/testing';
+import type { ResearchView } from '@docengine/core';
 
 const db = useTestDatabase();
 let open: { app: FastifyInstance; c: AppContainer }[] = [];
 
-async function start(extraEnv: Record<string, string> = {}) {
+async function start(extraEnv: Record<string, string> = {}, opts: { fakeResearch?: boolean } = {}) {
   const env = parseEnv({ DATABASE_URL: process.env.TEST_DATABASE_URL!, NODE_ENV: 'test', LOG_LEVEL: 'silent', WEB_DIST_DIR: '/nonexistent', ...extraEnv });
-  const c = createContainer(env, pino({ level: 'silent' }), { db });
+  const c = createContainer(env, pino({ level: 'silent' }), {
+    db,
+    ...(opts.fakeResearch
+      ? {
+          providers: { ...createProviders(ALL_MOCK), ai: new FakeResearchAI(), research: new FakeResearchProvider() },
+          researchConfig: { gate: FAKE_CORPUS_GATE },
+        }
+      : {}),
+  });
   const app = await buildApp(c);
   open.push({ app, c });
   return { app, c };
@@ -87,7 +98,9 @@ describe('HTTP API', () => {
     expect(afterJob.stages[0]).toEqual({ stage: 'RESEARCH', state: 'AWAITING_APPROVAL' });
     expect(afterJob.actions).toMatchObject({ canApprove: true, gate: { gate: 'RESEARCH' } });
     expect(afterJob.jobs[0]).toMatchObject({ status: 'SUCCEEDED', isMock: true, result: { mock: true, label: 'MOCK' } });
-    expect(afterJob.costs).toEqual({ estimatedUsd: null, actualUsd: 0, providerCalls: 1, mockCalls: 1 });
+    expect(afterJob.costs).toMatchObject({ planningEstimateUsd: null, totalUsd: 0, includesEstimates: false, providerCalls: 1, mockCalls: 1, unpricedCalls: 0 });
+    expect(afterJob.costs.byProvider).toEqual([{ provider: 'mock', calls: 1, totalUsd: 0, costBases: ['MOCK'] }]);
+    expect(afterJob.research).toBeNull(); // the MOCK research placeholder writes no dossier
     expect(afterJob.events.map((e) => e.type)).toEqual(expect.arrayContaining(['PROJECT_CREATED', 'JOB_QUEUED', 'JOB_SUCCEEDED', 'STATUS_CHANGED']));
 
     const approved = await app.inject({
@@ -124,6 +137,44 @@ describe('HTTP API', () => {
     expect(page.body).toContain('Documentary Engine');
     expect(page.headers['content-security-policy']).toContain("default-src 'self'");
     expect((await app.inject({ method: 'GET', url: '/api/unknown' })).statusCode).toBe(404);
+  });
+});
+
+describe('research dossier API', () => {
+  it('serves the dossier with claims, citations, sources, quality report and cost, and links the approval', async () => {
+    const { app, c } = await start({}, { fakeResearch: true });
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH']);
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/research` })).json<ResearchView>()).toEqual({ versions: [], dossier: null });
+
+    await app.inject({ method: 'POST', url: `/api/projects/${p.id}/jobs`, payload: { type: 'RESEARCH' } });
+    await c.runner.drain();
+
+    const view = (await app.inject({ method: 'GET', url: `/api/projects/${p.slug}/research` })).json<ResearchView>();
+    expect(view.versions).toEqual([expect.objectContaining({ version: 1, status: 'IN_REVIEW', qualityPassed: true, claimCount: 14 })]);
+    const d = view.dossier!;
+    expect(d.qualityReport?.passed).toBe(true);
+    expect(d.content.questions).toHaveLength(4);
+    const myth = d.claims.find((x) => x.key === 'C003')!;
+    expect(myth).toMatchObject({ verdict: 'MYTH', importance: 'KEY', popularVersion: expect.stringContaining('Mackay') });
+    expect(myth.citations.map((x) => x.stance).sort()).toEqual(['CONTRADICTS', 'CONTRADICTS', 'SUPPORTS', 'SUPPORTS']);
+    expect(myth.citations.every((x) => x.quoteVerified && x.basis === 'FULL_TEXT' && x.quote)).toBe(true);
+    // All considered sources, with their outcome.
+    expect(d.sources).toHaveLength(15);
+    expect(d.sources.filter((x) => x.retrievalStatus === 'FAILED')).toHaveLength(2);
+    expect(d.sources.filter((x) => x.duplicateOfId)).toHaveLength(1);
+    expect(d.sources.find((x) => x.domain === 'jstor.org')).toMatchObject({ sourceType: 'ACADEMIC', citationCount: expect.any(Number) });
+    expect(d.cost.calls).toBeGreaterThan(20);
+    expect(d.cost.includesEstimates).toBe(true);
+
+    const detail = (await app.inject({ method: 'GET', url: `/api/projects/${p.id}` })).json<ProjectDetailView>();
+    expect(detail.research).toMatchObject({ version: 1, status: 'IN_REVIEW', claimCount: 14 });
+    expect(detail.costs.includesEstimates).toBe(true);
+    expect(detail.costs.byProvider.map((x) => x.provider)).toEqual(['fake-ai', 'fake-search']);
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/research?version=9` })).statusCode).toBe(404);
+
+    const approved = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/approvals`, payload: { gate: 'RESEARCH', decision: 'APPROVED', notes: 'Checked the myths section' } });
+    expect(approved.json<ProjectDetailView>()).toMatchObject({ status: 'RESEARCH_COMPLETE', research: { status: 'APPROVED' } });
   });
 });
 

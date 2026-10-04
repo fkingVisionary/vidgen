@@ -63,10 +63,44 @@ export function ProjectPage() {
           <JobsTable project={p} />
         </div>
         <div className="space-y-6">
+          {p.research && (
+            <Card title="Research dossier">
+              <p className="text-sm">
+                Version {p.research.version} · {p.research.status.replace('_', ' ').toLowerCase()} · {p.research.claimCount} claims
+              </p>
+              <p className={`text-xs ${p.research.qualityPassed ? 'text-emerald-700' : 'text-red-700'}`}>
+                Quality gate {p.research.qualityPassed ? 'passed' : 'failed'}
+              </p>
+              <Link to={`/projects/${p.slug}/research`} className="mt-2 inline-block rounded-md bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-700">
+                Open dossier →
+              </Link>
+            </Card>
+          )}
           <Card title="Cost">
-            <p className="text-2xl font-semibold tabular-nums">{formatUsd(p.costs.actualUsd)}</p>
+            <p className="text-2xl font-semibold tabular-nums">
+              {formatUsd(p.costs.totalUsd)}
+              {p.costs.includesEstimates && <span className="ml-2 align-middle text-xs font-normal text-amber-700">estimated</span>}
+            </p>
             <p className="text-xs text-stone-500">
-              {p.costs.providerCalls} provider call(s), {p.costs.mockCalls} MOCK · estimate {p.costs.estimatedUsd === null ? 'not set' : formatUsd(p.costs.estimatedUsd)}
+              {p.costs.providerCalls} provider call(s) · {p.costs.mockCalls} MOCK · {p.costs.failedCalls} failed
+              {p.costs.unpricedCalls > 0 && <span className="text-red-700"> · {p.costs.unpricedCalls} unpriced (missing from total)</span>}
+            </p>
+            {p.costs.byProvider.length > 0 && (
+              <table className="mt-2 w-full text-xs">
+                <tbody>
+                  {p.costs.byProvider.map((b) => (
+                    <tr key={b.provider}>
+                      <td className="py-0.5 text-stone-600">{b.provider}</td>
+                      <td className="py-0.5 text-right tabular-nums">{b.calls} calls</td>
+                      <td className="py-0.5 text-right tabular-nums">{formatUsd(b.totalUsd)}</td>
+                      <td className="py-0.5 pl-2 text-right text-stone-400">{b.costBases.map((x) => x.toLowerCase().replace('_', ' ')).join(', ')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="mt-1 text-[11px] text-stone-400">
+              Estimates = reported usage × configured list prices. Vendor-reported amounts are used when a provider returns them.
             </p>
           </Card>
           <Card title="Approvals">
@@ -132,6 +166,8 @@ function useProjectMutation<T>(project: ProjectDetailView, fn: (arg: T) => Promi
 }
 
 function NextActions({ project: p }: { project: ProjectDetailView }) {
+  const health = useQuery({ queryKey: ['health'], queryFn: api.health });
+  const realStages = health.data?.realStages ?? [];
   const [notes, setNotes] = useState('');
   const [rewindTo, setRewindTo] = useState<ProjectStatus | ''>('');
   const [reason, setReason] = useState('');
@@ -171,7 +207,7 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
             </div>
             <p className="mt-1 text-xs text-stone-500">
               {p.actions.startsPhase ? `Starts the “${STATUS_LABELS[p.actions.startsPhase]}” phase. ` : ''}
-              In this milestone every stage handler is a MOCK placeholder.
+              {p.actions.runnableJobs.map((t) => `${JOB_TYPE_LABELS[t]}: ${realStages.includes(t) ? 'real' : 'MOCK placeholder'}`).join(' · ')}
             </p>
           </div>
         )}
@@ -179,6 +215,11 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
         {p.actions.gate && (
           <div className="rounded-md border border-violet-200 bg-violet-50 p-3">
             <p className="text-sm font-medium text-violet-900">Human approval required: {GATE_LABELS[p.actions.gate.gate]}</p>
+            {p.actions.gate.gate === 'RESEARCH' && p.research && (
+              <p className="text-xs text-violet-800">
+                Review <Link className="underline" to={`/projects/${p.slug}/research`}>research dossier v{p.research.version}</Link> before deciding.
+              </p>
+            )}
             {!p.actions.canApprove && <p className="text-xs text-violet-800">Approval unlocks once the automated jobs for this step have succeeded.</p>}
             <textarea
               value={notes}

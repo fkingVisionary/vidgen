@@ -1,12 +1,23 @@
 import type {
   ApprovalDecision,
   ApprovalGate,
+  ArtifactStatus,
+  CitationBasis,
+  CitationStance,
+  ClaimImportance,
+  ClaimType,
+  ClaimVerdict,
+  ConfidenceLevel,
+  CostBasis,
   JobStatus,
   JobType,
   LanguageVersionStatus,
   ProjectStatus,
   ProviderKind,
+  RetrievalStatus,
+  SourceType,
 } from './enums.ts';
+import type { QualityReport, ResearchDossierContent } from './contracts/research.ts';
 import type { AvailableActions } from './pipeline.ts';
 import type { StageView } from './stages.ts';
 
@@ -74,11 +85,19 @@ export interface LanguageVersionView {
 
 export interface CostSummaryView {
   /** Planning estimate for the whole episode, if one has been made. */
-  estimatedUsd: number | null;
-  /** Sum of recorded provider-call costs. */
-  actualUsd: number;
+  planningEstimateUsd: number | null;
+  /** Recorded spend: vendor-reported amounts where available, otherwise estimated from usage × list prices. */
+  totalUsd: number;
+  vendorReportedUsd: number;
+  estimatedUsd: number;
+  /** True when any part of totalUsd is an estimate rather than a vendor-reported amount. */
+  includesEstimates: boolean;
+  /** Calls whose usage had no configured price (their cost is missing from the totals). */
+  unpricedCalls: number;
   providerCalls: number;
   mockCalls: number;
+  failedCalls: number;
+  byProvider: { provider: string; calls: number; totalUsd: number; costBases: CostBasis[] }[];
 }
 
 export interface ProjectDetailView extends ProjectSummaryView {
@@ -93,6 +112,80 @@ export interface ProjectDetailView extends ProjectSummaryView {
   approvals: ApprovalView[];
   events: ProjectEventView[];
   costs: CostSummaryView;
+  /** Latest research dossier, if any. */
+  research: DossierSummaryView | null;
+}
+
+export interface DossierSummaryView {
+  id: string;
+  version: number;
+  status: ArtifactStatus;
+  qualityPassed: boolean | null;
+  claimCount: number;
+  createdAt: string;
+}
+
+export interface CitationView {
+  id: string;
+  sourceId: string;
+  stance: CitationStance;
+  basis: CitationBasis;
+  quote: string | null;
+  locator: string | null;
+  quoteVerified: boolean;
+}
+
+export interface ClaimView {
+  id: string;
+  key: string;
+  statement: string;
+  claimType: ClaimType;
+  /** Research question id the claim answers. */
+  category: string | null;
+  importance: ClaimImportance;
+  verdict: ClaimVerdict;
+  confidence: ConfidenceLevel;
+  popularVersion: string | null;
+  notes: string | null;
+  needsVerification: boolean;
+  citations: CitationView[];
+}
+
+export interface SourceView {
+  id: string;
+  title: string;
+  url: string | null;
+  domain: string | null;
+  sourceType: SourceType;
+  author: string | null;
+  publisher: string | null;
+  publishedDate: string | null;
+  reliability: ConfidenceLevel | null;
+  reliabilityNotes: string | null;
+  summary: string | null;
+  citation: string;
+  retrievalStatus: RetrievalStatus;
+  retrievalError: string | null;
+  duplicateOfId: string | null;
+  /** Citations to this source in the dossier being viewed. */
+  citationCount: number;
+}
+
+export interface DossierView extends DossierSummaryView {
+  summary: string | null;
+  content: ResearchDossierContent;
+  qualityReport: QualityReport | null;
+  stats: Record<string, unknown>;
+  claims: ClaimView[];
+  /** Every source considered for the project: retrieved, failed and duplicates. */
+  sources: SourceView[];
+  /** Provider spend of the job that produced this version. */
+  cost: { totalUsd: number; includesEstimates: boolean; calls: number };
+}
+
+export interface ResearchView {
+  versions: DossierSummaryView[];
+  dossier: DossierView | null;
 }
 
 export interface ProviderStatusView {
@@ -111,4 +204,6 @@ export interface HealthView {
   worker: 'embedded' | 'disabled';
   mockMode: boolean;
   providers: ProviderStatusView[];
+  /** Pipeline stages backed by real implementations; the rest are MOCK placeholders. */
+  realStages: JobType[];
 }

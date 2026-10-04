@@ -46,6 +46,12 @@ export const EnvSchema = z
     /** $/credit for cost estimates: pay-as-you-go 0.008; monthly plans 0.005–0.0075. */
     TAVILY_USD_PER_CREDIT: opt(z.coerce.number().min(0).max(1).default(0.008)),
 
+    // Research stage
+    /** Hard ceiling on one research run's estimated provider spend (USD). */
+    RESEARCH_MAX_COST_USD: opt(z.coerce.number().min(0.5).max(500).default(40)),
+    /** Upper bound of sources retrieved and read per run. */
+    RESEARCH_MAX_SOURCES: opt(z.coerce.number().int().min(5).max(120).default(45)),
+
     /** Directory of the built dashboard. Defaults to apps/web/dist. */
     WEB_DIST_DIR: opt(z.string().optional()),
     /** Set by Railway on deploys; shown on /api/health. */

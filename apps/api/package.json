@@ -9,7 +9,8 @@
     "dev:worker": "tsx watch --clear-screen=false src/worker.ts",
     "build": "node build.mjs",
     "seed": "tsx src/seed.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "research": "tsx src/research-cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "catalog:",
@@ -17,6 +18,7 @@
     "@docengine/database": "workspace:*",
     "@docengine/pipeline": "workspace:*",
     "@docengine/providers": "workspace:*",
+    "@docengine/research": "workspace:*",
     "@fastify/static": "10.1.5",
     "@prisma/adapter-pg": "catalog:",
     "@prisma/client": "catalog:",

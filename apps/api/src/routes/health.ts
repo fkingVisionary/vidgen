@@ -27,6 +27,7 @@ export async function healthRoutes(app: FastifyInstance, c: AppContainer): Promi
       worker: c.runner.running ? 'embedded' : 'disabled',
       mockMode: providers.some((p) => p.mock),
       providers,
+      realStages: c.realStages,
     };
     return reply.code(database === 'ok' ? 200 : 503).send(body);
   });
