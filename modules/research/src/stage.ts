@@ -47,6 +47,9 @@ export function createResearchStage(overrides: Partial<ResearchConfig> = {}): St
   return { type: 'RESEARCH', mock: false, run: (ctx) => new ResearchRun(ctx, cfg).run() };
 }
 
+/** The run's recorded spend passed RESEARCH_MAX_COST_USD. Not retried: raising the ceiling is a human decision. */
+class CostCeilingError extends NonRetryableError {}
+
 interface PlanQuestion {
   id: string;
   category: string;
@@ -660,6 +663,7 @@ class ResearchRun {
           output = ReadOutput.parse((cached.analysis as { output: unknown }).output);
           this.stats.readFromCache++;
         } else {
+          await this.checkpoint(); // the cost ceiling also applies within this, the most expensive phase
           const excerpt = relevantExcerpt(r.text, this.keywords, this.cfg.maxDocumentChars);
           const truncated = excerpt.truncated;
           if (truncated) this.stats.truncatedDocuments++;
@@ -714,6 +718,8 @@ class ResearchRun {
       this.ctx.signal,
     );
 
+    const stopped = results.find((x) => !x.ok && x.error instanceof CostCeilingError) as { ok: false; error: unknown } | undefined;
+    if (stopped) throw stopped.error;
     let failures = 0;
     for (const [i, res] of results.entries()) {
       if (!res.ok) {
@@ -947,7 +953,7 @@ class ResearchRun {
       SELECT SUM(COALESCE(actual_cost_usd, estimated_cost_usd))::text AS spent FROM provider_calls WHERE job_id = ${this.ctx.job.id}::uuid`;
     const spent = Number(row?.spent ?? 0);
     if (spent > this.cfg.maxCostUsd) {
-      throw new NonRetryableError(`Research stopped: estimated spend $${spent.toFixed(2)} exceeds the per-run ceiling of $${this.cfg.maxCostUsd}`);
+      throw new CostCeilingError(`Research stopped: estimated spend $${spent.toFixed(2)} exceeds the per-run ceiling of $${this.cfg.maxCostUsd}`);
     }
   }
 

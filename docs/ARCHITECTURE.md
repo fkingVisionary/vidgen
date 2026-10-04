@@ -1,6 +1,7 @@
 # Architecture — Documentary Engine V1
 
-> Status: **milestone 1 (architecture & scaffold)**. What is real, mocked and
+> Status: **milestone 2 (research engine)** on top of milestone 1
+> (architecture & scaffold). What is real, mocked and
 > planned is tracked in [STATUS.md](STATUS.md). Deployment is in
 > [DEPLOYMENT.md](DEPLOYMENT.md).
 
@@ -177,7 +178,7 @@ erDiagram
   renders ||--o{ qa_reports : checked
 ```
 
-### Core spine (used by milestone 1 code)
+### Core spine (used by milestone 1 and 2 code)
 
 | Table | Purpose |
 |---|---|
@@ -188,12 +189,15 @@ erDiagram
 | `project_events` | Append-only activity log (status changes with reasons, jobs, approvals). |
 | `provider_calls` | Every external call: provider, operation, model, mock flag, status, vendor job id, request/response summaries, usage, estimated & actual cost, duration, output asset, shot. |
 | `media_assets` | Any stored file (narration, images, clips, infographics, music, SFX, ambience, subtitles, renders). `language_version_id = null` ⇒ shared across languages. Licence/attribution go in `metadata`. |
+| `sources` | Every source considered for a project, shared across dossier versions (`unique(project_id, normalized_url)`): URL, domain, type (PRIMARY … GENERAL_WEB), author/publisher/date and reliability (from reading the page), retrieval status/error, search snippet and score, `discovered_by` (job, questions, queries; or the failed source an open-access copy stands in for), `duplicate_of_id`. |
+| `source_documents` | The retrieved full text of a source (one per source), its sha256, and the cached per-source reading (`analysis`, keyed by `analysis_version` = prompt version + topic/focus hash). |
+| `research_dossiers` | Versioned (`unique(project_id, version)`), status DRAFT / IN_REVIEW / APPROVED / REJECTED / SUPERSEDED, `content` (questions, timeline, key figures, price evidence, myths, interpretations, bubble assessment, narrative history, open questions, missing evidence), `quality_report`, `quality_passed`, `stats`, `job_id`. |
+| `research_claims`, `claim_citations` | A claim has a stable `claim_key` (C001…), `verdict` (ESTABLISHED / PROBABLE / DISPUTED / UNVERIFIED / **MYTH**), `confidence`, `importance` (KEY / SUPPORTING / BACKGROUND), `claim_type`, `category`, `needs_verification`, `popular_version` (what is commonly claimed) and notes. A citation links a claim to a source with a stance (SUPPORTS / CONTRADICTS / CONTEXT), the verbatim quote, a locator, its `basis` (FULL_TEXT or SNIPPET) and `quote_verified`. |
 
 ### Creative artifacts (schema only — no code writes them yet)
 
 | Table | Notes |
 |---|---|
-| `sources`, `research_dossiers`, `research_claims`, `claim_citations` | A claim has a `verdict` (ESTABLISHED / PROBABLE / DISPUTED / UNVERIFIED / **MYTH**), `confidence`, `claim_type` (DATE, ECONOMIC_FIGURE, …), `needs_verification`, and `popular_version` (what is commonly claimed). Citations link claims to sources with a stance (SUPPORTS / CONTRADICTS / CONTEXT), so "Mackay says X, the notarial archives contradict it" is representable. The brief's `disputed` = `verdict = DISPUTED`; `source_url`/`source_type` live on `sources`; `citation` = source citation + per-claim `locator`. |
 | `story_architectures` | Versioned `beats` (hook, context, central question, characters, economic mechanism, escalation, turning point, collapse, consequences, modern relevance, ending). |
 | `scripts`, `scenes`, `scene_narrations` | **The script is language-neutral structure; the words are per language.** A scene has a stable `scene_key` ("S01"), tone, visual intent, infographic & sound opportunities. `scene_narrations` holds text, word count, audio asset, duration and word timestamps for one language. |
 | `storyboards`, `shots` | Shot type, camera motion, visual type, duration, `direction` JSON (lens, composition, period, characters, props, lighting, colour, action, continuity), provider-neutral `generation_prompt` / `negative_prompt`, selected asset. Generation attempts are `provider_calls` rows with `shot_id`, so a failed shot is retried on its own. |
@@ -214,10 +218,10 @@ under `projects/{id}/{lang}/…` (`buildAssetKey`).
 
 ## 6. Provider abstractions
 
-| Interface | Methods | Planned implementation |
+| Interface | Methods | Implementation |
 |---|---|---|
-| `AIProvider` | `generateText`, `generateObject(zodSchema)` | Anthropic Claude (`claude-opus-5-5` default) with structured outputs |
-| `ResearchProvider` | `search`, `fetchDocument` | Claude server-side web search/fetch, or Exa/Tavily |
+| `AIProvider` | `generateText`, `generateObject(zodSchema)` | **Anthropic** (implemented): Claude, `claude-opus-5-5` by default, streaming, structured outputs (JSON schema from zod, re-validated), adaptive thinking with per-task effort, prompt caching of shared system prompts |
+| `ResearchProvider` | `search`, `fetchDocuments(urls)` | **Tavily** (implemented): `/search` + `/extract` (full text as markdown, batches of 20). Planned alternatives: Exa, Claude server-side web search |
 | `VoiceProvider` | `getVoices`, `generateNarration` (with timestamps, prev/next text for continuity), `getAudioMetadata` | ElevenLabs |
 | `VideoProvider` | `createImage`, `createVideo`, `getGenerationStatus`, `downloadAsset` (+ `waitForGeneration` helper) | Higgsfield |
 | `StorageProvider` | `put`, `get`, `head`, `delete`, `list`, `getSignedUrl` | S3-compatible (Cloudflare R2) |
@@ -335,7 +339,101 @@ project: `projects.estimated_cost_usd` (planning estimate) and the actual sum
 over the ledger (dashboard "Cost" card). Per language version: same ledger,
 filtered by `language_version_id`.
 
-## 11. Decisions made in this milestone
+Cost basis per ledger row (`provider_calls.cost_basis`):
+
+| Basis | Meaning |
+|---|---|
+| `VENDOR_REPORTED` | The provider returned a dollar cost (`actual_cost_usd`). |
+| `ESTIMATED` | Usage reported by the provider × configured price (`estimated_cost_usd`): Anthropic tokens × the served model's published per-token prices; Tavily credits × `TAVILY_USD_PER_CREDIT`. Labelled "estimated" in the dashboard. |
+| `UNPRICED` | Usage without a configured price (counted in "unpriced calls", never as $0). |
+| `MOCK` | Mock provider, $0. |
+
+Failed calls keep the usage the provider reported (a refused or truncated
+Claude response still costs tokens).
+
+## 11. Research engine (milestone 2)
+
+`modules/research` implements the RESEARCH stage. It talks only to the
+`AIProvider` and `ResearchProvider` interfaces: Tavily discovers and
+retrieves; Claude plans, judges sources, reads and synthesises; deterministic
+code verifies.
+
+```
+plan ─▶ discover ─▶ triage ─▶ retrieve ─▶ read ─▶ synthesise ─▶ normalise ─▶ review ─▶ normalise ─▶ quality gate ─▶ persist vN
+Claude   Tavily      Claude    Tavily      Claude   Claude        code          Claude    code          code             Postgres
+```
+
+1. **Plan** — up to 12 research questions (each with ≤ 4 search queries)
+   from the topic, 12 generic focus areas (what happened, chronology, the
+   traded thing and its rarity, context, participants, trading mechanisms,
+   price evidence and where famous numbers come from, famous anecdotes,
+   collapse, consequences, historians' disputes and whether "bubble" is
+   deserved, the later narrative) and the project's research brief.
+2. **Discover** — every query is searched (advanced depth, scholarly, book,
+   archive and reputable-press domains *preferred*, social media and
+   document-sharing sites *excluded*); results are deduplicated by
+   normalised URL and given a domain-based type hint.
+3. **Triage** — Claude selects up to 45 sources for full-text retrieval,
+   favouring the source hierarchy (primary > academic > books > archives /
+   museums / universities > reputable secondary > general web). Guardrails in
+   code: at most 3 per domain; every question keeps ≥ 2 candidates.
+4. **Retrieve** — full text via `fetchDocuments`. Pages under 600 characters
+   (paywalls, stubs) count as failures. For high-tier works that failed
+   (JSTOR, publisher sites usually refuse), one search looks for an
+   **open-access copy**; a copy is accepted only if it is the same work
+   (all words of a short title, ≥ 80% of a longer title, journal context for
+   one- or two-word titles) and is retrievable; it becomes its own source,
+   and the original stays FAILED with a pointer to it. Identical or
+   near-identical texts (8-word-shingle Jaccard ≥ 0.85) are marked
+   `duplicate_of` the stronger source and not read twice.
+5. **Read** — Claude reads each document (long ones are cut to their
+   most topic-relevant passages, never rewritten) and returns an assessment
+   (real source type, author, date, reliability, whether it repeats popular
+   myths) and evidence items, each with a **verbatim quote**. Code then
+   checks every quote against the stored text (normalised for markdown,
+   typographic quotes/dashes and whitespace; elided quotes must appear in
+   order); unverifiable evidence is discarded and counted. Readings are cached
+   per document.
+6. **Synthesise** — from verified evidence only (grouped by focus area,
+   with source types and reliability), Claude writes the claims and dossier
+   sections. Verdict definitions are fixed in the prompt; MYTH requires
+   contradicting evidence and a `popularVersion`; both sides of a conflict
+   are cited.
+7. **Normalise** (deterministic, applied before and after review; each change
+   is recorded in the quality report): citations move off duplicates and off
+   anything unverified or not retrieved; a MYTH without counter-evidence
+   becomes UNVERIFIED; any claim left without citations becomes UNVERIFIED;
+   ESTABLISHED/PROBABLE with only contradicting evidence becomes DISPUTED;
+   ESTABLISHED contradicted by a tier-1/2 source becomes DISPUTED; ESTABLISHED
+   needs two independent sources or one high-tier source, else PROBABLE;
+   DISPUTED and UNVERIFIED are always flagged for verification.
+8. **Review** — Claude checks the dossier for incoherence (verdicts not
+   matching their evidence, contradictory claims, missing disputes). Fixes
+   are limited to: set verdict, set confidence, flag for verification, remove
+   claim; every issue and its resolution is stored.
+9. **Quality gate** — pure function over the dossier
+   (`computeQualityReport`): claim count, key claims, cited-source count,
+   high-tier sources, source-type and domain diversity, general-web share,
+   citations on every non-UNVERIFIED claim, no key claim resting on a
+   snippet, all quotes verified, disputes and unverified claims flagged,
+   myths with popular version and counter-evidence, valid retrieved URLs,
+   duplicates merged, coherence, every question answered. FAIL on any check
+   ⇒ the dossier is saved as DRAFT, the job fails without automatic retry
+   and the project goes to FAILED (rewind to research again). PASS ⇒ the
+   dossier is IN_REVIEW and the project waits at RESEARCH_REVIEW. **Nothing is
+   ever auto-approved.**
+10. **Persist** — one transaction: earlier DRAFT/IN_REVIEW versions become
+    SUPERSEDED, the new version is written with its claims and citations.
+    The approval decision is linked to the exact dossier it judged
+    (`approvals.dossier_id`) and sets that dossier APPROVED/REJECTED.
+
+Cost and safety: every provider call goes through the ledger; the run stops
+(non-retryable) once its recorded spend passes `RESEARCH_MAX_COST_USD`,
+checked between phases and before every uncached read. Progress messages
+appear in the project activity log. A retry or a new version re-fetches only
+failed URLs and re-reads only new documents.
+
+## 12. Decisions
 
 | # | Decision | Why | Alternative |
 |---|---|---|---|
@@ -352,3 +450,13 @@ filtered by `language_version_id`.
 | D11 | esbuild bundle of the API, npm deps external, build fails if an external import is unresolvable from `apps/api` | Fast startup, no TypeScript at runtime; the check prevents a class of "works locally, crashes on Railway" bugs (it caught one during development) | Running TypeScript with tsx in production |
 | D12 | TypeScript 7.0 (native compiler) for type checking | Current stable major; used only for `tsc --noEmit`, runtime uses esbuild/Vite | TS 6.0 (fallback if a tool needs the JS compiler API) |
 | D13 | Remotion for infographics, FFmpeg for assembly (planned) | Deterministic React-based graphics; FFmpeg is far faster for 10–15 min assembly and loudness normalisation. **Remotion requires a paid company licence for organisations above its free-use threshold — check before adopting.** | Remotion for the whole edit (slow to render long videos) |
+| D14 | Tavily is the primary `ResearchProvider`; the stage depends only on the interface | Tavily returns full page text (`/extract`) as well as search results, which verbatim quote checking needs; Claude does all judgement | Claude server-side web search/fetch (planned alternative), Exa |
+| D15 | Evidence = verbatim quote from retrieved full text, verified by code | A model can misquote; a quote that is not in the document is discarded, so every stored citation is checkable. Snippet-only evidence never reaches a claim | Trusting model-extracted facts |
+| D16 | Deterministic verdict rules after the model's synthesis | The source hierarchy and "a myth needs counter-evidence" are policy, not model judgement; every change is recorded | Prompt-only rules |
+| D17 | Quality-gate failure = non-retryable job failure, dossier kept as DRAFT, project FAILED | A failed gate needs a human decision (rewind, brief, thresholds), not a silent re-run that spends again | Automatic retries |
+| D18 | Added source type `GENERAL_WEB`, distinct from `GENERAL_REFERENCE` | Encyclopedias and SEO pages are different evidence; the gate limits the general-web share | One "general" bucket |
+| D19 | One model (`AI_MODEL`, default `claude-opus-5-5`) for every research task, with per-task effort (plan/synthesis/review high, triage/reading medium) | Reading decides which quotes exist at all; quality there matters most. A cheaper model for reading is a cost lever to evaluate with real runs | Haiku/Sonnet for reading |
+| D20 | Anthropic server-side refusal fallback enabled (`fallbacks: "default"`) | A safety-classifier false positive on historical material would otherwise fail a read; the served model is recorded and priced | Fail the call |
+| D21 | Costs from usage × configured prices, labelled ESTIMATED | Neither Anthropic nor Tavily returns dollars per call; inventing "actual" costs is not allowed | — |
+| D22 | Open-access copy for unretrievable scholarly works, strict same-work matching | Without it JSTOR/publisher refusals push the dossier toward popular sources; a wrong "copy" would misattribute words, so matching is conservative and the reader is told to confirm | Use the abstract/snippet (not allowed for key claims) |
+| D23 | Sources, retrieved texts and readings are shared across dossier versions | A retry or v2 re-fetches only failures and re-reads only new documents | Re-research from scratch each version |

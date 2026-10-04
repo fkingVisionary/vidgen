@@ -1,8 +1,9 @@
 # Deployment — Railway
 
 The app is one Docker image containing the API, the built dashboard and the
-job worker. It needs one PostgreSQL database. Nothing else is required for V1
-(all providers run in MOCK mode).
+job worker. It needs one PostgreSQL database. With only that, every stage runs
+in MOCK mode. Real research additionally needs an Anthropic API key and Tavily
+access (see [Enabling real research](#enabling-real-research)).
 
 ## Services
 
@@ -58,6 +59,47 @@ job worker. It needs one PostgreSQL database. Nothing else is required for V1
 Optional CLI route: `railway login`, `railway link` (pick the project/service),
 `railway up` deploys the current directory with the same `railway.json`.
 
+## Enabling real research
+
+1. **Anthropic:** create an API key in the Claude Console (console.anthropic.com
+   → *API keys*). Make sure the organisation has credit or billing set up.
+2. **Tavily:** create an API key at app.tavily.com. Note your plan's price per
+   credit (pay-as-you-go: $0.008). Alternatively `TAVILY_ACCESS_MODE=keyless`
+   uses Tavily's free, rate-limited access with no key (fine for trying it,
+   not for production volumes).
+3. **Set on the app service** (*Variables* tab — the keys stay server-side and
+   never reach the dashboard):
+
+   | Variable | Value |
+   |---|---|
+   | `AI_PROVIDER` | `anthropic` |
+   | `ANTHROPIC_API_KEY` | your key |
+   | `RESEARCH_PROVIDER` | `tavily` |
+   | `TAVILY_API_KEY` | your key (or `TAVILY_ACCESS_MODE=keyless`) |
+   | `TAVILY_USD_PER_CREDIT` | your plan's $/credit (for cost estimates) |
+   | `RESEARCH_MAX_COST_USD` | optional, default `40` |
+
+4. **Verify:** `/api/health` → `"realStages":["RESEARCH"]` and the providers
+   list shows `anthropic` and `tavily` with `"mock":false`. The project page
+   says which stages are real and which are MOCK placeholders.
+5. **Run:** project page → *Run Research*, or from a Railway shell on the app
+   service (`railway ssh`, or *Service → ⋯ → Shell*):
+   `node apps/api/dist/research.js tulip-mania` — runs the job to completion
+   and prints the evidence report (sources by type, verdict counts, example
+   disputed and myth claims with their quotes, quality gate, cost).
+
+A run reads about 45 documents with Claude. Rough estimate, **not yet
+measured on a live run**: $10–20 per run with the default model (mostly the
+output tokens of reading), plus ~130 Tavily credits (~$1 at $0.008). The run
+is stopped and marked FAILED if its recorded spend passes
+`RESEARCH_MAX_COST_USD` (checked between phases and before every document
+read). Retrieved documents and per-source readings are
+stored, so a retry or a second version re-reads only what is new.
+
+The job runs in the embedded worker. A redeploy during a run returns the job
+to the queue; the next container resumes it from the stored documents and
+readings.
+
 ## Environment variables
 
 `✓` = read by V1 code. Planned variables are documented now so the shape is
@@ -78,11 +120,19 @@ agreed, but they are not read yet.
 | `WORKER_CONCURRENCY` | `1` | ✓ | Parallel jobs per process |
 | `JOB_MAX_ATTEMPTS` | `3` | ✓ | |
 | `JOB_LOCK_TIMEOUT_MS` | `900000` | ✓ | RUNNING job without heartbeat this long is recovered |
-| `AI_PROVIDER` … `PUBLISHING_PROVIDER` (7) | `mock` | ✓ | Only `mock` is implemented; other values fail at startup with a clear message |
+| `AI_PROVIDER` | `mock` | ✓ | `mock` or `anthropic` |
+| `RESEARCH_PROVIDER` | `mock` | ✓ | `mock` or `tavily` |
+| `VOICE_PROVIDER` … `PUBLISHING_PROVIDER` (5) | `mock` | ✓ | Only `mock` is implemented; other values fail at startup with a clear message |
+| `ANTHROPIC_API_KEY` | — | ✓ | Required when `AI_PROVIDER=anthropic` |
+| `AI_MODEL` | `claude-opus-5-5` | ✓ | Model for every research task; cost is estimated from the served model's published token prices |
+| `TAVILY_API_KEY` | — | ✓ | Required when `RESEARCH_PROVIDER=tavily`, unless keyless |
+| `TAVILY_ACCESS_MODE` | `api-key` | ✓ | `keyless` = Tavily's free, rate-limited access ($0) |
+| `TAVILY_USD_PER_CREDIT` | `0.008` | ✓ | Your plan's price; Tavily reports credits, so dollar cost is an estimate |
+| `RESEARCH_MAX_COST_USD` | `40` | ✓ | Per-run ceiling; the run stops (FAILED, not retried) once recorded spend passes it |
+| `RESEARCH_MAX_SOURCES` | `45` | ✓ | Sources whose full text is retrieved and read per run |
 | `WEB_DIST_DIR` | `apps/web/dist` | ✓ | Override only for unusual layouts |
 | `RAILWAY_GIT_COMMIT_SHA` | — | ✓ | Set by Railway; shown in `/api/health` |
 | `TEST_DATABASE_URL` | — | tests | Integration tests only; DB name must contain `test` |
-| `ANTHROPIC_API_KEY`, `AI_MODEL` | —, `claude-opus-5-5` | planned | LLM provider |
 | `ELEVENLABS_API_KEY`, `ELEVENLABS_MODEL_ID`, `ELEVENLABS_DEFAULT_VOICE_ID` | — | planned | Voice IDs are chosen per language version, not hard-coded |
 | `HIGGSFIELD_API_KEY`, `HIGGSFIELD_API_SECRET` | — | planned | Exact credential format confirmed when integrated |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_SIGNED_URL_TTL_SEC` | —, `auto`, …, `3600` | planned | Cloudflare R2 |
@@ -136,6 +186,10 @@ deploy and media must survive that.
 |---|---|
 | Deploy fails at health check, log says `DASHBOARD_PASSWORD … is required in production` | Set `DASHBOARD_PASSWORD` (≥ 12 chars). |
 | Log says `VOICE_PROVIDER="elevenlabs" is planned but not implemented yet` | Remove the variable or set it to `mock`. |
+| Research job fails with `ANTHROPIC_API_KEY is not set` / `TAVILY_API_KEY is not set` | Set the key on the service (or `TAVILY_ACCESS_MODE=keyless`). |
+| Research job fails with `Research stopped: estimated spend … exceeds the per-run ceiling` | Intended stop. Raise `RESEARCH_MAX_COST_USD` if the spend is justified, then *Retry* (stored documents and readings are reused). |
+| Research job fails with `Research quality gate failed: …` | The dossier was saved as DRAFT; open it (Research dossier → Quality gate tab) to see which checks failed. Rewind and run again, possibly with a research brief. |
+| `/api/health` shows `"realStages":[]` although keys are set | Both `AI_PROVIDER=anthropic` and `RESEARCH_PROVIDER=tavily` are needed for the real research stage. |
 | Pre-deploy fails with `P1001: Can't reach database server` | `DATABASE_URL` missing or not referencing the Postgres service. |
 | `/api/health` returns 503 `database: "error"` | Database down or credentials rotated; check the Postgres service. |
 | Browser keeps asking for a password | Wrong `DASHBOARD_USER`/`DASHBOARD_PASSWORD`. |

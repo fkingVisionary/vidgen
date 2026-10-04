@@ -5,11 +5,15 @@ AI-assisted production system for premium historical & economic documentaries
 visuals & infographics → edit → QA → render → publish, with a human approving
 every important step.
 
-**Current state: V1, milestone 1 — architecture and scaffold.** The pipeline,
-database, job system, provider abstractions and dashboard shell are real and
-tested; every AI/voice/video/render/publishing provider is a clearly labelled
-**MOCK**. No documentary content is produced yet. First test episode:
-*Tulip Mania — The Bubble That Became a Legend* (seeded, status *Idea*).
+**Current state: V1, milestone 2 — the research engine.** The pipeline,
+database, job system, provider abstractions and dashboard are real and tested
+(milestone 1). The **Research** stage is real when Anthropic (Claude) and
+Tavily are configured: it plans questions, searches, retrieves full texts,
+extracts verbatim-verified evidence, builds a versioned dossier of claims with
+verdicts and citations, and stops at a quality gate for human review. Every
+later stage (story, script, voice, visuals, edit, publish) is still a clearly
+labelled **MOCK**. First test episode: *Tulip Mania — The Bubble That Became a
+Legend* (seeded, status *Idea*).
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design, data model, providers, jobs, decisions
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Railway, environment variables, operations
@@ -18,9 +22,9 @@ tested; every AI/voice/video/render/publishing provider is a clearly labelled
 ## Stack
 
 TypeScript (Node 22) · Fastify 5 · PostgreSQL 16 + Prisma 7 · React 19 + Vite 8
-+ Tailwind 4 · zod · pino · Vitest · Docker · Railway. Planned: Anthropic
-(LLM), ElevenLabs (voice), Higgsfield (video), Cloudflare R2 (storage), FFmpeg
-+ Remotion (rendering), YouTube Data API.
++ Tailwind 4 · zod · pino · Vitest · Docker · Railway · Anthropic (Claude) ·
+Tavily (search + extraction). Planned: ElevenLabs (voice), Higgsfield (video),
+Cloudflare R2 (storage), FFmpeg + Remotion (rendering), YouTube Data API.
 
 ## Repository
 
@@ -31,7 +35,7 @@ packages/core      Domain: statuses, pipeline/state machine, contracts, cost mat
 packages/database  Prisma schema, migrations, client
 packages/providers Provider interfaces, MOCK implementations, registry, contract tests
 packages/pipeline  Project state service, job queue & runner, stage handler contract
-modules/           Real stage implementations (from milestone 2)
+modules/research   The RESEARCH stage: plan → search → retrieve → read → synthesise → quality gate
 docs/  scripts/  test/
 ```
 
@@ -72,6 +76,7 @@ whose name contains `test` for `TEST_DATABASE_URL`.
 | `pnpm typecheck` | Strict type check of every package |
 | `pnpm build` | Prisma client + dashboard + API bundle (`apps/api/dist`) |
 | `pnpm release` | Production pre-deploy step: migrate + seed |
+| `pnpm research:run [slug]` | Run real research for a project (default `tulip-mania`) to completion and print the evidence report |
 | `pnpm start` | Run the production build on `PORT` (default 3000), serving the dashboard |
 | `pnpm start:worker` | Standalone worker (optional; normally embedded) |
 | `pnpm db:migrate` | Create/apply a migration after editing `schema.prisma` |
@@ -92,13 +97,42 @@ not `localhost`.)
 
 ## Trying the pipeline
 
-On a project page, **Run Research** starts the research phase; the MOCK job
-finishes in milliseconds and the project waits at *Research review*. Approve,
+With mock providers, **Run Research** on a project page starts the research
+phase; the MOCK job finishes in milliseconds and the project waits at *Research review*. Approve,
 reject or flag with notes, then continue stage by stage. Every job, provider
 call and decision is recorded (Jobs, Cost, Approvals, Activity panels). A mock
 publish deliberately leaves the project at *Approved*: only a real publishing
 provider can mark it *Published*. Use a throwaway project for this — the
 seeded Tulip Mania project is meant for the real episode.
+
+## Running real research
+
+Set in `.env` (or Railway Variables — never in code):
+
+```bash
+AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=…
+RESEARCH_PROVIDER=tavily
+TAVILY_API_KEY=…              # or TAVILY_ACCESS_MODE=keyless for Tavily's free, rate-limited access
+TAVILY_USD_PER_CREDIT=0.008   # your plan's price, for cost estimates
+RESEARCH_MAX_COST_USD=40      # a run stops once its recorded cost passes this
+```
+
+Then either click **Run Research** on the project page, or from a shell:
+
+```bash
+pnpm research:run tulip-mania                   # development
+node apps/api/dist/research.js tulip-mania      # production image / Railway shell
+```
+
+`GET /api/health` lists the stages that are real (`realStages`). Progress
+appears in the project's Activity panel. (A full run with real Claude has not
+been timed yet; expect tens of minutes — about 45 documents are read.) The
+dossier opens at **Research dossier** on the project page: claims with
+verdicts (ESTABLISHED / PROBABLE / DISPUTED / UNVERIFIED / MYTH), supporting
+and contradicting citations with verified quotes, sources by type, open
+questions, the quality gate and the run's cost. Approve, reject or flag it
+there; nothing proceeds without a human decision.
 
 ## Deploying
 

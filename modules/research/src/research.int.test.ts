@@ -2,13 +2,14 @@ import { ProjectService, PostgresJobQueue, JobRunner, createMockStageHandlers } 
 import { ALL_MOCK, createProviders, type ProviderSet } from '@docengine/providers';
 import { describe, expect, it } from 'vitest';
 import { tulipInput, useTestDatabase } from '../../../test/helpers.ts';
+import type { ResearchConfig } from './config.ts';
 import { buildDossierReport } from './report.ts';
 import { createResearchStage } from './stage.ts';
 import { FAKE_CORPUS_GATE, FakeResearchAI, FakeResearchProvider } from './testing.ts';
 
 const db = useTestDatabase();
 
-function setup(gate = FAKE_CORPUS_GATE) {
+function setup(gate = FAKE_CORPUS_GATE, overrides: Partial<ResearchConfig> = {}) {
   const ai = new FakeResearchAI();
   const research = new FakeResearchProvider();
   const providers: ProviderSet = { ...createProviders(ALL_MOCK), ai, research };
@@ -18,7 +19,7 @@ function setup(gate = FAKE_CORPUS_GATE) {
     queue: new PostgresJobQueue(db),
     projects,
     providers,
-    handlers: { ...createMockStageHandlers(), RESEARCH: createResearchStage({ gate, readConcurrency: 3, searchConcurrency: 3 }) },
+    handlers: { ...createMockStageHandlers(), RESEARCH: createResearchStage({ gate, readConcurrency: 3, searchConcurrency: 3, ...overrides }) },
     retryBaseDelayMs: 0,
   });
   return { ai, research, projects, runner };
@@ -136,6 +137,20 @@ describe('research stage (fake providers, real database)', () => {
     expect(await db.project.findUniqueOrThrow({ where: { id: projectId } })).toMatchObject({ status: 'FAILED', failedFromStatus: 'RESEARCHING' });
     const dossier = await db.researchDossier.findFirstOrThrow({ where: { projectId } });
     expect(dossier).toMatchObject({ status: 'DRAFT', qualityPassed: false });
+  });
+
+  it('stops mid-reading when the run passes its cost ceiling, without retrying or saving a dossier', async () => {
+    const s = setup(FAKE_CORPUS_GATE, { maxCostUsd: 0.25 }); // fake prices: ≈ $0.21 before reading, ≈ $0.01 per read
+    const { projectId, job } = await runResearch(s);
+    expect(job.status).toBe('FAILED');
+    expect(job.attempts).toBe(1);
+    expect(job.error).toMatch(/Research stopped: estimated spend \$0\.2\d exceeds the per-run ceiling of \$0\.25$/);
+    expect(s.ai.calls['research.read']).toBeGreaterThan(0);
+    expect(s.ai.calls['research.read']).toBeLessThan(13);
+    expect(s.ai.calls['research.synthesize']).toBeUndefined();
+    expect(await db.researchDossier.count({ where: { projectId } })).toBe(0);
+    const [row] = await db.$queryRaw<{ spent: string }[]>`SELECT SUM(estimated_cost_usd)::text AS spent FROM provider_calls WHERE job_id = ${job.id}::uuid`;
+    expect(Number(row!.spent)).toBeLessThan(0.25 + 0.04); // overshoot bounded by the reads already in flight
   });
 
   it('links the human decision to the dossier, and a re-run creates v2 reusing retrieved and read sources', async () => {
