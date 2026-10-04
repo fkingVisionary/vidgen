@@ -1,7 +1,9 @@
 import {
   CreateProjectInput,
   STATUS_DEFINITIONS,
+  UpdateStoryCandidateInput,
   assertTransition,
+  getTransitionKind,
   jobPhase,
   resolveApproval,
   resolveEnqueue,
@@ -13,7 +15,7 @@ import {
   type RewindInput,
   type TransitionKind,
 } from '@docengine/core';
-import type { Approval, Database, Job, Prisma, Project, Tx } from '@docengine/database';
+import type { Approval, Database, Job, Prisma, Project, StoryCandidate, Tx } from '@docengine/database';
 import { ConflictError, NotFoundError } from './errors.ts';
 import { EVENT } from './events.ts';
 import { silentLogger, type Logger } from './logger.ts';
@@ -144,14 +146,23 @@ export class ProjectService {
       if (!resolution.ok) throw new ConflictError(resolution.reason);
 
       // Attach the exact artifact version under review and record the decision on it.
+      const decided = input.decision === 'APPROVED' ? 'APPROVED' : 'REJECTED';
       let dossierId: string | null = null;
+      let storyId: string | null = null;
       if (input.gate === 'RESEARCH') {
         const dossier = await tx.researchDossier.findFirst({ where: { projectId, status: 'IN_REVIEW' }, orderBy: { version: 'desc' } });
         if (dossier) {
           dossierId = dossier.id;
-          if (input.decision !== 'FLAGGED') {
-            await tx.researchDossier.update({ where: { id: dossier.id }, data: { status: input.decision === 'APPROVED' ? 'APPROVED' : 'REJECTED' } });
-          }
+          if (input.decision !== 'FLAGGED') await tx.researchDossier.update({ where: { id: dossier.id }, data: { status: decided } });
+        }
+      } else if (input.gate === 'STORY') {
+        const story = await tx.storyArchitecture.findFirst({ where: { projectId, status: 'IN_REVIEW' }, orderBy: { version: 'desc' } });
+        if (story) {
+          storyId = story.id;
+          dossierId = story.dossierId;
+          if (input.decision !== 'FLAGGED') await tx.storyArchitecture.update({ where: { id: story.id }, data: { status: decided } });
+          // The selection it was built from is approved with it.
+          if (input.decision === 'APPROVED' && story.packId) await tx.storyPack.update({ where: { id: story.packId }, data: { status: 'APPROVED' } });
         }
       }
 
@@ -164,6 +175,7 @@ export class ProjectService {
           decidedBy: actor,
           projectStatus: project.status,
           dossierId,
+          storyId,
         },
       });
       await this.event(tx, projectId, EVENT.APPROVAL_RECORDED, `${input.gate}: ${input.decision}`, {
@@ -178,12 +190,85 @@ export class ProjectService {
     });
   }
 
+  /**
+   * Run a phase again: rewind the project to the status that owns `type` (if
+   * it is not already there) and enqueue the job, in one transaction. Used
+   * for "another story-mining pass" from a later story status.
+   */
+  async restartPhase(projectId: string, type: JobType, input: Prisma.InputJsonValue, actor: Actor, reason: string): Promise<Job> {
+    const job = await this.db.$transaction(async (tx) => {
+      let project = await this.lockProject(tx, projectId);
+      const phase = jobPhase(type);
+      if (project.status !== phase) {
+        const kind = getTransitionKind(project.status, phase, { failedFrom: project.failedFromStatus });
+        if (kind !== 'REWIND') throw new ConflictError(`Cannot run ${type} again from ${project.status}`);
+        project = await this.transition(tx, project, phase, actor, reason);
+      }
+      const languageVersionId = await this.resolveLanguageVersionId(tx, project);
+      return this.insertJob(tx, project, type, languageVersionId, input, actor);
+    });
+    await this.onJobQueued?.(job);
+    return job;
+  }
+
+  /**
+   * The editor's decision on one story candidate: status, selection, priority,
+   * notes. Allowed only while the project is in STORY_SELECTION and only on the
+   * pack open for selection; every change is recorded on the activity log.
+   */
+  async editStoryCandidate(candidateId: string, raw: UpdateStoryCandidateInput, actor: Actor): Promise<StoryCandidate> {
+    const input = UpdateStoryCandidateInput.parse(raw);
+    return this.db.$transaction(async (tx) => {
+      const found = await tx.storyCandidate.findUnique({ where: { id: candidateId }, select: { projectId: true } });
+      if (!found) throw new NotFoundError('Story candidate', candidateId);
+      const project = await this.lockProject(tx, found.projectId);
+      if (project.status !== 'STORY_SELECTION') {
+        throw new ConflictError(`Story candidates can be changed while the project is in STORY_SELECTION (it is ${project.status})`);
+      }
+      const c = await tx.storyCandidate.findUniqueOrThrow({ where: { id: candidateId }, include: { pack: { select: { status: true, version: true } } } });
+      if (c.pack.status !== 'IN_REVIEW') throw new ConflictError(`Story pack v${c.pack.version} is ${c.pack.status}; only the pack open for selection can be changed`);
+
+      const status = input.status ?? c.status;
+      let selected = input.selected ?? c.selected;
+      if (status === 'REJECTED') {
+        if (input.selected === true) throw new ConflictError('A rejected candidate cannot be selected');
+        selected = false;
+      }
+      const priority = input.priority ?? c.priority;
+      const editorNotes = input.editorNotes === undefined ? c.editorNotes : input.editorNotes || null;
+      const changes = [
+        status !== c.status ? `${c.status} → ${status}` : null,
+        selected !== c.selected ? (selected ? 'selected' : 'deselected') : null,
+        priority !== c.priority ? `priority ${priority}` : null,
+        editorNotes !== c.editorNotes ? 'notes updated' : null,
+      ].filter((x): x is string => x !== null);
+      const updated = await tx.storyCandidate.update({ where: { id: candidateId }, data: { status, selected, priority, editorNotes } });
+      if (changes.length > 0) {
+        await this.event(tx, project.id, EVENT.CANDIDATE_UPDATED, `${c.candidateKey} "${c.title}": ${changes.join(', ')}`, {
+          actor,
+          candidateId,
+          status,
+          selected,
+          priority,
+          editorNotes,
+        });
+      }
+      return updated;
+    });
+  }
+
   async rewind(projectId: string, input: RewindInput, actor: Actor): Promise<Project> {
     return this.db.$transaction(async (tx) => {
       const project = await this.lockProject(tx, projectId);
       const kind = assertTransition(project.status, input.to, { failedFrom: project.failedFromStatus });
       if (kind !== 'REWIND') throw new ConflictError(`${project.status} → ${input.to} is a ${kind}, not a rewind`);
-      return this.transition(tx, project, input.to, actor, input.reason);
+      const updated = await this.transition(tx, project, input.to, actor, input.reason);
+      if (input.to === 'STORY_SELECTION') {
+        // Re-open the selection: the latest pack (approved with an architecture) becomes editable again.
+        const pack = await tx.storyPack.findFirst({ where: { projectId }, orderBy: { version: 'desc' }, select: { id: true, status: true } });
+        if (pack?.status === 'APPROVED') await tx.storyPack.update({ where: { id: pack.id }, data: { status: 'IN_REVIEW' } });
+      }
+      return updated;
     });
   }
 

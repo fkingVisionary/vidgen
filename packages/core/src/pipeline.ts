@@ -56,14 +56,32 @@ export const STATUS_DEFINITIONS: Record<ProjectStatus, StatusDefinition> = {
     jobs: [],
     gate: { gate: 'RESEARCH', onApprove: 'RESEARCH_COMPLETE', onReject: 'RESEARCHING' },
   },
-  RESEARCH_COMPLETE: { stage: 'RESEARCH', stageState: 'COMPLETE', jobs: [], next: 'STORY_DEVELOPMENT' },
+  RESEARCH_COMPLETE: { stage: 'RESEARCH', stageState: 'COMPLETE', jobs: [], next: 'STORY_MINING' },
 
-  STORY_DEVELOPMENT: {
+  // Story mining finds candidate story units in the approved dossier; the editor
+  // curates them (approve/reject/flag, select, prioritise) before the architect
+  // turns the selection into a documentary plan, which a human must approve.
+  STORY_MINING: {
     stage: 'STORY',
     stageState: 'IN_PROGRESS',
-    jobs: ['STORY'],
-    onJobsComplete: 'SCRIPT_DRAFT',
+    jobs: ['STORY_MINING'],
+    onJobsComplete: 'STORY_SELECTION',
   },
+  STORY_SELECTION: { stage: 'STORY', stageState: 'IN_PROGRESS', jobs: [], next: 'STORY_ARCHITECTING' },
+  STORY_ARCHITECTING: {
+    stage: 'STORY',
+    stageState: 'IN_PROGRESS',
+    jobs: ['STORY_ARCHITECTURE'],
+    onJobsComplete: 'STORY_REVIEW',
+  },
+  STORY_REVIEW: {
+    stage: 'STORY',
+    stageState: 'AWAITING_APPROVAL',
+    jobs: [],
+    gate: { gate: 'STORY', onApprove: 'STORY_APPROVED', onReject: 'STORY_SELECTION' },
+  },
+  // Nothing proceeds to the script automatically.
+  STORY_APPROVED: { stage: 'STORY', stageState: 'COMPLETE', jobs: [], next: 'SCRIPT_DRAFT' },
 
   SCRIPT_DRAFT: {
     stage: 'SCRIPT',

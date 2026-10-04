@@ -77,7 +77,7 @@ packages/
   database/   Prisma 7 schema, migrations, client factory, test helpers
   providers/  Provider interfaces, MOCK implementations, registry, reusable contract test suites
   pipeline/   ProjectService (state changes), JobQueue, JobRunner, StageContext, stage handler contract, MOCK stage handlers
-modules/      Future home of real stage implementations (research, story, script, voice, visual-director, infographics, editor, qa)
+modules/      Real stage implementations: research (M2), story (M3: mining + architecture); later script, voice, visual-director, infographics, editor, qa
 docs/         Architecture, deployment, status
 scripts/      release.sh (migrations + seed), test DB init
 test/         Shared integration-test setup
@@ -111,8 +111,12 @@ plus two added review statuses — see §11). Dashboard stages are derived.
 | IDEA | Research (not started) | — | START → RESEARCHING (enqueue RESEARCH) |
 | RESEARCHING | Research | RESEARCH | all jobs done → RESEARCH_REVIEW |
 | RESEARCH_REVIEW | Research (awaiting approval) | — | **gate RESEARCH**: approve → RESEARCH_COMPLETE, reject → RESEARCHING |
-| RESEARCH_COMPLETE | Research ✓ | — | START → STORY_DEVELOPMENT |
-| STORY_DEVELOPMENT | Story | STORY | → SCRIPT_DRAFT |
+| RESEARCH_COMPLETE | Research ✓ | — | START → STORY_MINING |
+| STORY_MINING | Story | STORY_MINING | → STORY_SELECTION |
+| STORY_SELECTION | Story (editor curates candidates) | — | START → STORY_ARCHITECTING (enqueue STORY_ARCHITECTURE; needs 5–10 selected units) |
+| STORY_ARCHITECTING | Story | STORY_ARCHITECTURE | → STORY_REVIEW |
+| STORY_REVIEW | Story (awaiting approval) | — | **gate STORY**: approve → STORY_APPROVED, reject → STORY_SELECTION |
+| STORY_APPROVED | Story ✓ | — | START → SCRIPT_DRAFT (never automatic) |
 | SCRIPT_DRAFT | Script | SCRIPT | → SCRIPT_REVIEW |
 | SCRIPT_REVIEW | Script (awaiting approval) | — | **gate SCRIPT**: approve → SCRIPT_APPROVED, reject → SCRIPT_DRAFT |
 | SCRIPT_APPROVED | Script ✓ | — | START → VOICE_GENERATING |
@@ -144,8 +148,8 @@ failed) are not thrown away.
 
 ## 5. Data model
 
-21 tables. Fields that are filtered/joined/queried are typed columns; creative
-payloads still evolving (story beats, shot direction, infographic specs,
+25 tables. Fields that are filtered/joined/queried are typed columns; creative
+payloads still evolving (story sequences, shot direction, infographic specs,
 timeline tracks, QA findings) are JSONB validated by zod contracts in
 `packages/core/src/contracts`. Primary keys are UUIDv7. Timestamps are
 `timestamptz`. Money is `numeric(14,6)` USD.
@@ -163,6 +167,11 @@ erDiagram
   research_dossiers ||--o{ research_claims : contains
   research_claims ||--o{ claim_citations : "supported / contradicted by"
   sources ||--o{ claim_citations : ""
+  projects ||--o{ story_packs : "mining passes"
+  story_packs ||--o{ story_candidates : ranks
+  story_candidates ||--o{ story_candidate_claims : "built on"
+  research_claims ||--o{ story_candidate_claims : ""
+  story_packs ||--o{ story_architectures : "selection → blueprint"
   projects ||--o{ story_architectures : versions
   projects ||--o{ scripts : versions
   scripts ||--o{ scenes : "language-neutral structure"
@@ -193,12 +202,15 @@ erDiagram
 | `source_documents` | The retrieved full text of a source (one per source), its sha256, and the cached per-source reading (`analysis`, keyed by `analysis_version` = prompt version + topic/focus hash). |
 | `research_dossiers` | Versioned (`unique(project_id, version)`), status DRAFT / IN_REVIEW / APPROVED / REJECTED / SUPERSEDED, `content` (questions, timeline, key figures, price evidence, myths, interpretations, bubble assessment, narrative history, open questions, missing evidence), `quality_report`, `quality_passed`, `stats`, `job_id`. |
 | `research_claims`, `claim_citations` | A claim has a stable `claim_key` (C001…), `verdict` (ESTABLISHED / PROBABLE / DISPUTED / UNVERIFIED / **MYTH**), `confidence`, `importance` (KEY / SUPPORTING / BACKGROUND), `claim_type`, `category`, `needs_verification`, `popular_version` (what is commonly claimed) and notes. A citation links a claim to a source with a stance (SUPPORTS / CONTRADICTS / CONTEXT), the verbatim quote, a locator, its `basis` (FULL_TEXT or SNIPPET) and `quote_verified`. |
+| `story_packs` | One mining pass over an approved dossier (`unique(project_id, version)`): status, `content` (the AI's proposed selection with premise and rationale, candidates removed and why, candidates carried over, the editor's brief), mining `quality_report`, `stats`, `job_id`. |
+| `story_candidates` | A story unit (`candidate_key` S01… in rank order): title, hook, `story_type`, `characters` (JSON: name, kind NAMED_PERSON/GROUP/ROLE, role, claim keys), setting, period, desire, conflict, stakes, escalation, turning point, payoff, why interesting, viewer question, `myth_thread`, `scores` (8 components + appeal + critic rationale), `historical_status` and `historical_confidence` (computed from the claims), `rank_score`, `rank`, caveat notes, `ai_selected` + reason; the editor's `status` (PROPOSED/APPROVED/REJECTED/FLAGGED), `selected`, `priority` (HIGH/NORMAL/LOW), `editor_notes`. |
+| `story_candidate_claims` | Candidate ↔ dossier claim (FK, so evidence links cannot dangle). Sources follow from the claims' citations. |
+| `story_architectures` | Versioned blueprint (gate STORY): `content` = premise, central question, narrative spine, resolution, sequences (candidate ids/keys, hook, question, key events with claim keys, characters, conflict, escalation, reveal, ending beat, claim keys, derived source ids, caveats, historical status/confidence, duration), unused units with reasons; `pack_id`, `dossier_id`, target and estimated duration, `quality_report`, `stats`, `notes` (the editor's instructions), `job_id`. Approvals link the exact version (`approvals.story_id`). |
 
 ### Creative artifacts (schema only — no code writes them yet)
 
 | Table | Notes |
 |---|---|
-| `story_architectures` | Versioned `beats` (hook, context, central question, characters, economic mechanism, escalation, turning point, collapse, consequences, modern relevance, ending). |
 | `scripts`, `scenes`, `scene_narrations` | **The script is language-neutral structure; the words are per language.** A scene has a stable `scene_key` ("S01"), tone, visual intent, infographic & sound opportunities. `scene_narrations` holds text, word count, audio asset, duration and word timestamps for one language. |
 | `storyboards`, `shots` | Shot type, camera motion, visual type, duration, `direction` JSON (lens, composition, period, characters, props, lighting, colour, action, continuity), provider-neutral `generation_prompt` / `negative_prompt`, selected asset. Generation attempts are `provider_calls` rows with `shot_id`, so a failed shot is retried on its own. |
 | `infographics` | Chart type + `spec` (the `InfographicSpec` contract: data, labels, annotations, mandatory source, animation, duration). Rendered deterministically. |
@@ -454,7 +466,85 @@ synthesis schema hit it on the first live run). The Anthropic provider then
 repeats the request with the schema in the system prompt and validates the
 answer against the same zod schema.
 
-## 12. Decisions
+## 12. Story engine (milestone 3)
+
+`modules/story` turns an **approved** research dossier into story units and
+then into a documentary blueprint. It writes no script. Everything it says
+traces to dossier claims, and every gate result is advisory: a human approves.
+
+```
+STORY_MINING:   mine (Claude) → evidence rules → critic (support + 8 scores)
+                → [top-up mine + rules + critic if < 15 left] → rank
+                → proposed selection (5–10) → mining gate → story pack vN
+STORY_SELECTION (editor): approve / reject / flag, select, prioritise, notes,
+                another mining pass with a brief
+STORY_ARCHITECTURE: architect (Claude) → evidence rules → reviewer (may
+                return a corrected version) → evidence rules → architecture
+                gate → story architecture vN → STORY_REVIEW (human gate)
+```
+
+**Evidence rules** (`rules.ts`, `mining.ts`, `architecture.ts`; deterministic,
+unit-tested). Claim keys must exist in the dossier. A named person must appear
+in the evidence of the cited claims; if the dossier names them elsewhere, that
+claim is linked (traceability), otherwise the candidate is removed (or, for a
+side character, the character is dropped). Every figure (except years, which
+need only appear in the dossier) must be in the cited evidence; a figure found
+in another claim links that claim (one link, firmest verdict first, so a myth
+or dispute is only pulled in when nothing firmer has the fact), a figure found
+nowhere removes the candidate. A candidate using a MYTH claim must tell it as a
+myth investigation (popular story → origin → who spread it → what happened →
+why it survived). Candidates without a traceable source (a retrieved source with
+a verified quote), without characters or an arc, duplicating another (claim-set
+Jaccard, title overlap) or resembling one the editor rejected are removed —
+each with its reason, kept in the pack for the editor to see.
+
+**Historical status and confidence** are computed, never chosen by a model:
+status from the weakest verdict (MYTH → myth investigation, DISPUTED →
+contested, UNVERIFIED → uncertain, PROBABLE, ESTABLISHED); confidence 0–10 from
+verdict strength × claim confidence, 60% mean / 40% weakest, discounted when
+only one or two sources stand behind the story.
+
+**Ranking** (`packages/core/src/story.ts`). The critic scores intrigue (0.20),
+human drama (0.15), surprise (0.13), stakes (0.12), visual potential (0.12),
+escalation (0.10), emotional weight (0.10) and economic significance (0.08),
+0–10 each; appeal is the weighted sum. Rank score = appeal × (0.55 + 0.45 ×
+confidence/10), so a sensational but weakly supported story does not
+automatically beat a fascinating, well-supported one. The dashboard shows the
+components, weights and the formula for every candidate.
+
+**Editorial control.** The AI's selection is a proposal (`ai_selected`); the
+editor's `selected`, `status`, `priority` and notes are what the architect
+gets. HIGH priority must be used (gate check); the architect must explain any
+selected unit it leaves out. Candidates can only be changed in STORY_SELECTION
+on the current pack. Another mining pass (from any later story status) rewinds
+to STORY_MINING and enqueues the job in one transaction; approved and flagged
+candidates are carried into the new pack, rejected ones are not proposed again.
+Rejecting an architecture returns to STORY_SELECTION; the next version is
+built with the rejection notes and the previous outline.
+
+**Gates.** Mining: 15–30 candidates (fewer than 10 fails), evidence links,
+traceable sources, named people and figures in the cited evidence, historical
+status consistent with the verdicts, myth framing, no duplicates, complete
+scores, story structure, variety, share of well-supported candidates, a 5–10
+proposal. Architecture: central question, premise/spine, 3–12 sequences, every
+sequence and key event cites claims, sources derivable from those claims,
+built from the selection, HIGH priority used, every disputed/unverified/myth
+claim used has a caveat (how the narration must present it), no invented
+people, figures from the evidence, story rather than a list of facts, runtime
+within the project's range (±20% warns, beyond fails), sequence durations
+consistent with their structure, no unresolved critical review issue. A failed
+gate saves the artifact as DRAFT for inspection and fails the job without
+retry; its saved progress is kept, so a retry re-evaluates without new model
+calls.
+
+**Cost control.** Each step's raw model output is saved in `jobs.checkpoint`
+(`StepCheckpoint`); retries reuse completed steps. Every call goes through the
+provider ledger (model, tokens, estimated cost, duration, failures); a job
+stops once its recorded spend passes `STORY_MAX_COST_USD` (default $15). Typical
+calls: mining 3–6 (mine, critic, selection; top-up only when needed),
+architecture 2 (architect, reviewer).
+
+## 13. Decisions
 
 | # | Decision | Why | Alternative |
 |---|---|---|---|
@@ -484,3 +574,8 @@ answer against the same zod schema.
 | D24 | Retries resume from saved progress (`jobs.checkpoint`) | The first live run re-paid the plan, 48 searches and triage on each automatic retry after a deterministic failure; resuming makes a retry cost only the step that failed | Fewer automatic retries (still wastes the first repeat) |
 | D25 | Schema-in-instructions fallback when structured outputs reject a schema as too complex | The compile limit is unpublished; a fallback with the same validation avoids guessing a schema shape that fits | Redesigning the synthesis schema blind; splitting synthesis into several calls (more input tokens) |
 | D26 | Railway settings live on the service, not in `railway.json` | Railway deprecated Config as Code; new services cannot read it, and its GitHub import splits pnpm monorepos into per-package services | Railway IaC (`.railway/railway.ts`), applied with the Railway CLI — possible later |
+| D27 | Story mining and architecture are two jobs with a human curation status (STORY_SELECTION) between them, and a human gate (STORY) after | The AI proposes; the editor decides what goes in before any architecture work is paid for, and approves the blueprint | One STORY job that picks the units itself |
+| D28 | Historical status/confidence computed from the linked claims' verdicts; the critic scores appeal only | Trust must come from the evidence the research gate already judged, not from a model's impression; scoring appeal separately makes the ranking formula explicit | Model-assigned confidence |
+| D29 | Evidence rules remove a candidate rather than letting it through with a warning; a top-up pass replaces removals | An invented person or figure must never reach the editor's shortlist; the removal reasons are shown and fed to the top-up prompt | Flag and keep |
+| D30 | Candidate ↔ claim links are rows (`story_candidate_claims`); architecture sequences keep claim keys in JSON with sources derived and re-checked by the gate | FK links make candidate evidence impossible to dangle; sequences are a blueprint whose shape will change with the script stage, and the dossier version is fixed per architecture | A join table per sequence |
+| D31 | A reviewer's corrected architecture is kept only if it has no more evidence problems than the draft | A revision can fix framing but can also introduce new unsupported material; the deterministic count decides | Always trust the revision |

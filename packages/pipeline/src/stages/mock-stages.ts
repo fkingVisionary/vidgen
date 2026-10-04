@@ -9,14 +9,16 @@ import type { StageHandler, StageHandlers } from '../handlers.ts';
  *
  * They exist to prove the plumbing — job queue → handler → provider
  * interface → cost ledger → status machine — without API credits. They do
- * NOT do the stage's real work: no research claims, story, script, storyboard
- * or timeline rows are created, and every result says so. Each will be
- * replaced by a real module (modules/<stage>) in later milestones.
+ * NOT do the stage's real work: no research claims, story candidates, story
+ * architecture, script, storyboard or timeline rows are created, and every
+ * result says so. Each is replaced by a real module (modules/<stage>) once
+ * that stage is built.
  */
 
 const NOT_DONE: Record<JobType, string> = {
   RESEARCH: 'No research was performed. No sources or claims were created.',
-  STORY: 'No story architecture was written.',
+  STORY_MINING: 'No story mining was performed. No story candidates were created.',
+  STORY_ARCHITECTURE: 'No story architecture was written.',
   SCRIPT: 'No script was written.',
   VOICE: 'No speech was synthesised (mock audio is a beep followed by silence).',
   VISUAL_PLAN: 'No storyboard was created.',
@@ -67,7 +69,8 @@ const handlers: StageHandler[] = [
       return mockResult('RESEARCH', { searchResults: r.results.length });
     },
   },
-  textStage('STORY', 'story.architecture'),
+  textStage('STORY_MINING', 'story.mine'),
+  textStage('STORY_ARCHITECTURE', 'story.architecture'),
   textStage('SCRIPT', 'script.draft'),
   {
     type: 'VOICE',

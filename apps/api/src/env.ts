@@ -52,6 +52,10 @@ export const EnvSchema = z
     /** Upper bound of sources retrieved and read per run. */
     RESEARCH_MAX_SOURCES: opt(z.coerce.number().int().min(5).max(120).default(45)),
 
+    // Story stage
+    /** Hard ceiling on one story-mining or story-architecture job's estimated provider spend (USD). */
+    STORY_MAX_COST_USD: opt(z.coerce.number().min(0.5).max(200).default(15)),
+
     /** Directory of the built dashboard. Defaults to apps/web/dist. */
     WEB_DIST_DIR: opt(z.string().optional()),
     /** Set by Railway on deploys; shown on /api/health. */

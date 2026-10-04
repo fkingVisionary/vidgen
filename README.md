@@ -5,15 +5,18 @@ AI-assisted production system for premium historical & economic documentaries
 visuals & infographics → edit → QA → render → publish, with a human approving
 every important step.
 
-**Current state: V1, milestone 2 — the research engine.** The pipeline,
-database, job system, provider abstractions and dashboard are real and tested
-(milestone 1). The **Research** stage is real when Anthropic (Claude) and
-Tavily are configured: it plans questions, searches, retrieves full texts,
-extracts verbatim-verified evidence, builds a versioned dossier of claims with
-verdicts and citations, and stops at a quality gate for human review. Every
-later stage (story, script, voice, visuals, edit, publish) is still a clearly
-labelled **MOCK**. First test episode: *Tulip Mania — The Bubble That Became a
-Legend* (seeded, status *Idea*).
+**Current state: V1, milestone 3 — story mining and story architecture.** The
+pipeline, database, job system, provider abstractions and dashboard are real
+and tested (milestone 1). The **Research** stage is real when Anthropic
+(Claude) and Tavily are configured: it builds a versioned dossier of claims
+with verdicts and verbatim-verified citations, and stops for human review
+(milestone 2). **Story mining** turns the approved dossier into a ranked pool
+of evidence-backed story units, which the editor curates; **story
+architecture** turns the editor's selection into a documentary blueprint
+(premise, central question, spine, sequences), which a human approves
+(milestone 3; real when Claude is configured). Every later stage (script,
+voice, visuals, edit, publish) is still a clearly labelled **MOCK**. First test
+episode: *Tulip Mania — The Bubble That Became a Legend*.
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design, data model, providers, jobs, decisions
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Railway, environment variables, operations
@@ -36,6 +39,8 @@ packages/database  Prisma schema, migrations, client
 packages/providers Provider interfaces, MOCK implementations, registry, contract tests
 packages/pipeline  Project state service, job queue & runner, stage handler contract
 modules/research   The RESEARCH stage: plan → search → retrieve → read → synthesise → quality gate
+modules/story      STORY_MINING (mine → evidence rules → critic → rank → proposed selection → gate)
+                   and STORY_ARCHITECTURE (architect → evidence rules → reviewer → gate)
 docs/  scripts/  test/
 ```
 
@@ -124,6 +129,24 @@ Then either click **Run Research** on the project page, or from a shell:
 pnpm research:run tulip-mania                   # development
 node apps/api/dist/research.js tulip-mania      # production image / Railway shell
 ```
+
+## Story mining and architecture
+
+With `AI_PROVIDER=anthropic`, once a research dossier is approved:
+
+1. Project page or Story page → **Run Story Mining**. The pack lists 15–30
+   ranked candidates with their arc, scores, historical status and evidence,
+   plus candidates the evidence rules removed and why.
+2. On the **Story** page, approve, reject or flag candidates, choose 5–10 for
+   the documentary (the AI's proposal is preselected), set priorities, add
+   notes — or request another mining pass with a brief.
+3. **Generate Story Architecture** (refused until 5–10 units are selected).
+4. Review it: **Approve Story Architecture**, **Reject → Rework** (back to
+   the selection; the next version uses your notes) or **Flag**. Nothing moves
+   on to the script automatically.
+
+`STORY_MAX_COST_USD=15` stops a mining or architecture job whose recorded
+spend passes it. Like research, retries reuse completed model calls.
 
 `GET /api/health` lists the stages that are real (`realStages`). Progress
 appears in the project's Activity panel. (A full run with real Claude has not

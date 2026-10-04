@@ -21,19 +21,23 @@ export const PROJECT_STATUSES = [
   'RESEARCHING',
   'RESEARCH_REVIEW', // human approval gate #1 (research dossier)
   'RESEARCH_COMPLETE',
-  'STORY_DEVELOPMENT',
+  'STORY_MINING', // mining the approved dossier for story candidates
+  'STORY_SELECTION', // the editor curates candidates and the documentary selection
+  'STORY_ARCHITECTING',
+  'STORY_REVIEW', // human approval gate #2 (story architecture)
+  'STORY_APPROVED',
   'SCRIPT_DRAFT',
-  'SCRIPT_REVIEW', // human approval gate #2 (script)
+  'SCRIPT_REVIEW', // human approval gate #3 (script)
   'SCRIPT_APPROVED',
   'VOICE_GENERATING',
   'VOICE_COMPLETE',
   'VISUAL_PLANNING',
-  'STORYBOARD_REVIEW', // human approval gate #3 (storyboard) — before any paid generation
+  'STORYBOARD_REVIEW', // human approval gate #4 (storyboard) — before any paid generation
   'VISUAL_GENERATING',
   'VISUAL_REVIEW', // review of generated assets
   'EDITING',
   'RENDERING',
-  'QA', // automated QA report + human approval gate #4 (final video)
+  'QA', // automated QA report + human approval gate #6 (final video)
   'APPROVED',
   'PUBLISHED',
   'FAILED',
@@ -43,7 +47,8 @@ export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 /** Units of work. Each runs in exactly one project status (see pipeline.ts). */
 export const JOB_TYPES = [
   'RESEARCH',
-  'STORY',
+  'STORY_MINING',
+  'STORY_ARCHITECTURE',
   'SCRIPT',
   'VOICE',
   'VISUAL_PLAN',
@@ -85,6 +90,7 @@ export type StageState = (typeof STAGE_STATES)[number];
 /** Points where a human must approve before the pipeline moves on. */
 export const APPROVAL_GATES = [
   'RESEARCH',
+  'STORY',
   'SCRIPT',
   'STORYBOARD',
   'VISUAL_ASSETS',
@@ -174,6 +180,52 @@ export type ClaimImportance = (typeof CLAIM_IMPORTANCES)[number];
 /** FULL_TEXT: the quote comes from the retrieved document. SNIPPET: search-engine snippet only. */
 export const CITATION_BASES = ['FULL_TEXT', 'SNIPPET'] as const;
 export type CitationBasis = (typeof CITATION_BASES)[number];
+
+// ---------------------------------------------------------------------------
+// Story (mining + architecture)
+// ---------------------------------------------------------------------------
+
+/** What kind of story unit a candidate is. */
+export const STORY_TYPES = [
+  'CHARACTER',
+  'DEAL',
+  'MARKET_EVENT',
+  'FORTUNE',
+  'SCAM',
+  'CONFLICT',
+  'REVERSAL',
+  'MYSTERY',
+  'MYTH_ORIGIN',
+  'DISCOVERY',
+  'DISASTER',
+  'SOCIAL_PHENOMENON',
+] as const;
+export type StoryType = (typeof STORY_TYPES)[number];
+
+/**
+ * How a story unit stands against the evidence, derived in code from the
+ * verdicts of the claims it is built on (never chosen by the model).
+ */
+export const HISTORICAL_STATUSES = [
+  'ESTABLISHED', // every claim ESTABLISHED
+  'PROBABLE', // ESTABLISHED/PROBABLE only
+  'CONTESTED', // rests partly on DISPUTED claims: must be told as a dispute
+  'UNCERTAIN', // rests partly on UNVERIFIED claims: must be told as an open question
+  'MYTH_INVESTIGATION', // built around a MYTH: told as popular story → origin → what happened
+] as const;
+export type HistoricalStatus = (typeof HISTORICAL_STATUSES)[number];
+
+/** The editor's decision on a story candidate. Only a human sets anything but PROPOSED. */
+export const CANDIDATE_STATUSES = ['PROPOSED', 'APPROVED', 'REJECTED', 'FLAGGED'] as const;
+export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
+
+/** The editor's priority for a story unit: HIGH units must be central to the architecture. */
+export const CANDIDATE_PRIORITIES = ['HIGH', 'NORMAL', 'LOW'] as const;
+export type CandidatePriority = (typeof CANDIDATE_PRIORITIES)[number];
+
+/** Who a story character is. Only NAMED_PERSON needs a name found in the evidence. */
+export const CHARACTER_KINDS = ['NAMED_PERSON', 'GROUP', 'ROLE'] as const;
+export type CharacterKind = (typeof CHARACTER_KINDS)[number];
 
 // ---------------------------------------------------------------------------
 // Visuals, infographics, media

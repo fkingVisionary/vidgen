@@ -3,6 +3,7 @@ import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers, t
 import type { JobType } from '@docengine/core';
 import { createProviders, describeProviders, type ProviderSet } from '@docengine/providers';
 import { createResearchStage, type ResearchConfig } from '@docengine/research';
+import { createStoryArchitectureStage, createStoryMiningStage, type StoryConfig } from '@docengine/story';
 import type { Logger } from 'pino';
 import { providerSelection, providerSettings, type Env } from './env.ts';
 
@@ -26,7 +27,7 @@ export interface AppContainer {
 export function createContainer(
   env: Env,
   logger: Logger,
-  overrides: { db?: Database; providers?: ProviderSet; researchConfig?: Partial<ResearchConfig> } = {},
+  overrides: { db?: Database; providers?: ProviderSet; researchConfig?: Partial<ResearchConfig>; storyConfig?: Partial<StoryConfig> } = {},
 ): AppContainer {
   const db = overrides.db ?? createDatabase({ connectionString: env.DATABASE_URL, maxConnections: env.DATABASE_POOL_SIZE });
   // Fails fast with a clear message if a provider is configured that is not implemented.
@@ -42,6 +43,11 @@ export function createContainer(
   const handlers = createMockStageHandlers();
   if (!providers.ai.info.mock && !providers.research.info.mock) {
     handlers.RESEARCH = createResearchStage({ maxCostUsd: env.RESEARCH_MAX_COST_USD, maxSourcesToRetrieve: env.RESEARCH_MAX_SOURCES, ...overrides.researchConfig });
+  }
+  if (!providers.ai.info.mock) {
+    const story: Partial<StoryConfig> = { maxCostUsd: { mining: env.STORY_MAX_COST_USD, architecture: env.STORY_MAX_COST_USD }, ...overrides.storyConfig };
+    handlers.STORY_MINING = createStoryMiningStage(story);
+    handlers.STORY_ARCHITECTURE = createStoryArchitectureStage(story);
   }
   const realStages = Object.values(handlers).filter((h) => !h.mock).map((h) => h.type);
   const runner = new JobRunner({

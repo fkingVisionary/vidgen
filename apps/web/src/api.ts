@@ -8,6 +8,8 @@ import type {
   ProjectSummaryView,
   ResearchView,
   RewindInput,
+  StoryView,
+  UpdateStoryCandidateInput,
 } from '@docengine/core';
 
 /** Thin typed client for the same-origin API. Provider credentials never reach the browser. */
@@ -46,4 +48,13 @@ export const api = {
   retryJob: (jobId: string) => request<JobView>('POST', `/api/jobs/${jobId}/retry`),
   research: (id: string, version?: number) =>
     request<ResearchView>('GET', `/api/projects/${encodeURIComponent(id)}/research${version ? `?version=${version}` : ''}`),
+  story: (id: string, v: { pack?: number; architecture?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (v.pack) q.set('pack', String(v.pack));
+    if (v.architecture) q.set('architecture', String(v.architecture));
+    return request<StoryView>('GET', `/api/projects/${encodeURIComponent(id)}/story${q.size ? `?${q}` : ''}`);
+  },
+  updateCandidate: (candidateId: string, input: UpdateStoryCandidateInput) => request<StoryView>('PATCH', `/api/story-candidates/${candidateId}`, input),
+  mineStory: (id: string, notes?: string) => request<JobView>('POST', `/api/projects/${id}/story/mine`, notes ? { notes } : {}),
+  buildArchitecture: (id: string, notes?: string) => request<JobView>('POST', `/api/projects/${id}/story/architecture`, notes ? { notes } : {}),
 };

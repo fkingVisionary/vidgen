@@ -1,10 +1,11 @@
 import { ApprovalInput, CreateProjectInput, EnqueueJobInput, RewindInput } from '@docengine/core';
-import { NotFoundError } from '@docengine/pipeline';
+import { ConflictError, NotFoundError } from '@docengine/pipeline';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { actorOf } from '../auth.ts';
 import type { AppContainer } from '../container.ts';
 import { loadResearchView } from '../research-views.ts';
+import { architecturePreflight } from '../story-views.ts';
 import { findProject, listProjects, loadProjectDetail, toJobView } from '../views.ts';
 
 const Params = z.object({ id: z.string().trim().min(1).max(100) });
@@ -35,7 +36,13 @@ export async function projectRoutes(app: FastifyInstance, c: AppContainer): Prom
   /** Enqueue a pipeline job (may START the next phase, e.g. IDEA → RESEARCHING). */
   app.post('/api/projects/:id/jobs', async (req, reply) => {
     const project = await requireProject(req.params);
-    const job = await c.projects.enqueueJob(project.id, EnqueueJobInput.parse(req.body ?? {}), actorOf(req));
+    const input = EnqueueJobInput.parse(req.body ?? {});
+    // The real architecture stage needs a selection of 5–10 units: say so now rather than fail the job.
+    if (input.type === 'STORY_ARCHITECTURE' && c.realStages.includes('STORY_ARCHITECTURE')) {
+      const problem = await architecturePreflight(c.db, project.id);
+      if (problem) throw new ConflictError(problem);
+    }
+    const job = await c.projects.enqueueJob(project.id, input, actorOf(req));
     return reply.code(202).send(toJobView(job));
   });
 

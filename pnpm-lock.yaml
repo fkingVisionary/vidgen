@@ -65,6 +65,9 @@ importers:
       '@docengine/research':
         specifier: workspace:*
         version: link:../../modules/research
+      '@docengine/story':
+        specifier: workspace:*
+        version: link:../../modules/story
       '@fastify/static':
         specifier: 10.1.5
         version: 10.1.5
@@ -129,6 +132,24 @@ importers:
         version: 8.3.2(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
 
   modules/research:
+    dependencies:
+      '@docengine/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@docengine/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@docengine/pipeline':
+        specifier: workspace:*
+        version: link:../../packages/pipeline
+      '@docengine/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+
+  modules/story:
     dependencies:
       '@docengine/core':
         specifier: workspace:*

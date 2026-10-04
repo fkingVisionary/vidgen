@@ -1,6 +1,8 @@
 import {
   QualityReport,
   ResearchDossierContent,
+  type ArtifactCostView,
+  type ClaimView,
   type DossierSummaryView,
   type DossierView,
   type ResearchView,
@@ -30,20 +32,13 @@ export async function loadResearchView(db: Database, projectId: string, version?
   const [claims, sources, cost] = await Promise.all([
     db.researchClaim.findMany({ where: { dossierId: chosen.id }, orderBy: { sortOrder: 'asc' }, include: { citations: true } }),
     db.source.findMany({ where: { projectId }, orderBy: { createdAt: 'asc' } }),
-    chosen.jobId
-      ? db.$queryRaw<{ total: string | null; estimated: bigint; calls: bigint }[]>`
-          SELECT SUM(COALESCE(actual_cost_usd, estimated_cost_usd))::text AS total,
-                 COUNT(*) FILTER (WHERE cost_basis = 'ESTIMATED') AS estimated,
-                 COUNT(*) AS calls
-            FROM provider_calls WHERE job_id = ${chosen.jobId}::uuid`
-      : Promise.resolve([]),
+    jobCost(db, chosen.jobId),
   ]);
 
   const citationCount = new Map<string, number>();
   for (const c of claims) for (const cit of c.citations) citationCount.set(cit.sourceId, (citationCount.get(cit.sourceId) ?? 0) + 1);
   const content = ResearchDossierContent.safeParse(chosen.content);
   const report = QualityReport.safeParse(chosen.qualityReport);
-  const [costRow] = cost;
 
   const dossier: DossierView = {
     ...versions.find((v) => v.id === chosen.id)!,
@@ -51,28 +46,7 @@ export async function loadResearchView(db: Database, projectId: string, version?
     content: content.success ? content.data : emptyContent(),
     qualityReport: report.success ? report.data : null,
     stats: (chosen.stats ?? {}) as Record<string, unknown>,
-    claims: claims.map((c) => ({
-      id: c.id,
-      key: c.claimKey,
-      statement: c.statement,
-      claimType: c.claimType,
-      category: c.category,
-      importance: c.importance,
-      verdict: c.verdict,
-      confidence: c.confidence,
-      popularVersion: c.popularVersion,
-      notes: c.notes,
-      needsVerification: c.needsVerification,
-      citations: c.citations.map((x) => ({
-        id: x.id,
-        sourceId: x.sourceId,
-        stance: x.stance,
-        basis: x.basis,
-        quote: x.quote,
-        locator: x.locator,
-        quoteVerified: x.quoteVerified,
-      })),
-    })),
+    claims: claims.map(toClaimView),
     sources: sources.map((s) => ({
       id: s.id,
       title: s.title,
@@ -91,13 +65,53 @@ export async function loadResearchView(db: Database, projectId: string, version?
       duplicateOfId: s.duplicateOfId,
       citationCount: citationCount.get(s.id) ?? 0,
     })),
-    cost: {
-      totalUsd: sumUsd([costRow?.total ? Number(costRow.total) : 0]),
-      includesEstimates: Number(costRow?.estimated ?? 0) > 0,
-      calls: Number(costRow?.calls ?? 0),
-    },
+    cost,
   };
   return { versions, dossier };
+}
+
+type ClaimRow = Awaited<ReturnType<Database['researchClaim']['findMany']>>[number] & {
+  citations: Awaited<ReturnType<Database['claimCitation']['findMany']>>;
+};
+
+export function toClaimView(c: ClaimRow): ClaimView {
+  return {
+    id: c.id,
+    key: c.claimKey,
+    statement: c.statement,
+    claimType: c.claimType,
+    category: c.category,
+    importance: c.importance,
+    verdict: c.verdict,
+    confidence: c.confidence,
+    popularVersion: c.popularVersion,
+    notes: c.notes,
+    needsVerification: c.needsVerification,
+    citations: c.citations.map((x) => ({
+      id: x.id,
+      sourceId: x.sourceId,
+      stance: x.stance,
+      basis: x.basis,
+      quote: x.quote,
+      locator: x.locator,
+      quoteVerified: x.quoteVerified,
+    })),
+  };
+}
+
+/** Provider spend of the job that produced an artifact version. */
+export async function jobCost(db: Database, jobId: string | null): Promise<ArtifactCostView> {
+  if (!jobId) return { totalUsd: 0, includesEstimates: false, calls: 0 };
+  const [row] = await db.$queryRaw<{ total: string | null; estimated: bigint; calls: bigint }[]>`
+    SELECT SUM(COALESCE(actual_cost_usd, estimated_cost_usd))::text AS total,
+           COUNT(*) FILTER (WHERE cost_basis = 'ESTIMATED') AS estimated,
+           COUNT(*) AS calls
+      FROM provider_calls WHERE job_id = ${jobId}::uuid`;
+  return {
+    totalUsd: sumUsd([row?.total ? Number(row.total) : 0]),
+    includesEstimates: Number(row?.estimated ?? 0) > 0,
+    calls: Number(row?.calls ?? 0),
+  };
 }
 
 function emptyContent(): ResearchDossierContent {

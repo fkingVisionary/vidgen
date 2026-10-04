@@ -12,12 +12,13 @@ import { DEMO_PROJECT_SLUG, seedDemoProject } from './demo.ts';
 import { parseEnv } from './env.ts';
 import { ALL_MOCK, createProviders } from '@docengine/providers';
 import { FAKE_CORPUS_GATE, FakeResearchAI, FakeResearchProvider } from '@docengine/research/testing';
-import type { ResearchView } from '@docengine/core';
+import { FakeStoryAI, seedFakeDossier } from '@docengine/story/testing';
+import type { ResearchView, StoryView } from '@docengine/core';
 
 const db = useTestDatabase();
 let open: { app: FastifyInstance; c: AppContainer }[] = [];
 
-async function start(extraEnv: Record<string, string> = {}, opts: { fakeResearch?: boolean } = {}) {
+async function start(extraEnv: Record<string, string> = {}, opts: { fakeResearch?: boolean; fakeStory?: boolean } = {}) {
   const env = parseEnv({ DATABASE_URL: process.env.TEST_DATABASE_URL!, NODE_ENV: 'test', LOG_LEVEL: 'silent', WEB_DIST_DIR: '/nonexistent', ...extraEnv });
   const c = createContainer(env, pino({ level: 'silent' }), {
     db,
@@ -27,6 +28,7 @@ async function start(extraEnv: Record<string, string> = {}, opts: { fakeResearch
           researchConfig: { gate: FAKE_CORPUS_GATE },
         }
       : {}),
+    ...(opts.fakeStory ? { providers: { ...createProviders(ALL_MOCK), ai: new FakeStoryAI() } } : {}),
   });
   const app = await buildApp(c);
   open.push({ app, c });
@@ -143,7 +145,7 @@ describe('HTTP API', () => {
 describe('research dossier API', () => {
   it('serves the dossier with claims, citations, sources, quality report and cost, and links the approval', async () => {
     const { app, c } = await start({}, { fakeResearch: true });
-    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH']);
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH', 'STORY_MINING', 'STORY_ARCHITECTURE']);
     const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
     expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/research` })).json<ResearchView>()).toEqual({ versions: [], dossier: null });
 
@@ -178,6 +180,94 @@ describe('research dossier API', () => {
 
     const approved = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/approvals`, payload: { gate: 'RESEARCH', decision: 'APPROVED', notes: 'Checked the myths section' } });
     expect(approved.json<ProjectDetailView>()).toMatchObject({ status: 'RESEARCH_COMPLETE', research: { status: 'APPROVED' } });
+  });
+});
+
+describe('story API', () => {
+  async function researched(app: FastifyInstance) {
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
+    await db.project.update({ where: { id: p.id }, data: { status: 'RESEARCH_COMPLETE', phaseSeq: 2 } });
+    await seedFakeDossier(db, p.id);
+    return p;
+  }
+  const story = async (app: FastifyInstance, id: string) => (await app.inject({ method: 'GET', url: `/api/projects/${id}/story` })).json<StoryView>();
+  const patch = (app: FastifyInstance, id: string, payload: Record<string, unknown>) => app.inject({ method: 'PATCH', url: `/api/story-candidates/${id}`, payload });
+
+  it('mines, lets the editor curate, checks the selection, builds and reviews the architecture', async () => {
+    const { app, c } = await start({}, { fakeStory: true });
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['STORY_MINING', 'STORY_ARCHITECTURE']);
+    const p = await researched(app);
+    expect(await story(app, p.id)).toMatchObject({ packs: [], pack: null, architecture: null, editable: false, selection: { count: 0, problem: 'No story pack yet' } });
+
+    // Run Story Mining.
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/mine`, payload: {} })).statusCode).toBe(202);
+    await c.runner.drain();
+    let view = await story(app, p.id);
+    expect(view).toMatchObject({ editable: true, selection: { count: 7, min: 5, max: 10, problem: null } });
+    const pack = view.pack!;
+    expect(pack).toMatchObject({ version: 1, status: 'IN_REVIEW', qualityPassed: true, candidateCount: 15, selectedCount: 7, dossierVersion: 1 });
+    expect(pack.cost).toMatchObject({ calls: 3, includesEstimates: true });
+    expect(pack.qualityReport?.passed).toBe(true);
+    for (const cand of pack.candidates) {
+      expect(cand.claimKeys.length).toBeGreaterThan(0);
+      expect(cand.sourceIds.length).toBeGreaterThan(0);
+      expect(cand.scores).not.toBeNull();
+    }
+    const cited = new Set(pack.candidates.flatMap((x) => x.claimKeys));
+    expect(pack.evidence.claims.map((x) => x.key).sort()).toEqual([...cited].sort());
+    expect(pack.evidence.sources.length).toBeGreaterThan(0);
+
+    // The editor approves, prioritises, rejects and deselects.
+    const [first, second, , , fifth] = pack.candidates;
+    let res = await patch(app, first!.id, { status: 'APPROVED', priority: 'HIGH', editorNotes: 'Open with this.' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<StoryView>().pack!.candidates[0]).toMatchObject({ status: 'APPROVED', priority: 'HIGH', editorNotes: 'Open with this.', selected: true });
+    res = await patch(app, second!.id, { status: 'REJECTED' });
+    expect(res.json<StoryView>().selection.count).toBe(6);
+    expect((await patch(app, second!.id, { selected: true })).statusCode).toBe(409);
+    expect((await patch(app, second!.id, { status: 'REJECTED', selected: true })).statusCode).toBe(400);
+    expect((await patch(app, first!.id, {})).statusCode).toBe(400);
+    expect(await db.projectEvent.count({ where: { projectId: p.id, type: 'CANDIDATE_UPDATED' } })).toBe(2);
+
+    // The selection is checked before any architecture work is paid for.
+    for (const cand of pack.candidates.slice(2, 5)) await patch(app, cand.id, { selected: false });
+    const refused = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture`, payload: {} });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().message).toBe('Select at least 5 story units (3 selected)');
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/jobs`, payload: { type: 'STORY_ARCHITECTURE' } })).statusCode).toBe(409);
+    for (const cand of pack.candidates.slice(2, 4)) await patch(app, cand.id, { selected: true });
+    expect((await story(app, p.id)).selection).toMatchObject({ count: 5, problem: null });
+
+    // Generate Story Architecture.
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture`, payload: { notes: 'Lead with the contracts.' } })).statusCode).toBe(202);
+    await c.runner.drain();
+    view = await story(app, p.id);
+    expect(view.editable).toBe(false);
+    const arch = view.architecture!;
+    expect(arch).toMatchObject({ version: 1, status: 'IN_REVIEW', qualityPassed: true, packVersion: 1, sequenceCount: 5, targetDurationSec: 750, notes: 'Lead with the contracts.' });
+    expect(arch.content!.sequences.every((s) => s.sourceIds.length > 0 && s.claimKeys.length > 0)).toBe(true);
+    expect(arch.evidence.claims.length).toBeGreaterThan(0);
+    expect(arch.content!.sequences.map((s) => s.candidateKeys[0])).toEqual(['S01', 'S03', 'S04', 'S06', 'S07']); // S02 rejected, S05 deselected
+    expect(fifth!.key).toBe('S05');
+    expect((await patch(app, first!.id, { priority: 'LOW' })).json()).toMatchObject({ error: 'CONFLICT', message: expect.stringContaining('STORY_SELECTION') });
+
+    // Reject → rework; nothing proceeds without a human.
+    const rejected = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/approvals`, payload: { gate: 'STORY', decision: 'REJECTED', notes: 'Too slow to start.' } });
+    expect(rejected.json<ProjectDetailView>()).toMatchObject({ status: 'STORY_SELECTION', story: { architecture: { version: 1, status: 'REJECTED' }, pack: { version: 1, selectedCount: 5 } } });
+    expect((await story(app, p.id)).architecture!.approvals).toEqual([expect.objectContaining({ gate: 'STORY', decision: 'REJECTED', notes: 'Too slow to start.' })]);
+
+    // Another mining pass with the editor's brief.
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/mine`, payload: { notes: 'More about the courts.' } })).statusCode).toBe(202);
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}` })).json<ProjectDetailView>().status).toBe('STORY_MINING');
+    await c.runner.drain();
+    view = await story(app, p.id);
+    expect(view.packs.map((x) => [x.version, x.status])).toEqual([
+      [2, 'IN_REVIEW'],
+      [1, 'SUPERSEDED'],
+    ]);
+    expect(view.pack!.candidates.find((x) => x.title === first!.title)).toMatchObject({ status: 'APPROVED', priority: 'HIGH' });
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/story?pack=1` })).json<StoryView>()).toMatchObject({ editable: false, pack: { version: 1 } });
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/story?pack=7` })).statusCode).toBe(404);
   });
 });
 

@@ -46,7 +46,9 @@ describe('mocked pipeline, end to end', () => {
 
     await run('RESEARCH');
     await approve('RESEARCH');
-    await run('STORY');
+    await run('STORY_MINING');
+    await run('STORY_ARCHITECTURE');
+    await approve('STORY');
     await run('SCRIPT');
     await approve('SCRIPT');
     await run('VOICE');
@@ -65,8 +67,10 @@ describe('mocked pipeline, end to end', () => {
     expect(visited).toEqual([
       'RESEARCH_REVIEW',
       'RESEARCH_COMPLETE',
-      'SCRIPT_DRAFT',
-      'SCRIPT_REVIEW',
+      'STORY_SELECTION', // mining done; the editor curates the candidates
+      'STORY_REVIEW',
+      'STORY_APPROVED',
+      'SCRIPT_REVIEW', // enqueueing SCRIPT starts SCRIPT_DRAFT; the job completes it
       'SCRIPT_APPROVED',
       'VOICE_COMPLETE',
       'STORYBOARD_REVIEW',
@@ -82,7 +86,7 @@ describe('mocked pipeline, end to end', () => {
     ]);
 
     const jobs = await db.job.findMany({ where: { projectId: p.id } });
-    expect(jobs).toHaveLength(11);
+    expect(jobs).toHaveLength(12);
     expect(jobs.every((j) => j.status === 'SUCCEEDED' && j.isMock && j.attempts === 1)).toBe(true);
     const publish = jobs.find((j) => j.type === 'PUBLISH')!;
     expect(publish.result).toMatchObject({ mock: true, published: false, state: 'NOT_PUBLISHED' });
@@ -99,6 +103,7 @@ describe('mocked pipeline, end to end', () => {
     const approvals = await db.approval.findMany({ where: { projectId: p.id }, orderBy: { createdAt: 'asc' } });
     expect(approvals.map((a) => `${a.gate}@${a.projectStatus}`)).toEqual([
       'RESEARCH@RESEARCH_REVIEW',
+      'STORY@STORY_REVIEW',
       'SCRIPT@SCRIPT_REVIEW',
       'STORYBOARD@STORYBOARD_REVIEW',
       'VISUAL_ASSETS@VISUAL_REVIEW',

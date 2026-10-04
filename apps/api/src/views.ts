@@ -13,6 +13,7 @@ import {
 } from '@docengine/core';
 import type { Approval, Database, Job, Project, ProjectEvent } from '@docengine/database';
 import type { ProjectService } from '@docengine/pipeline';
+import { loadStorySummary } from './story-views.ts';
 
 /** Maps database rows to the JSON shapes in @docengine/core/views. */
 
@@ -143,7 +144,7 @@ export async function loadProjectDetail(
   const project = await findProject(db, idOrSlug);
   if (!project) return null;
 
-  const [languageVersions, jobs, approvals, events, costs, phaseJobsComplete, rt, latestDossier] = await Promise.all([
+  const [languageVersions, jobs, approvals, events, costs, phaseJobsComplete, rt, latestDossier, story] = await Promise.all([
     db.languageVersion.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'asc' } }),
     db.job.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50, omit: JOB_VIEW_OMIT }),
     db.approval.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
@@ -152,6 +153,7 @@ export async function loadProjectDetail(
     projects.phaseJobsComplete(db, project),
     runtimes(db, [project.id]),
     db.researchDossier.findFirst({ where: { projectId: project.id }, orderBy: { version: 'desc' }, include: { _count: { select: { claims: true } } } }),
+    loadStorySummary(db, project.id),
   ]);
 
   const actions = getAvailableActions(project.status, { failedFrom: project.failedFromStatus });
@@ -183,5 +185,6 @@ export async function loadProjectDetail(
           createdAt: latestDossier.createdAt.toISOString(),
         }
       : null,
+    story,
   };
 }

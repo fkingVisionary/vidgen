@@ -120,8 +120,9 @@ Every push to the connected branch deploys automatically.
    | `TAVILY_API_KEY` | your key (or `TAVILY_ACCESS_MODE=keyless`) |
    | `TAVILY_USD_PER_CREDIT` | your plan's $/credit (for cost estimates) |
    | `RESEARCH_MAX_COST_USD` | optional, default `40` |
+   | `STORY_MAX_COST_USD` | optional, default `15` (per story-mining or architecture job) |
 
-4. **Verify:** `/api/health` → `"realStages":["RESEARCH"]` and the providers
+4. **Verify:** `/api/health` → `"realStages":["RESEARCH","STORY_MINING","STORY_ARCHITECTURE"]` and the providers
    list shows `anthropic` and `tavily` with `"mock":false`. The project page
    says which stages are real and which are MOCK placeholders.
 5. **Run:** project page → *Run Research*, or from a Railway shell on the app
@@ -180,6 +181,7 @@ agreed, but they are not read yet.
 | `TAVILY_USD_PER_CREDIT` | `0.008` | ✓ | Your plan's price; Tavily reports credits, so dollar cost is an estimate |
 | `RESEARCH_MAX_COST_USD` | `40` | ✓ | Per-run ceiling; the run stops (FAILED, not retried) once recorded spend passes it |
 | `RESEARCH_MAX_SOURCES` | `45` | ✓ | Sources whose full text is retrieved and read per run |
+| `STORY_MAX_COST_USD` | `15` | ✓ | Per-job ceiling for story mining and story architecture; the job stops (FAILED, not retried) once recorded spend passes it |
 | `WEB_DIST_DIR` | `apps/web/dist` | ✓ | Override only for unusual layouts |
 | `RAILWAY_GIT_COMMIT_SHA` | — | ✓ | Set by Railway; shown in `/api/health` |
 | `TEST_DATABASE_URL` | — | tests | Integration tests only; DB name must contain `test` |
@@ -240,6 +242,8 @@ deploy and media must survive that.
 | Research job fails with `Research stopped: estimated spend … exceeds the per-run ceiling` | Intended stop. Raise `RESEARCH_MAX_COST_USD` if the spend is justified, then *Retry* (stored documents and readings are reused). |
 | Research job fails with `Research quality gate failed: …` | The dossier was saved as DRAFT; open it (Research dossier → Quality gate tab) to see which checks failed. Rewind and run again, possibly with a research brief. |
 | `/api/health` shows `"realStages":[]` although keys are set | Both `AI_PROVIDER=anthropic` and `RESEARCH_PROVIDER=tavily` are needed for the real research stage. |
+| *Generate Story Architecture* answers "Select at least 5 story units" | Intended check before any paid work: select 5–10 candidates on the Story page (rejected ones never count). |
+| Story job fails with `Story mining quality gate failed` / `Story architecture quality gate failed` | The gate's report is on the Story page (*Quality gates*); the pack or architecture is kept as a DRAFT. *Retry* re-evaluates without new model calls; for different material, rewind to *Research complete* (mining) or *Story selection* (architecture) and run again, with a brief. |
 | Pre-deploy fails with `P1001: Can't reach database server` | `DATABASE_URL` missing or not referencing the Postgres service. |
 | Railway created services `@docengine/api`, `@docengine/research`, `@docengine/web` | The repository was added through "+ New → GitHub Repository" (monorepo auto-import). Discard those staged changes and use *Empty Service* → *Connect Repo* (step 3). |
 | Deployment shows SUCCESS but the log repeats `relation "jobs" does not exist` | The pre-deploy command `sh scripts/release.sh` is not set, so migrations never ran. Set it and redeploy. |

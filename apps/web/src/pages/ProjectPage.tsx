@@ -63,6 +63,7 @@ export function ProjectPage() {
           <JobsTable project={p} />
         </div>
         <div className="space-y-6">
+          {(p.story.pack || p.story.architecture || p.status === 'RESEARCH_COMPLETE') && <StoryCard project={p} />}
           {p.research && (
             <Card title="Research dossier">
               <p className="text-sm">
@@ -154,6 +155,37 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 
 const button = 'rounded-md px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40';
 
+/** Button text for starting a job, where "Run <job>" is not the clearest. */
+const ACTION_LABELS: Partial<Record<JobType, string>> = {
+  STORY_MINING: 'Run Story Mining',
+  STORY_ARCHITECTURE: 'Generate Story Architecture',
+};
+
+function StoryCard({ project: p }: { project: ProjectDetailView }) {
+  const { pack, architecture: a } = p.story;
+  return (
+    <Card title="Story">
+      {pack ? (
+        <p className="text-sm">
+          Pack v{pack.version} · {pack.status.replace('_', ' ').toLowerCase()} · {pack.candidateCount} candidates · {pack.selectedCount} selected
+        </p>
+      ) : (
+        <p className="text-sm text-stone-500">No story candidates yet.</p>
+      )}
+      {pack && <p className={`text-xs ${pack.qualityPassed ? 'text-emerald-700' : 'text-red-700'}`}>Mining gate {pack.qualityPassed ? 'passed' : 'failed'}</p>}
+      {a && (
+        <p className="mt-1 text-sm">
+          Architecture v{a.version} · {a.status.replace('_', ' ').toLowerCase()} · {a.sequenceCount} sequences
+          {a.estimatedDurationSec !== null && ` · ~${Math.round(a.estimatedDurationSec / 60)} min`}
+        </p>
+      )}
+      <Link to={`/projects/${p.slug}/story`} className="mt-2 inline-block rounded-md bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-700">
+        Open story →
+      </Link>
+    </Card>
+  );
+}
+
 function useProjectMutation<T>(project: ProjectDetailView, fn: (arg: T) => Promise<unknown>) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -188,6 +220,12 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
           </p>
         )}
 
+        {p.status === 'STORY_SELECTION' && (
+          <p className="text-sm">
+            Curate the story candidates on the <Link className="font-medium underline" to={`/projects/${p.slug}/story`}>Story page</Link>: approve, reject or flag them, choose 5–10 for the documentary, then generate the architecture.
+          </p>
+        )}
+
         {p.actions.runnableJobs.length > 0 && (
           <div>
             <div className="flex flex-wrap gap-2">
@@ -200,7 +238,7 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
                     onClick={() => enqueue.mutate(type)}
                     className={`${button} bg-sky-700 text-white hover:bg-sky-600`}
                   >
-                    {busy ? `${JOB_TYPE_LABELS[type]}: running…` : `Run ${JOB_TYPE_LABELS[type]}`}
+                    {busy ? `${JOB_TYPE_LABELS[type]}: running…` : (ACTION_LABELS[type] ?? `Run ${JOB_TYPE_LABELS[type]}`)}
                   </button>
                 );
               })}
@@ -218,6 +256,11 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
             {p.actions.gate.gate === 'RESEARCH' && p.research && (
               <p className="text-xs text-violet-800">
                 Review <Link className="underline" to={`/projects/${p.slug}/research`}>research dossier v{p.research.version}</Link> before deciding.
+              </p>
+            )}
+            {p.actions.gate.gate === 'STORY' && p.story.architecture && (
+              <p className="text-xs text-violet-800">
+                Review <Link className="underline" to={`/projects/${p.slug}/story`}>story architecture v{p.story.architecture.version}</Link> before deciding.
               </p>
             )}
             {!p.actions.canApprove && <p className="text-xs text-violet-800">Approval unlocks once the automated jobs for this step have succeeded.</p>}

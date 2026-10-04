@@ -2,6 +2,8 @@ import type {
   ApprovalDecision,
   ApprovalGate,
   ArtifactStatus,
+  CandidatePriority,
+  CandidateStatus,
   CitationBasis,
   CitationStance,
   ClaimImportance,
@@ -9,6 +11,7 @@ import type {
   ClaimVerdict,
   ConfidenceLevel,
   CostBasis,
+  HistoricalStatus,
   JobStatus,
   JobType,
   LanguageVersionStatus,
@@ -16,8 +19,10 @@ import type {
   ProviderKind,
   RetrievalStatus,
   SourceType,
+  StoryType,
 } from './enums.ts';
 import type { QualityReport, ResearchDossierContent } from './contracts/research.ts';
+import type { MythThread, StoryArchitectureContent, StoryCharacter, StoryPackContent, StoryScores } from './contracts/story.ts';
 import type { AvailableActions } from './pipeline.ts';
 import type { StageView } from './stages.ts';
 
@@ -114,6 +119,8 @@ export interface ProjectDetailView extends ProjectSummaryView {
   costs: CostSummaryView;
   /** Latest research dossier, if any. */
   research: DossierSummaryView | null;
+  /** Latest story pack and architecture, if any. */
+  story: StorySummaryView;
 }
 
 export interface DossierSummaryView {
@@ -180,12 +187,140 @@ export interface DossierView extends DossierSummaryView {
   /** Every source considered for the project: retrieved, failed and duplicates. */
   sources: SourceView[];
   /** Provider spend of the job that produced this version. */
-  cost: { totalUsd: number; includesEstimates: boolean; calls: number };
+  cost: ArtifactCostView;
 }
 
 export interface ResearchView {
   versions: DossierSummaryView[];
   dossier: DossierView | null;
+}
+
+// ---------------------------------------------------------------------------
+// Story
+// ---------------------------------------------------------------------------
+
+/** Provider spend of the job that produced an artifact version. */
+export interface ArtifactCostView {
+  totalUsd: number;
+  includesEstimates: boolean;
+  calls: number;
+}
+
+export interface StoryPackSummaryView {
+  id: string;
+  version: number;
+  status: ArtifactStatus;
+  qualityPassed: boolean | null;
+  candidateCount: number;
+  selectedCount: number;
+  createdAt: string;
+}
+
+export interface StoryArchitectureSummaryView {
+  id: string;
+  version: number;
+  status: ArtifactStatus;
+  qualityPassed: boolean | null;
+  packVersion: number | null;
+  sequenceCount: number;
+  estimatedDurationSec: number | null;
+  targetDurationSec: number | null;
+  createdAt: string;
+}
+
+export interface StorySummaryView {
+  pack: StoryPackSummaryView | null;
+  architecture: StoryArchitectureSummaryView | null;
+}
+
+export interface StoryCandidateView {
+  id: string;
+  key: string;
+  title: string;
+  hook: string;
+  storyType: StoryType;
+  characters: StoryCharacter[];
+  setting: string;
+  timePeriod: string;
+  desire: string;
+  conflict: string;
+  stakes: string;
+  escalation: string;
+  turningPoint: string;
+  payoff: string;
+  whyInteresting: string;
+  viewerQuestion: string;
+  mythThread: MythThread | null;
+  /** Null only if stored scores fail validation. */
+  scores: StoryScores | null;
+  historicalStatus: HistoricalStatus;
+  historicalConfidence: number;
+  rankScore: number;
+  rank: number;
+  notes: string | null;
+  aiSelected: boolean;
+  aiSelectionReason: string | null;
+  status: CandidateStatus;
+  selected: boolean;
+  priority: CandidatePriority;
+  editorNotes: string | null;
+  claimKeys: string[];
+  /** Retrieved sources cited by those claims. */
+  sourceIds: string[];
+  updatedAt: string;
+}
+
+/** Dossier evidence referenced by a story artifact: the claims it cites and their sources. */
+export interface StoryEvidenceView {
+  claims: ClaimView[];
+  sources: StorySourceView[];
+}
+
+export interface StoryPackView extends StoryPackSummaryView {
+  dossierId: string;
+  dossierVersion: number;
+  content: StoryPackContent;
+  qualityReport: QualityReport | null;
+  stats: Record<string, unknown>;
+  notes: string | null;
+  cost: ArtifactCostView;
+  candidates: StoryCandidateView[];
+  evidence: StoryEvidenceView;
+}
+
+export interface StoryArchitectureView extends StoryArchitectureSummaryView {
+  packId: string | null;
+  dossierVersion: number | null;
+  /** Null only if the stored content fails validation. */
+  content: StoryArchitectureContent | null;
+  qualityReport: QualityReport | null;
+  stats: Record<string, unknown>;
+  notes: string | null;
+  cost: ArtifactCostView;
+  approvals: ApprovalView[];
+  evidence: StoryEvidenceView;
+}
+
+/** A source as the story views show it. */
+export interface StorySourceView {
+  id: string;
+  title: string;
+  url: string | null;
+  domain: string | null;
+  sourceType: SourceType;
+  author: string | null;
+  publishedDate: string | null;
+}
+
+export interface StoryView {
+  packs: StoryPackSummaryView[];
+  pack: StoryPackView | null;
+  architectures: StoryArchitectureSummaryView[];
+  architecture: StoryArchitectureView | null;
+  /** True while the editor can change candidates (project in STORY_SELECTION, viewing the current pack). */
+  editable: boolean;
+  /** The shown pack's current selection (selected and not rejected) against the 5–10 limit. */
+  selection: { count: number; min: number; max: number; problem: string | null };
 }
 
 export interface ProviderStatusView {

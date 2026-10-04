@@ -36,15 +36,33 @@ describe('pipeline definition', () => {
     for (const s of HAPPY_PATH) expect(STATUS_DEFINITIONS[s].stage, s).not.toBeNull();
   });
 
-  it('has exactly the five human review points, each with approve and reject targets', () => {
+  it('has exactly the six human review points, each with approve and reject targets', () => {
     const gated = PROJECT_STATUSES.filter((s) => STATUS_DEFINITIONS[s].gate);
-    expect(gated).toEqual(['RESEARCH_REVIEW', 'SCRIPT_REVIEW', 'STORYBOARD_REVIEW', 'VISUAL_REVIEW', 'QA']);
+    expect(gated).toEqual(['RESEARCH_REVIEW', 'STORY_REVIEW', 'SCRIPT_REVIEW', 'STORYBOARD_REVIEW', 'VISUAL_REVIEW', 'QA']);
     for (const s of gated) {
       const gate = STATUS_DEFINITIONS[s].gate!;
       // Rejection always goes back, approval always goes forward.
       expect(statusIndex(gate.onReject)).toBeLessThan(statusIndex(s));
       expect(statusIndex(gate.onApprove)).toBeGreaterThan(statusIndex(s));
     }
+  });
+
+  it('mines stories, lets the editor curate, then architects; a human approves before anything moves on', () => {
+    expect(forwardStatus('RESEARCH_COMPLETE')).toBe('STORY_MINING');
+    expect(jobPhase('STORY_MINING')).toBe('STORY_MINING');
+    expect(getTransitionKind('STORY_MINING', 'STORY_SELECTION')).toBe('COMPLETE');
+    expect(getTransitionKind('STORY_SELECTION', 'STORY_ARCHITECTING')).toBe('START');
+    expect(jobPhase('STORY_ARCHITECTURE')).toBe('STORY_ARCHITECTING');
+    expect(getTransitionKind('STORY_ARCHITECTING', 'STORY_REVIEW')).toBe('COMPLETE');
+    expect(getTransitionKind('STORY_REVIEW', 'STORY_APPROVED')).toBe('APPROVE');
+    // Reject → rework: back to the editor's selection, where the architecture can be regenerated.
+    expect(getTransitionKind('STORY_REVIEW', 'STORY_SELECTION')).toBe('REJECT');
+    // Approval does not start the script: that is a separate, human-initiated START.
+    expect(STATUS_DEFINITIONS.STORY_APPROVED.onJobsComplete).toBeUndefined();
+    expect(getTransitionKind('STORY_APPROVED', 'SCRIPT_DRAFT')).toBe('START');
+    // Another mining pass from selection or review is a rewind.
+    expect(getTransitionKind('STORY_SELECTION', 'STORY_MINING')).toBe('REWIND');
+    expect(getTransitionKind('STORY_REVIEW', 'STORY_MINING')).toBe('REWIND');
   });
 
   it('requires storyboard approval before any visual generation (cost control)', () => {
@@ -130,11 +148,16 @@ describe('resolveEnqueue', () => {
 
   it('starts the next phase from a milestone', () => {
     expect(resolveEnqueue('IDEA', 'RESEARCH')).toEqual({ ok: true, enterStatus: 'RESEARCHING' });
+    expect(resolveEnqueue('RESEARCH_COMPLETE', 'STORY_MINING')).toEqual({ ok: true, enterStatus: 'STORY_MINING' });
+    expect(resolveEnqueue('STORY_SELECTION', 'STORY_ARCHITECTURE')).toEqual({ ok: true, enterStatus: 'STORY_ARCHITECTING' });
     expect(resolveEnqueue('SCRIPT_APPROVED', 'VOICE')).toEqual({ ok: true, enterStatus: 'VOICE_GENERATING' });
   });
 
   it('refuses jobs outside the current phase', () => {
     expect(resolveEnqueue('IDEA', 'SCRIPT').ok).toBe(false);
+    expect(resolveEnqueue('RESEARCH_REVIEW', 'STORY_MINING').ok).toBe(false); // research must be approved first
+    expect(resolveEnqueue('RESEARCH_COMPLETE', 'STORY_ARCHITECTURE').ok).toBe(false); // mining comes first
+    expect(resolveEnqueue('STORY_REVIEW', 'SCRIPT').ok).toBe(false);
     expect(resolveEnqueue('SCRIPT_REVIEW', 'VOICE').ok).toBe(false);
     expect(resolveEnqueue('STORYBOARD_REVIEW', 'VISUAL_GENERATION').ok).toBe(false);
     expect(resolveEnqueue('FAILED', 'RESEARCH').ok).toBe(false);

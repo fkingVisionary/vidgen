@@ -5,15 +5,14 @@ import {
   SOURCE_TYPE_LABELS,
   type ApprovalDecision,
   type ClaimVerdict,
-  type ClaimView,
   type DossierView,
-  type SourceView,
 } from '@docengine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { api } from '../api.ts';
-import { SourceTypeBadge, VERDICT_STYLE, VerdictBadge } from '../components/badges.tsx';
+import { SourceTypeBadge, VerdictBadge } from '../components/badges.tsx';
+import { ClaimCard, ClaimRefs, QualityReportView, Section } from '../components/evidence.tsx';
 import { formatDate, formatUsd } from '../format.ts';
 
 type Tab = 'claims' | 'sources' | 'story' | 'questions' | 'quality';
@@ -226,66 +225,6 @@ function ClaimsTab({ dossier: d }: { dossier: DossierView }) {
   );
 }
 
-function ClaimCard({ claim: c, sources, question }: { claim: ClaimView; sources: Map<string, SourceView>; question?: string }) {
-  const style = VERDICT_STYLE[c.verdict];
-  const group = (stance: string) => c.citations.filter((x) => x.stance === stance);
-  return (
-    <article id={`claim-${c.key}`} className={`rounded-md border border-l-4 border-stone-200 p-3 ${style.card}`}>
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-mono text-stone-500">{c.key}</span>
-        <VerdictBadge verdict={c.verdict} />
-        {c.importance === 'KEY' && <span className="rounded-full bg-stone-900 px-2 py-0.5 font-semibold text-white">KEY</span>}
-        <span className="text-stone-500">confidence {c.confidence.toLowerCase()} · {c.claimType.toLowerCase().replace('_', ' ')}</span>
-        {c.needsVerification && <span className="rounded-full bg-yellow-200 px-2 py-0.5 font-medium text-yellow-950">needs verification</span>}
-        {c.category && <span className="text-stone-400" title={question}>{c.category}</span>}
-      </div>
-      <p className="mt-1.5 font-medium">{c.statement}</p>
-      {c.popularVersion && (
-        <p className="mt-1.5 rounded bg-white/70 px-2 py-1 text-sm ring-1 ring-stone-200">
-          <span className="font-semibold text-rose-700">Commonly claimed: </span>
-          {c.popularVersion}
-        </p>
-      )}
-      {c.notes && <p className="mt-1.5 text-sm text-stone-700">{c.notes}</p>}
-      <div className="mt-2 grid gap-2 md:grid-cols-2">
-        <Citations title="Supporting" tone="text-emerald-800" citations={group('SUPPORTS')} sources={sources} />
-        <Citations title="Contradicting" tone="text-red-700" citations={group('CONTRADICTS')} sources={sources} />
-      </div>
-      {group('CONTEXT').length > 0 && <Citations title="Context" tone="text-stone-600" citations={group('CONTEXT')} sources={sources} />}
-      {c.citations.length === 0 && <p className="mt-2 text-xs italic text-yellow-900">No citation: no retrieved source establishes this claim.</p>}
-    </article>
-  );
-}
-
-function Citations({ title, tone, citations, sources }: { title: string; tone: string; citations: ClaimView['citations']; sources: Map<string, SourceView> }) {
-  if (citations.length === 0) return null;
-  return (
-    <div>
-      <h4 className={`text-xs font-semibold uppercase tracking-wide ${tone}`}>{title} ({citations.length})</h4>
-      <ul className="mt-1 space-y-1.5">
-        {citations.map((x) => {
-          const s = sources.get(x.sourceId);
-          return (
-            <li key={x.id} className="text-xs">
-              <div className="flex flex-wrap items-center gap-1">
-                {s && <SourceTypeBadge type={s.sourceType} />}
-                {s?.url ? (
-                  <a href={s.url} target="_blank" rel="noreferrer" className="font-medium hover:underline">{s.title}</a>
-                ) : (
-                  <span className="font-medium">{s?.title ?? 'Unknown source'}</span>
-                )}
-                {x.locator && <span className="text-stone-500">· {x.locator}</span>}
-                {x.quoteVerified && <span className="text-emerald-700" title="Quote found verbatim in the retrieved full text">✓ verified</span>}
-              </div>
-              {x.quote && <blockquote className="mt-0.5 border-l-2 border-stone-300 pl-2 text-stone-700 italic">“{x.quote}”</blockquote>}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
 function SourcesTab({ dossier: d }: { dossier: DossierView }) {
   const [showAll, setShowAll] = useState(false);
   const titleOf = new Map(d.sources.map((s) => [s.id, s.title]));
@@ -343,30 +282,6 @@ function SourcesTab({ dossier: d }: { dossier: DossierView }) {
         Types: {SOURCE_TYPES.map((t) => SOURCE_TYPE_LABELS[t]).join(' › ')} (strongest first).
       </p>
     </div>
-  );
-}
-
-function ClaimRefs({ keys, claims }: { keys: string[]; claims: ClaimView[] }) {
-  return (
-    <span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
-      {keys.map((k) => {
-        const c = claims.find((x) => x.key === k);
-        return (
-          <a key={k} href={`#claim-${k}`} className={`rounded px-1 font-mono text-[10px] ${c ? VERDICT_STYLE[c.verdict].badge : 'bg-stone-100'}`} title={c?.statement}>
-            {k}
-          </a>
-        );
-      })}
-    </span>
-  );
-}
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="rounded-lg border border-stone-200 bg-white p-4">
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">{title}</h2>
-      {children}
-    </section>
   );
 }
 
@@ -489,41 +404,10 @@ function QuestionsTab({ dossier: d }: { dossier: DossierView }) {
 }
 
 function QualityTab({ dossier: d }: { dossier: DossierView }) {
-  const r = d.qualityReport;
-  if (!r) return <p className="text-sm text-stone-500">No quality report.</p>;
-  const tone = { PASS: 'text-emerald-700', WARN: 'text-amber-700', FAIL: 'text-red-700 font-semibold' } as const;
+  if (!d.qualityReport) return <p className="text-sm text-stone-500">No quality report.</p>;
   return (
     <div className="space-y-4">
-      <Section title={`Automated checks — ${r.passed ? 'passed' : 'FAILED'} (${formatDate(r.generatedAt)})`}>
-        <table className="w-full text-left text-sm">
-          <tbody className="divide-y divide-stone-100 align-top">
-            {r.checks.map((c) => (
-              <tr key={c.id}>
-                <td className={`w-16 py-1.5 ${tone[c.status]}`}>{c.status}</td>
-                <td className="py-1.5 pr-3 font-medium">{c.label}</td>
-                <td className="py-1.5 text-stone-600">{c.detail}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <p className="mt-2 text-xs text-stone-500">Passing the gate only allows human review. It is not an approval.</p>
-      </Section>
-      <Section title={`Coherence review (${r.coherenceIssues.length} issue(s))`}>
-        <ul className="space-y-1.5 text-sm">
-          {r.coherenceIssues.map((i, n) => (
-            <li key={n}>
-              <span className={i.severity === 'MINOR' ? 'text-stone-500' : 'font-semibold text-orange-700'}>{i.severity}</span> {i.description}
-              {i.claimKeys.length > 0 && <ClaimRefs keys={i.claimKeys} claims={d.claims} />}
-              <div className="text-xs text-stone-500">{i.resolution}</div>
-            </li>
-          ))}
-        </ul>
-      </Section>
-      <Section title={`Automatic adjustments (${r.normalizations.length})`}>
-        <ul className="list-disc space-y-0.5 pl-5 text-xs text-stone-600">
-          {r.normalizations.map((n, i) => <li key={i}>{n}</li>)}
-        </ul>
-      </Section>
+      <QualityReportView report={d.qualityReport} claims={d.claims} />
       <Section title="Run statistics">
         <pre className="overflow-x-auto text-xs text-stone-600">{JSON.stringify(d.stats, null, 2)}</pre>
       </Section>

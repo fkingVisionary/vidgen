@@ -2,6 +2,8 @@ import { z } from 'zod';
 import {
   APPROVAL_DECISIONS,
   APPROVAL_GATES,
+  CANDIDATE_PRIORITIES,
+  CANDIDATE_STATUSES,
   JOB_TYPES,
   PROJECT_STATUSES,
 } from '../enums.ts';
@@ -48,3 +50,24 @@ export const RewindInput = z.object({
   reason: z.string().trim().min(1).max(2000),
 });
 export type RewindInput = z.infer<typeof RewindInput>;
+
+/** The editor's changes to one story candidate. */
+export const UpdateStoryCandidateInput = z
+  .object({
+    status: z.enum(CANDIDATE_STATUSES).optional(),
+    selected: z.boolean().optional(),
+    priority: z.enum(CANDIDATE_PRIORITIES).optional(),
+    editorNotes: z.string().trim().max(5000).nullable().optional(),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined), { message: 'Nothing to update' })
+  .refine((v) => !(v.status === 'REJECTED' && v.selected === true), {
+    message: 'A rejected candidate cannot be selected',
+    path: ['selected'],
+  });
+export type UpdateStoryCandidateInput = z.infer<typeof UpdateStoryCandidateInput>;
+
+/** Input of a STORY_MINING or STORY_ARCHITECTURE job: the editor's instructions for the pass. */
+export const StoryJobInput = z.object({
+  notes: z.string().trim().max(5000).optional(),
+});
+export type StoryJobInput = z.infer<typeof StoryJobInput>;

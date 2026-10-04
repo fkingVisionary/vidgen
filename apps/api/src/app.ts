@@ -11,6 +11,7 @@ import type { AppContainer } from './container.ts';
 import { healthRoutes } from './routes/health.ts';
 import { jobRoutes } from './routes/jobs.ts';
 import { projectRoutes } from './routes/projects.ts';
+import { storyRoutes } from './routes/story.ts';
 
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
@@ -68,6 +69,7 @@ export async function buildApp(c: AppContainer): Promise<FastifyInstance> {
 
   await healthRoutes(app, c);
   await projectRoutes(app, c);
+  await storyRoutes(app, c);
   await jobRoutes(app, c);
 
   const webDir = c.env.WEB_DIST_DIR ?? defaultWebDir();

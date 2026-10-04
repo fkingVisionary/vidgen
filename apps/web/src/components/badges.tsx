@@ -1,13 +1,21 @@
 import {
+  CANDIDATE_PRIORITY_LABELS,
+  CANDIDATE_STATUS_LABELS,
   CLAIM_VERDICT_LABELS,
+  HISTORICAL_STATUS_LABELS,
   SOURCE_TYPE_LABELS,
+  STORY_TYPE_LABELS,
   STAGE_STATE_LABELS,
   STATUS_LABELS,
+  type CandidatePriority,
+  type CandidateStatus,
   type ClaimVerdict,
+  type HistoricalStatus,
   type JobStatus,
   type ProjectStatus,
   type SourceType,
   type StageState,
+  type StoryType,
 } from '@docengine/core';
 
 const pill = 'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap';
@@ -82,4 +90,42 @@ const SOURCE_TONE: Record<SourceType, string> = {
 
 export function SourceTypeBadge({ type }: { type: SourceType }) {
   return <span className={`${pill} ${SOURCE_TONE[type]}`}>{SOURCE_TYPE_LABELS[type]}</span>;
+}
+
+const HISTORICAL_TONE: Record<HistoricalStatus, string> = {
+  ESTABLISHED: 'bg-emerald-100 text-emerald-800',
+  PROBABLE: 'bg-sky-100 text-sky-800',
+  CONTESTED: 'bg-orange-500 text-white',
+  UNCERTAIN: 'bg-yellow-300 text-yellow-950',
+  MYTH_INVESTIGATION: 'bg-rose-600 text-white',
+};
+
+/** How a story stands against the evidence, with its confidence (0–10). */
+export function HistoricalBadge({ status, confidence }: { status: HistoricalStatus; confidence?: number }) {
+  return (
+    <span className={`${pill} font-semibold ${HISTORICAL_TONE[status]}`} title="Computed from the verdicts of the claims the story rests on">
+      {HISTORICAL_STATUS_LABELS[status]}
+      {confidence !== undefined && <span className="ml-1 font-normal opacity-80">{confidence}/10</span>}
+    </span>
+  );
+}
+
+export function StoryTypeBadge({ type }: { type: StoryType }) {
+  return <span className={`${pill} bg-stone-800 text-white`}>{STORY_TYPE_LABELS[type]}</span>;
+}
+
+const CANDIDATE_TONE: Record<CandidateStatus, string> = {
+  PROPOSED: 'bg-stone-100 text-stone-600',
+  APPROVED: 'bg-emerald-600 text-white',
+  REJECTED: 'bg-red-600 text-white',
+  FLAGGED: 'bg-amber-400 text-amber-950',
+};
+
+export function CandidateStatusBadge({ status }: { status: CandidateStatus }) {
+  return <span className={`${pill} ${CANDIDATE_TONE[status]}`}>{CANDIDATE_STATUS_LABELS[status]}</span>;
+}
+
+export function PriorityBadge({ priority }: { priority: CandidatePriority }) {
+  if (priority === 'NORMAL') return null;
+  return <span className={`${pill} ${priority === 'HIGH' ? 'bg-violet-700 text-white' : 'bg-stone-200 text-stone-600'}`}>{CANDIDATE_PRIORITY_LABELS[priority]}</span>;
 }

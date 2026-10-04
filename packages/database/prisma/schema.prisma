@@ -5,7 +5,7 @@
 //  * Tables and columns are snake_case in Postgres (@@map / @map).
 //  * Money is Decimal(14,6) USD.
 //  * Fields that are queried, filtered or joined on are real columns. Creative
-//    payloads whose shape will still evolve (story beats, shot direction,
+//    payloads whose shape will still evolve (story sequences, shot direction,
 //    infographic specs, timelines) are JSONB, validated in code by the zod
 //    contracts in packages/core/src/contracts.
 //  * Enums mirror packages/core/src/enums.ts. A unit test fails if they drift.
@@ -37,7 +37,11 @@ enum ProjectStatus {
   RESEARCHING
   RESEARCH_REVIEW
   RESEARCH_COMPLETE
-  STORY_DEVELOPMENT
+  STORY_MINING
+  STORY_SELECTION
+  STORY_ARCHITECTING
+  STORY_REVIEW
+  STORY_APPROVED
   SCRIPT_DRAFT
   SCRIPT_REVIEW
   SCRIPT_APPROVED
@@ -57,7 +61,8 @@ enum ProjectStatus {
 
 enum JobType {
   RESEARCH
-  STORY
+  STORY_MINING
+  STORY_ARCHITECTURE
   SCRIPT
   VOICE
   VISUAL_PLAN
@@ -79,6 +84,7 @@ enum JobStatus {
 
 enum ApprovalGate {
   RESEARCH
+  STORY
   SCRIPT
   STORYBOARD
   VISUAL_ASSETS
@@ -161,6 +167,42 @@ enum CitationStance {
   SUPPORTS
   CONTRADICTS
   CONTEXT
+}
+
+enum StoryType {
+  CHARACTER
+  DEAL
+  MARKET_EVENT
+  FORTUNE
+  SCAM
+  CONFLICT
+  REVERSAL
+  MYSTERY
+  MYTH_ORIGIN
+  DISCOVERY
+  DISASTER
+  SOCIAL_PHENOMENON
+}
+
+enum HistoricalStatus {
+  ESTABLISHED
+  PROBABLE
+  CONTESTED
+  UNCERTAIN
+  MYTH_INVESTIGATION
+}
+
+enum CandidateStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+  FLAGGED
+}
+
+enum CandidatePriority {
+  HIGH
+  NORMAL
+  LOW
 }
 
 enum VisualType {
@@ -308,6 +350,8 @@ model Project {
   assets           MediaAsset[]
   sources          Source[]
   dossiers         ResearchDossier[]
+  storyPacks       StoryPack[]
+  storyCandidates  StoryCandidate[]
   stories          StoryArchitecture[]
   scripts          Script[]
   storyboards      Storyboard[]
@@ -381,11 +425,13 @@ model Job {
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  languageVersion LanguageVersion?  @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion?    @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
   providerCalls   ProviderCall[]
   events          ProjectEvent[]
   dossiers        ResearchDossier[]
+  storyPacks      StoryPack[]
+  stories         StoryArchitecture[]
 
   @@index([status, runAfter])
   @@index([projectId, type, status])
@@ -404,17 +450,19 @@ model Approval {
   /// Project status when the decision was made.
   projectStatus     ProjectStatus    @map("project_status")
   dossierId         String?          @map("dossier_id") @db.Uuid
+  storyId           String?          @map("story_id") @db.Uuid
   scriptId          String?          @map("script_id") @db.Uuid
   storyboardId      String?          @map("storyboard_id") @db.Uuid
   renderId          String?          @map("render_id") @db.Uuid
   createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  languageVersion LanguageVersion? @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
-  dossier         ResearchDossier? @relation(fields: [dossierId], references: [id], onDelete: SetNull)
-  script          Script?          @relation(fields: [scriptId], references: [id], onDelete: SetNull)
-  storyboard      Storyboard?      @relation(fields: [storyboardId], references: [id], onDelete: SetNull)
-  render          Render?          @relation(fields: [renderId], references: [id], onDelete: SetNull)
+  project         Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion?   @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
+  dossier         ResearchDossier?   @relation(fields: [dossierId], references: [id], onDelete: SetNull)
+  story           StoryArchitecture? @relation(fields: [storyId], references: [id], onDelete: SetNull)
+  script          Script?            @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  storyboard      Storyboard?        @relation(fields: [storyboardId], references: [id], onDelete: SetNull)
+  render          Render?            @relation(fields: [renderId], references: [id], onDelete: SetNull)
 
   @@index([projectId, createdAt])
   @@map("approvals")
@@ -604,11 +652,13 @@ model ResearchDossier {
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project   Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  job       Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
-  claims    ResearchClaim[]
-  stories   StoryArchitecture[]
-  approvals Approval[]
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  job             Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  claims          ResearchClaim[]
+  storyPacks      StoryPack[]
+  storyCandidates StoryCandidate[]
+  stories         StoryArchitecture[]
+  approvals       Approval[]
 
   @@unique([projectId, version])
   @@map("research_dossiers")
@@ -636,8 +686,9 @@ model ResearchClaim {
   createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  dossier   ResearchDossier @relation(fields: [dossierId], references: [id], onDelete: Cascade)
-  citations ClaimCitation[]
+  dossier         ResearchDossier       @relation(fields: [dossierId], references: [id], onDelete: Cascade)
+  citations       ClaimCitation[]
+  storyCandidates StoryCandidateClaim[]
 
   @@unique([dossierId, claimKey])
   @@index([dossierId])
@@ -673,22 +724,147 @@ model ClaimCitation {
 // Story & script
 // ─────────────────────────────────────────────────────────────────────────────
 
-model StoryArchitecture {
-  id        String         @id @default(uuid(7)) @db.Uuid
-  projectId String         @map("project_id") @db.Uuid
-  /// Research dossier version this story was built on.
-  dossierId String?        @map("dossier_id") @db.Uuid
-  version   Int
-  status    ArtifactStatus @default(DRAFT)
-  /// StoryBeats contract (hook, context, central question, … ending).
-  beats     Json
-  notes     String?
-  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+/// One story-mining pass over an approved research dossier: a ranked pool of
+/// story candidates plus the proposed selection for the documentary. Another
+/// pass creates a new version; candidates the editor approved or flagged are
+/// carried over into it.
+model StoryPack {
+  id            String         @id @default(uuid(7)) @db.Uuid
+  projectId     String         @map("project_id") @db.Uuid
+  /// The approved research dossier version that was mined.
+  dossierId     String         @map("dossier_id") @db.Uuid
+  version       Int
+  status        ArtifactStatus @default(DRAFT)
+  /// StoryPackContent contract: the selection proposal, candidates removed by the rules and why, editor brief.
+  content       Json           @default("{}")
+  /// QualityReport contract: the mining gate.
+  qualityReport Json?          @map("quality_report")
+  qualityPassed Boolean?       @map("quality_passed")
+  /// Model(s), prompt version, counts, duration.
+  stats         Json           @default("{}")
+  /// The editor's instructions for this mining pass.
+  notes         String?
+  jobId         String?        @map("job_id") @db.Uuid
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  dossier ResearchDossier? @relation(fields: [dossierId], references: [id], onDelete: SetNull)
-  scripts Script[]
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  dossier       ResearchDossier     @relation(fields: [dossierId], references: [id], onDelete: Cascade)
+  job           Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  candidates    StoryCandidate[]
+  architectures StoryArchitecture[]
+
+  @@unique([projectId, version])
+  @@map("story_packs")
+}
+
+/// A story unit found in the dossier — characters, desire, conflict, stakes,
+/// escalation, turning point, payoff — scored, ranked and traced to the claims
+/// it is built on. Its historical status and confidence are computed from
+/// those claims' verdicts, never chosen by the model. The editorial fields
+/// (status, selected, priority, editor notes) are set by a human.
+model StoryCandidate {
+  id                   String            @id @default(uuid(7)) @db.Uuid
+  packId               String            @map("pack_id") @db.Uuid
+  projectId            String            @map("project_id") @db.Uuid
+  dossierId            String            @map("dossier_id") @db.Uuid
+  /// Stable key within the pack ("S07"), in rank order at creation.
+  candidateKey         String            @map("candidate_key")
+  title                String
+  /// One-sentence hook.
+  hook                 String
+  storyType            StoryType         @map("story_type")
+  /// StoryCharacter[] contract: name, kind (named person, group, role), role in the story, claim keys.
+  characters           Json              @default("[]")
+  setting              String
+  timePeriod           String            @map("time_period")
+  desire               String
+  conflict             String
+  stakes               String
+  escalation           String
+  turningPoint         String            @map("turning_point")
+  payoff               String
+  whyInteresting       String            @map("why_interesting")
+  /// The question this story makes the viewer want answered.
+  viewerQuestion       String            @map("viewer_question")
+  /// MythThread contract, for units built on a myth: popular story → origin → who spread it → what happened → why it survived.
+  mythThread           Json?             @map("myth_thread")
+  /// StoryScores contract: component scores (0–10) and the critic's rationale.
+  scores               Json
+  historicalStatus     HistoricalStatus  @map("historical_status")
+  /// 0–10, from the verdicts and confidence of the linked claims and the number of sources behind them.
+  historicalConfidence Int               @map("historical_confidence")
+  /// Appeal weighted by historical confidence (see packages/core/src/story.ts).
+  rankScore            Float             @map("rank_score")
+  /// Position in the pack by rank score when it was mined (1 = best).
+  rank                 Int
+  /// Caveats the telling must respect (disputed figures, uncertain dates, critic's notes).
+  notes                String?
+  /// Part of the AI's proposed selection (kept to compare with the editor's choice).
+  aiSelected           Boolean           @default(false) @map("ai_selected")
+  aiSelectionReason    String?           @map("ai_selection_reason")
+  status               CandidateStatus   @default(PROPOSED)
+  /// In the editor's selection for the documentary.
+  selected             Boolean           @default(false)
+  priority             CandidatePriority @default(NORMAL)
+  editorNotes          String?           @map("editor_notes")
+  createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  pack    StoryPack             @relation(fields: [packId], references: [id], onDelete: Cascade)
+  project Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  dossier ResearchDossier       @relation(fields: [dossierId], references: [id], onDelete: Cascade)
+  claims  StoryCandidateClaim[]
+
+  @@unique([packId, candidateKey])
+  @@index([packId, rank])
+  @@map("story_candidates")
+}
+
+/// Candidate ↔ dossier claim. A candidate's sources are the sources cited by its claims.
+model StoryCandidateClaim {
+  candidateId String @map("candidate_id") @db.Uuid
+  claimId     String @map("claim_id") @db.Uuid
+
+  candidate StoryCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  claim     ResearchClaim  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@id([candidateId, claimId])
+  @@index([claimId])
+  @@map("story_candidate_claims")
+}
+
+/// The documentary blueprint built from the editor's selection (human approval gate #2):
+/// premise, central question, narrative spine and sequences. Not a script.
+model StoryArchitecture {
+  id                   String         @id @default(uuid(7)) @db.Uuid
+  projectId            String         @map("project_id") @db.Uuid
+  /// Research dossier version this story was built on.
+  dossierId            String?        @map("dossier_id") @db.Uuid
+  /// Story pack whose selected candidates it was built from.
+  packId               String?        @map("pack_id") @db.Uuid
+  version              Int
+  status               ArtifactStatus @default(DRAFT)
+  /// StoryArchitectureContent contract (premise, central question, spine, sequences with claims and sources).
+  content              Json
+  targetDurationSec    Int?           @map("target_duration_sec")
+  estimatedDurationSec Int?           @map("estimated_duration_sec")
+  /// QualityReport contract: the architecture gate.
+  qualityReport        Json?          @map("quality_report")
+  qualityPassed        Boolean?       @map("quality_passed")
+  stats                Json           @default("{}")
+  /// The editor's instructions for this version (e.g. rework notes).
+  notes                String?
+  jobId                String?        @map("job_id") @db.Uuid
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project   Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  dossier   ResearchDossier? @relation(fields: [dossierId], references: [id], onDelete: SetNull)
+  pack      StoryPack?       @relation(fields: [packId], references: [id], onDelete: SetNull)
+  job       Job?             @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  scripts   Script[]
+  approvals Approval[]
 
   @@unique([projectId, version])
   @@map("story_architectures")
@@ -772,7 +948,7 @@ model SceneNarration {
 // Visuals
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Versioned visual plan for one script version (human approval gate #3).
+/// Versioned visual plan for one script version (human approval gate #4).
 model Storyboard {
   id        String         @id @default(uuid(7)) @db.Uuid
   projectId String         @map("project_id") @db.Uuid

@@ -11,6 +11,8 @@ export const EVENT = {
   JOB_CANCELLED: 'JOB_CANCELLED',
   JOB_IGNORED_STALE: 'JOB_IGNORED_STALE',
   APPROVAL_RECORDED: 'APPROVAL_RECORDED',
+  /** The editor changed a story candidate (status, selection, priority, notes). */
+  CANDIDATE_UPDATED: 'CANDIDATE_UPDATED',
   /** A mock job succeeded where the transition requires real providers (e.g. publishing). */
   PHASE_BLOCKED_MOCK: 'PHASE_BLOCKED_MOCK',
 } as const;

@@ -7,24 +7,6 @@ import { QA_CATEGORIES } from '../enums.ts';
  * are what code must validate against when reading or writing them.
  */
 
-/** StoryArchitecture.beats — the producer's skeleton written before any script. */
-export const StoryBeats = z.object({
-  hook: z.string().min(1),
-  context: z.string().min(1),
-  centralQuestion: z.string().min(1),
-  keyCharacters: z
-    .array(z.object({ name: z.string().min(1), role: z.string().min(1), description: z.string().optional() }))
-    .min(1),
-  keyEconomicMechanism: z.string().min(1),
-  escalation: z.string().min(1),
-  turningPoint: z.string().min(1),
-  collapseOrResolution: z.string().min(1),
-  consequences: z.string().min(1),
-  modernRelevance: z.string().min(1),
-  ending: z.string().min(1),
-});
-export type StoryBeats = z.infer<typeof StoryBeats>;
-
 /**
  * LanguageVersion.voiceConfig — provider-neutral narration settings. Voice IDs
  * are data chosen per project/language, never hard-coded.

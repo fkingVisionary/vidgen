@@ -62,6 +62,17 @@ describe('ProjectService (PostgreSQL)', () => {
     await expect(service.rewind(p.id, { to: 'RESEARCH_REVIEW', reason: 'forward' }, 'test')).rejects.toThrow(/Illegal/);
   });
 
+  it('runs a phase again only by rewinding to it, in one step', async () => {
+    const p = await service.createProject(tulipInput, 'test');
+    await expect(service.restartPhase(p.id, 'STORY_MINING', {}, 'test', 'forward')).rejects.toThrow(/Cannot run STORY_MINING again from IDEA/);
+    await db.project.update({ where: { id: p.id }, data: { status: 'STORY_REVIEW', phaseSeq: 5 } });
+    const job = await service.restartPhase(p.id, 'STORY_MINING', { notes: 'More about the courts' }, 'editor', 'Another mining pass');
+    expect(await db.project.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ status: 'STORY_MINING', phaseSeq: 6 });
+    expect(job).toMatchObject({ type: 'STORY_MINING', status: 'QUEUED', phaseSeq: 6, input: { notes: 'More about the courts' } });
+    const rewound = await db.projectEvent.findFirstOrThrow({ where: { projectId: p.id, type: 'STATUS_CHANGED' }, orderBy: { createdAt: 'desc' } });
+    expect(rewound.data).toMatchObject({ from: 'STORY_REVIEW', to: 'STORY_MINING', kind: 'REWIND', reason: 'Another mining pass', actor: 'editor' });
+  });
+
   it('enforces one language version per language', async () => {
     const p = await service.createProject(tulipInput, 'test');
     await db.languageVersion.create({ data: { projectId: p.id, language: 'es' } });
