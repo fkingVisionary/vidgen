@@ -173,6 +173,9 @@ erDiagram
   research_claims ||--o{ story_candidate_claims : ""
   story_packs ||--o{ story_architectures : "selection → blueprint"
   projects ||--o{ story_architectures : versions
+  story_architectures ||--o{ content_opportunities : "shorts, long-form"
+  content_opportunities ||--o{ content_opportunity_claims : "built on"
+  research_claims ||--o{ content_opportunity_claims : ""
   projects ||--o{ scripts : versions
   scripts ||--o{ scenes : "language-neutral structure"
   scenes ||--o{ scene_narrations : "one per language"
@@ -205,6 +208,9 @@ erDiagram
 | `story_packs` | One mining pass over an approved dossier (`unique(project_id, version)`): status, `content` (the AI's proposed selection with premise and rationale, candidates removed and why, candidates carried over, the editor's brief), mining `quality_report`, `stats`, `job_id`. |
 | `story_candidates` | A story unit (`candidate_key` S01… in rank order): title, hook, `story_type`, `characters` (JSON: name, kind NAMED_PERSON/GROUP/ROLE, role, claim keys), setting, period, desire, conflict, stakes, escalation, turning point, payoff, why interesting, viewer question, `myth_thread`, `scores` (8 components + appeal + critic rationale), `historical_status` and `historical_confidence` (computed from the claims), `rank_score`, `rank`, caveat notes, `ai_selected` + reason; the editor's `status` (PROPOSED/APPROVED/REJECTED/FLAGGED), `selected`, `priority` (HIGH/NORMAL/LOW), `editor_notes`. |
 | `story_candidate_claims` | Candidate ↔ dossier claim (FK, so evidence links cannot dangle). Sources follow from the claims' citations. |
+| Story Engine 2.0 columns | `story_packs.engine_version` and `story_architectures.engine_version` (1 = milestone 3, 2 = Story Engine 2.0; default 1). On `story_candidates` (null for engine 1): `narrative_mode`, `central_question`, `pov_strategy`, `human_stakes`, `story_design` (cold open with its information class, reveal, visual environment), `reconstruction_level`, `story_value`, `historical_value`, `editor_overrides` (the editor's title / mode / question / POV; the AI's values are kept), `selection_order`. Engine-2 `scores` hold story value and historical value dimensions with reasons. |
+| `content_opportunities` | Shorts and long-form threads identified in an architecture (`unique(architecture_id, opportunity_key)`): format LONG_FORM / SHORT / BOTH, rank and short-form potential, title, hook, central question, target duration, independent / requires context, computed historical status and confidence, `content` (premise, angle, escalation, payoff, ending, visual concept, beat ids, sequence numbers, unit ids, claim keys, sources, cast ids, presentation copied from the architecture, scores, rules applied); the editor's `status` (PROPOSED / APPROVED / REJECTED), notes, `decided_by` / `decided_at`. |
+| `content_opportunity_claims` | Opportunity ↔ dossier claim (FK), like the candidates' links. |
 | `story_architectures` | Versioned blueprint (gate STORY): `content` = premise, central question, narrative spine, resolution, sequences (candidate ids/keys, hook, question, key events with claim keys, characters, conflict, escalation, reveal, ending beat, claim keys, derived source ids, caveats, historical status/confidence, duration), unused units with reasons; `pack_id`, `dossier_id`, target and estimated duration, `quality_report`, `stats`, `notes` (the editor's instructions), `job_id`. Approvals link the exact version (`approvals.story_id`). |
 
 ### Creative artifacts (schema only — no code writes them yet)
@@ -466,7 +472,10 @@ synthesis schema hit it on the first live run). The Anthropic provider then
 repeats the request with the schema in the system prompt and validates the
 answer against the same zod schema.
 
-## 12. Story engine (milestone 3)
+## 12. Story engine (milestone 3, engine 1)
+
+Section 13 describes what Story Engine 2.0 changes; the evidence rules below
+still apply to both engines.
 
 `modules/story` turns an **approved** research dossier into story units and
 then into a documentary blueprint. It writes no script. Everything it says
@@ -573,7 +582,140 @@ stops once its recorded spend passes `STORY_MAX_COST_USD` (default $15). Typical
 calls: mining 3–6 (mine, critic, selection; top-up only when needed),
 architecture 2 (architect, reviewer).
 
-## 13. Decisions
+## 13. Story Engine 2.0 (cinematic story layer, content opportunities)
+
+Engine 1 finds story units; Story Engine 2.0 tells them as a story the viewer
+experiences, inside the same evidence boundary. **Creative freedom applies to
+presentation, never to historical truth.** The engine version is stored per
+pack and architecture (`engine_version`: 1 = milestone 3, 2 = SE2); new jobs
+write version 2, and engine-1 records stay readable through union contracts
+(`AnyStoryScores`, `AnyStoryArchitectureContent`) — the dashboard and the API
+render both.
+
+```
+STORY_MINING 2.0:  mine (human stakes, cold open labelled by information class, reveal,
+                   central question, narrative mode, POV, reconstruction level)
+                   → evidence rules → critic (9 story-value + 3 historical dimensions,
+                   one reason each) → [top-up] → rank by STORY APPEAL
+                   → proposed selection (+ central question, mode, POV) → mining gate
+STORY_SELECTION:   + the editor's title / mode / central question / POV per unit,
+                   and the editor's order of the selection
+STORY_ARCHITECTURE 2.0: architect → rules → story editor (+ revision) → rules
+                   → fact checker (+ revision) → rules → gate
+                   → [content opportunities → rules] → architecture vN → STORY_REVIEW
+```
+
+**Information classes.** Every beat is DOCUMENTED (rests only on ESTABLISHED
+claims), RECONSTRUCTION (a plausible scene built from documented
+circumstances; cites its claims; never presented as a recorded event),
+UNCERTAIN (probable, disputed, unverified or myth material, told with its
+presentation) or FICTION (a declared device — the viewer's POV, a composite, an
+invented line — that carries no facts). A MYTH claim may appear only in an
+UNCERTAIN beat (myths are investigated). Every claim that is not ESTABLISHED
+needs a presentation entry in each sequence using it: PROBABLE → HEDGE, and
+the instruction must word the hedge ("records suggest", "contemporary accounts
+indicate": `HEDGE_PATTERN`); DISPUTED → present as disputed; UNVERIFIED →
+present as unconfirmed; MYTH → investigate as myth.
+
+**Fiction boundary.** The cast declares everyone. Real people, groups and
+roles must be grounded in the selected units' claims (an invented or outside
+person is dropped and blocks the gate). Fictional devices: one viewer POV and
+up to two composites before a warning. A composite needs claims showing people
+like them existed, a justification, and a name nobody in the dossier has.
+Fictional characters never take part in DOCUMENTED beats and never speak to,
+touch or trade with real people (they may observe them); they never get a
+recorded quotation, and real people never get invented lines. A
+RECORDED_QUOTE must be a verified quotation of a claim the beat cites
+(ellipses allowed); any words in quotation marks must be verified or a planned
+invented line.
+
+**Names, places, figures, dates.** The engine-1 rules, applied to everything a
+viewer would see or hear — beats, speech, setting, visual notes, continuity,
+and the framing (logline, thesis, cast descriptions): figures and years from
+the selected units' evidence (a figure found in another selected unit's claim
+links that claim, which then needs its presentation); no dossier person from
+outside the selection; capitalised names that neither the dossier nor the
+declared cast contains are flagged. A location or time of day presented as
+DOCUMENTED must be in the sequence's evidence; otherwise it is a
+RECONSTRUCTION.
+
+**Continuity.** Q0 is the central question. Sequences open and resolve
+questions (Q1…), carry objects and threads in and out, and mark time jumps
+(flashback, parallel time). An unanswered Q0 fails the gate; unresolved or
+unknown threads, things carried in that nothing carried out, unmarked jumps
+back in time and missing transitions warn.
+
+**Reconstruction budget — a warning only.** Reconstruction plus fiction above
+40% of the beats, or fiction above 25%, warns; the level (none / low / medium
+/ high) is shown. The editor decides.
+
+**Dual scoring.** STORY VALUE (human stakes 0.16, conflict 0.12, mystery 0.12,
+character potential 0.12, visual potential 0.12, escalation 0.10, emotional
+potential 0.10, reveal potential 0.10, myth/investigation potential 0.06 —
+only when the unit has myth or uncertain material; otherwise the others are
+rescaled) and HISTORICAL VALUE (evidence quality = the computed historical
+confidence 0.40, significance 0.25, relevance 0.20, uniqueness 0.15) are
+scored and shown separately; STORY APPEAL = story value × (0.6 + 0.4 ×
+historical value / 10) ranks the pack. A gripping story on weak evidence ranks
+lower but is never hidden. Historical status and confidence are still
+computed, never chosen by a model.
+
+**Two reviewers.** The story editor asks whether it is a story (immersion,
+human stakes, narrative drive, continuity, cinematic potential, clarity, and
+the three quality-bar questions) and may revise for drama; the fact checker
+then has the last word on the evidence and may revise. Each revision is kept
+only if the rules find no more blocking problems in it than in the version it
+revised. The story editor's verdict is recorded and never fails the gate; an
+open CRITICAL fact issue does.
+
+**Content opportunities.** Only for an architecture that passed its gate, a
+third call identifies LONG_FORM, SHORT and BOTH opportunities (typically 4–8
+strong shorts for a 10–15 minute film; never padded; at most 12). Each must
+name existing beat ids; its claims must be claims of those beats or their
+sequences (so only approved dossier claims, and only those in the
+architecture); it may not add figures, years, people, names or quotations;
+it copies the architecture's presentation for every claim that is not
+ESTABLISHED. One that breaks a rule is removed with its reason (the job does
+not fail). Shorts are ranked by SHORT-FORM POTENTIAL (hook 0.25, payoff 0.20,
+standalone 0.20, visual 0.15, emotion 0.10, pace 0.10); durations are brought
+within 15–180 s. All are stored PROPOSED with claim links; the editor approves
+or rejects each one (on the latest architecture, while it is in review or
+approved). `GET|POST /api/projects/:id/content-package` (`{"documentary": true,
+"shorts": 6, "languages": ["en","es","de"]}`) resolves what a production
+request would use — the latest approved architecture and its approved shorts
+by rank — and generates nothing (`generated: false`; languages are only
+recorded until localization exists).
+
+**Editorial control.** Per unit the editor can override the title, narrative
+mode, central question and POV (`editor_overrides`; the AI's values are kept;
+`null` restores them) and order the selection (`selection_order`; the
+architect works in that order and must explain a change in `orderNote`,
+otherwise a warning). Generating the architecture accepts preferences
+(narrative mode, POV, central question).
+
+**Research boundary.** The story engine reads the approved dossier and never
+writes to research tables; a static test guards the story code and the story
+API, and an integration test compares the research tables before and after a
+full story run. Production prompts use generic illustrations only, never facts
+of a particular topic.
+
+**Cost.** Mining makes the same 3–6 calls as engine 1 (larger outputs);
+architecture makes four (architect, story editor, fact checker,
+opportunities; the last only after the gate passes). `STORY_MAX_COST_USD`
+still caps each job.
+
+**Limits (heuristics, stated honestly).** Interaction and interiority are
+detected by subject–verb–object patterns over the declared cast's name tokens:
+prose that implies contact without such a pattern ("their hands meet over the
+contract") is left to the fact checker and the editor, and interiority only
+warns. Unknown names are detected by capitalisation against the dossier's
+words and the cast: a capitalised common word the dossier lacks would be
+flagged (a false positive that blocks until reworded) and a lower-case
+invented place would not. An invented event in free prose cannot be detected
+mechanically: the boundary rests on traceability (every beat and opportunity
+cites claims; classes are checked) and on the reviewers and the editor.
+
+## 14. Decisions
 
 | # | Decision | Why | Alternative |
 |---|---|---|---|
@@ -609,3 +751,14 @@ architecture 2 (architect, reviewer).
 | D30 | Candidate ↔ claim links are rows (`story_candidate_claims`); architecture sequences keep claim keys in JSON with sources derived and re-checked by the gate | FK links make candidate evidence impossible to dangle; sequences are a blueprint whose shape will change with the script stage, and the dossier version is fixed per architecture | A join table per sequence |
 | D31 | A reviewer's corrected architecture is kept only if it has no more evidence problems than the draft | A revision can fix framing but can also introduce new unsupported material; the deterministic count decides | Always trust the revision |
 | D32 | Architecture story evidence = the selected units' own claims; other dossier claims only as labelled background (`contextClaims` with a purpose), never adding a story, person, event, figure, date or beat | The editor's selection must define the film; background can explain but not extend it. Kept checkable: separate keys and sources, deterministic gate checks | Any approved-dossier claim as evidence (the first version) |
+| D33 | Engine version per pack and architecture; v1 and v2 contracts as zod unions | Existing records stay readable without a data migration; new jobs always write version 2 | Rewriting engine-1 rows |
+| D34 | Four information classes, checked per beat by code | "Creative freedom applies to presentation, not to historical truth" needs labels the code can verify, not prose guidance | Prompt-only rules |
+| D35 | A PROBABLE claim needs a worded hedge (`HEDGE_PATTERN`), not only a label | Editor's decision: the wording must reflect PROBABLE status; a label alone lets "X happened" through | Treat PROBABLE as established |
+| D36 | The reconstruction budget (40% / 25%) only warns | Editor's decision: how much reconstruction a film needs is an editorial judgement | Hard limit |
+| D37 | One POV and up to two composites before a warning; fiction may observe real people, never interact with them or perform documented actions | Editor's decision; keeps fiction out of the record while allowing an immersive viewpoint | No composites |
+| D38 | Two reviewers — story editor, then fact checker with the last word | Editor's decision (≈ $0.70 more per architecture); drama and truth are different jobs and the evidence must win | One reviewer |
+| D39 | Story value and historical value scored and shown separately; appeal = story × (0.6 + 0.4 × history/10) | Narrative potential must be ranked separately from historical confidence; the floor keeps weakly evidenced stories visible | One blended score |
+| D40 | Content opportunities only after the gate passes; rule-breakers removed, not failed | A failed draft is not worth packaging; opportunities are suggestions, the architecture is the deliverable | Fail the job |
+| D41 | Opportunities name beat ids and store claim links (rows) | Short → beats → claims → sources stays traceable, and FK links cannot dangle | Free-text references |
+| D42 | The content package endpoint is read-only and API-first | The production layer does not exist yet; fixing the request shape now lets production implement it later without UI work | Generate shorts now (out of scope) |
+| D43 | Generic illustrations only in production prompts | Editor's decision: no topic facts may leak into other documentaries | Topic examples |

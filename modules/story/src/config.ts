@@ -13,8 +13,9 @@ export interface StoryConfig {
   limits: typeof STORY_LIMITS;
   /** Abort a job if its recorded provider cost exceeds this (USD, estimated). */
   maxCostUsd: { mining: number; architecture: number };
-  effort: { mine: ReasoningEffort; critic: ReasoningEffort; select: ReasoningEffort; architect: ReasoningEffort; review: ReasoningEffort };
-  maxTokens: { mine: number; critic: number; select: number; architect: number; review: number };
+  /** `review` covers both architecture reviewers (story editor and fact checker). */
+  effort: { mine: ReasoningEffort; critic: ReasoningEffort; select: ReasoningEffort; architect: ReasoningEffort; review: ReasoningEffort; opportunities: ReasoningEffort };
+  maxTokens: { mine: number; critic: number; select: number; architect: number; review: number; opportunities: number };
 }
 
 export const DEFAULT_STORY_CONFIG: StoryConfig = {
@@ -22,6 +23,6 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   topUpExtra: 4,
   limits: STORY_LIMITS,
   maxCostUsd: { mining: 15, architecture: 10 },
-  effort: { mine: 'high', critic: 'high', select: 'high', architect: 'high', review: 'high' },
-  maxTokens: { mine: 64_000, critic: 32_000, select: 16_000, architect: 48_000, review: 64_000 },
+  effort: { mine: 'high', critic: 'high', select: 'high', architect: 'high', review: 'high', opportunities: 'high' },
+  maxTokens: { mine: 64_000, critic: 32_000, select: 16_000, architect: 64_000, review: 64_000, opportunities: 32_000 },
 };

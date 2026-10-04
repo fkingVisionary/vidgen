@@ -6,6 +6,10 @@ import {
   CONFIDENCE_FLOOR,
   HISTORICAL_STATUSES,
   HISTORICAL_STATUS_LABELS,
+  NARRATIVE_MODES,
+  NARRATIVE_MODE_LABELS,
+  POV_STRATEGIES,
+  POV_STRATEGY_LABELS,
   STATUS_LABELS,
   STORY_SCORE_KEYS,
   STORY_SCORE_LABELS,
@@ -13,16 +17,21 @@ import {
   STORY_TYPES,
   STORY_TYPE_LABELS,
   confidenceMultiplier,
+  isArchitectureV2,
   type ApprovalDecision,
   type CandidatePriority,
   type CandidateStatus,
   type ClaimView,
   type HistoricalStatus,
+  type NarrativeMode,
+  type PovStrategy,
   type ProjectDetailView,
+  type StoryArchitectureContent,
   type StoryArchitectureView,
   type StoryCandidateView,
   type StoryEvidenceView,
   type StoryPackView,
+  type StoryScores,
   type StorySequence,
   type StoryType,
   type StoryView,
@@ -35,9 +44,12 @@ import { api } from '../api.ts';
 import { CandidateStatusBadge, HistoricalBadge, PriorityBadge, SourceTypeBadge, StatusBadge, StoryTypeBadge } from '../components/badges.tsx';
 import { ClaimCard, ClaimRefs, QualityReportView, Section, type SourceLike } from '../components/evidence.tsx';
 import { ProjectNav } from '../components/ProjectNav.tsx';
+import { ArchitectureV2 } from '../components/architecture-v2.tsx';
+import { OpportunitiesTab } from '../components/opportunities.tsx';
+import { AngleEditor, CandidateStory, DualScores, WhyCompelling } from '../components/story-v2.tsx';
 import { formatDate, formatUsd } from '../format.ts';
 
-type Tab = 'candidates' | 'selection' | 'architecture' | 'quality' | 'runs';
+type Tab = 'candidates' | 'selection' | 'architecture' | 'opportunities' | 'quality' | 'runs';
 
 const STORY_JOBS = ['STORY_MINING', 'STORY_ARCHITECTURE'] as const;
 const button = 'rounded-md px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40';
@@ -94,6 +106,7 @@ export function StoryPage() {
     ['candidates', `Candidates (${v.pack?.candidates.length ?? 0})`],
     ['selection', `Selection (${v.selection.count})`],
     ['architecture', `Architecture${v.architecture ? ` v${v.architecture.version}` : ''}`],
+    ['opportunities', `Opportunities (${v.architecture?.opportunityList.length ?? 0})`],
     ['quality', 'Quality gates'],
     ['runs', 'Runs & cost'],
   ];
@@ -149,8 +162,10 @@ export function StoryPage() {
       </div>
 
       {current === 'candidates' && (v.pack ? <CandidatesTab view={v} pack={v.pack} storyKey={['story', id, packVersion, archVersion]} /> : <Empty>No story candidates yet.</Empty>)}
-      {current === 'selection' && (v.pack ? <SelectionTab view={v} pack={v.pack} /> : <Empty>No story pack yet.</Empty>)}
+      {current === 'selection' && (v.pack ? <SelectionTab projectId={p.id} view={v} pack={v.pack} storyKey={['story', id, packVersion, archVersion]} /> : <Empty>No story pack yet.</Empty>)}
       {current === 'architecture' && (v.architecture ? <ArchitectureTab architecture={v.architecture} /> : <Empty>No story architecture yet. Curate the candidates, then generate the architecture.</Empty>)}
+      {current === 'opportunities' &&
+        (v.architecture ? <OpportunitiesTab projectId={p.id} architecture={v.architecture} latest={v.architecture.id === v.architectures[0]?.id} /> : <Empty>No story architecture yet: content opportunities are identified with it.</Empty>)}
       {current === 'quality' && <QualityTab view={v} />}
       {current === 'runs' && <RunsTab view={v} />}
     </div>
@@ -179,9 +194,21 @@ function useStoryMutation<T>(fn: (arg: T) => Promise<unknown>, onDone?: () => vo
 function StoryActions({ project: p, view: v, running }: { project: ProjectDetailView; view: StoryView; running: boolean }) {
   const [brief, setBrief] = useState('');
   const [archNotes, setArchNotes] = useState('');
+  const [prefMode, setPrefMode] = useState<NarrativeMode | ''>('');
+  const [prefPov, setPrefPov] = useState<PovStrategy | ''>('');
+  const [prefPovText, setPrefPovText] = useState('');
+  const [prefQuestion, setPrefQuestion] = useState('');
   const [gateNotes, setGateNotes] = useState('');
   const mine = useStoryMutation(() => api.mineStory(p.id, brief.trim() || undefined), () => setBrief(''));
-  const build = useStoryMutation(() => api.buildArchitecture(p.id, archNotes.trim() || undefined), () => setArchNotes(''));
+  const preferences = {
+    ...(prefMode ? { narrativeMode: prefMode } : {}),
+    ...(prefPov ? { povStrategy: { type: prefPov, description: prefPovText.trim() } } : {}),
+    ...(prefQuestion.trim() ? { centralQuestion: prefQuestion.trim() } : {}),
+  };
+  const build = useStoryMutation(
+    () => api.buildArchitecture(p.id, { ...(archNotes.trim() ? { notes: archNotes.trim() } : {}), ...(Object.keys(preferences).length ? { preferences } : {}) }),
+    () => setArchNotes(''),
+  );
   const decide = useStoryMutation((decision: ApprovalDecision) => api.approve(p.id, { gate: 'STORY', decision, notes: gateNotes.trim() || undefined }), () => setGateNotes(''));
   const retry = useStoryMutation((jobId: string) => api.retryJob(jobId));
   const back = useStoryMutation(() => api.rewind(p.id, { to: 'STORY_SELECTION', reason: 'Back to the selection after a failed story architecture run' }));
@@ -233,6 +260,30 @@ function StoryActions({ project: p, view: v, running }: { project: ProjectDetail
           </div>
           <div>
             <textarea value={archNotes} onChange={(e) => setArchNotes(e.target.value)} rows={2} placeholder="Instructions for the architect (optional) — e.g. open with the auction, end on the legend" className="w-full rounded-md border border-stone-300 px-2 py-1.5 text-sm" />
+            <details className="mt-1 text-sm">
+              <summary className="cursor-pointer text-stone-600">Preferences for the documentary (optional): narrative mode, POV, central question</summary>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <select value={prefMode} onChange={(e) => setPrefMode(e.target.value as NarrativeMode | '')} className="rounded-md border border-stone-300 px-2 py-1 text-sm" aria-label="Preferred narrative mode">
+                  <option value="">Narrative mode: the architect's choice</option>
+                  {NARRATIVE_MODES.map((m) => (
+                    <option key={m} value={m}>
+                      {NARRATIVE_MODE_LABELS[m]}
+                    </option>
+                  ))}
+                </select>
+                <select value={prefPov} onChange={(e) => setPrefPov(e.target.value as PovStrategy | '')} className="rounded-md border border-stone-300 px-2 py-1 text-sm" aria-label="Preferred POV strategy">
+                  <option value="">POV: the architect's choice</option>
+                  {POV_STRATEGIES.map((m) => (
+                    <option key={m} value={m}>
+                      {POV_STRATEGY_LABELS[m]}
+                    </option>
+                  ))}
+                </select>
+                {prefPov && <input value={prefPovText} onChange={(e) => setPrefPovText(e.target.value)} placeholder="How the POV is used (optional)" className="rounded-md border border-stone-300 px-2 py-1 text-sm sm:col-span-2" />}
+                <input value={prefQuestion} onChange={(e) => setPrefQuestion(e.target.value)} placeholder="Central question (optional)" className="rounded-md border border-stone-300 px-2 py-1 text-sm sm:col-span-2" />
+              </div>
+              <p className="mt-1 text-xs text-stone-500">The architect follows these or says why not. They change how the story is told, never the evidence.</p>
+            </details>
             <button disabled={build.isPending || v.selection.problem !== null} onClick={() => build.mutate(undefined)} className={`${button} mt-1 bg-sky-700 text-white hover:bg-sky-600`}>
               Generate Story Architecture
             </button>
@@ -245,7 +296,7 @@ function StoryActions({ project: p, view: v, running }: { project: ProjectDetail
         <div className="rounded-md border-2 border-violet-300 bg-violet-50 p-3">
           <p className="font-semibold text-violet-900">Human approval required — story architecture v{v.architecture.version}</p>
           <p className="text-sm text-violet-800">
-            The automated gate is not an approval. Check the central question, the sequences and how disputed and myth material is framed before deciding. Approving does not start the script.
+            The automated gate is not an approval. Check the central question, the cast (fictional devices are labelled), how uncertain and myth material is presented, and the sequences before deciding. Content opportunities are decided one by one in their tab. Approving does not start the script.
           </p>
           <textarea value={gateNotes} onChange={(e) => setGateNotes(e.target.value)} rows={2} placeholder="Notes — what works, what to change (used when reworking)" className="mt-2 w-full rounded-md border border-violet-200 bg-white px-2 py-1.5 text-sm" />
           <div className="mt-2 flex flex-wrap gap-2">
@@ -395,7 +446,9 @@ function CandidatesTab({ view, pack, storyKey }: { view: StoryView; pack: StoryP
           <input type="checkbox" checked={onlySelected} onChange={(e) => setOnlySelected(e.target.checked)} /> in the documentary
         </label>
         <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search" className="rounded-md border border-stone-300 px-2 py-1" />
-        <span className="text-stone-500">{shown.length} shown · ranked by appeal × historical confidence</span>
+        <span className="text-stone-500">
+          {shown.length} shown · {pack.engineVersion === 2 ? 'ranked by story appeal (story value moderated by historical value)' : 'ranked by appeal × historical confidence'}
+        </span>
       </div>
       {!view.editable && <p className="text-xs text-stone-500">Read only: candidates can be changed while the project is in Story selection and this is the current pack.</p>}
       {shown.map((c) => (
@@ -426,6 +479,7 @@ function CandidateCard({ candidate: c, evidence, editable, storyKey }: { candida
   const claims = evidence.claims.filter((x) => c.claimKeys.includes(x.key));
   const sources = useMemo(() => new Map<string, SourceLike>(evidence.sources.map((s) => [s.id, s])), [evidence.sources]);
   const decide = (status: CandidateStatus) => update.mutate({ status });
+  const v2 = c.scores && 'version' in c.scores ? c.scores : null;
 
   return (
     <article data-candidate={c.key} className={`rounded-lg border bg-white p-4 ${c.selected ? 'border-sky-400 ring-1 ring-sky-200' : 'border-stone-200'} ${c.status === 'REJECTED' ? 'opacity-60' : ''}`}>
@@ -442,13 +496,26 @@ function CandidateCard({ candidate: c, evidence, editable, storyKey }: { candida
             {c.selected && <span className="rounded-full bg-sky-700 px-2 py-0.5 font-medium text-white">in the documentary</span>}
           </div>
           <h3 className="mt-1 text-lg font-semibold">{c.title}</h3>
+          {c.title !== c.aiTitle && <p className="text-xs text-stone-500">Editor's title · AI: “{c.aiTitle}”</p>}
           <p className="text-stone-800 italic">{c.hook}</p>
         </div>
         <div className="text-right">
           <div className="text-2xl font-semibold tabular-nums">{c.rankScore.toFixed(2)}</div>
-          <div className="text-xs text-stone-500">rank score</div>
+          <div className="text-xs text-stone-500">{v2 ? 'story appeal' : 'rank score'}</div>
+          {v2 && c.storyValue !== null && c.historicalValue !== null && (
+            <div className="text-xs text-stone-500 tabular-nums">
+              story {c.storyValue.toFixed(1)} · history {c.historicalValue.toFixed(1)}
+            </div>
+          )}
         </div>
       </div>
+      {v2 && <WhyCompelling scores={v2} />}
+      {c.centralQuestion && (
+        <p className="mt-1 text-sm">
+          <span className="font-semibold text-violet-800">Central question: </span>
+          {c.centralQuestion}
+        </p>
+      )}
 
       <p className="mt-2 text-sm">
         <span className="font-semibold text-violet-800">The viewer wants to know: </span>
@@ -468,7 +535,12 @@ function CandidateCard({ candidate: c, evidence, editable, storyKey }: { candida
       {c.notes && <p className="mt-1 rounded bg-orange-50 px-2 py-1 text-sm text-orange-900">Caveat: {c.notes}</p>}
 
       <details className="mt-2 text-sm">
-        <summary className="cursor-pointer text-stone-600">Story arc, scores and why</summary>
+        <summary className="cursor-pointer text-stone-600">{v2 ? 'Human story, arc, scores and why' : 'Story arc, scores and why'}</summary>
+        {v2 && (
+          <div className="mt-2">
+            <CandidateStory candidate={c} />
+          </div>
+        )}
         <div className="mt-2 grid gap-4 lg:grid-cols-2">
           <dl className="space-y-1">
             <Arc label="Setting">
@@ -482,9 +554,7 @@ function CandidateCard({ candidate: c, evidence, editable, storyKey }: { candida
             <Arc label="Why it holds">{c.whyInteresting}</Arc>
             {c.aiSelectionReason && <Arc label="Selection">{c.aiSelectionReason}</Arc>}
           </dl>
-          <div>
-            {c.scores ? <ScoreBars candidate={c} /> : <p className="text-xs text-red-700">Scores unavailable.</p>}
-          </div>
+          <div>{v2 ? <DualScores candidate={c} scores={v2} /> : c.scores && !('version' in c.scores) ? <ScoreBars candidate={c} scores={c.scores} /> : <p className="text-xs text-red-700">Scores unavailable.</p>}</div>
         </div>
         {c.mythThread && (
           <div className="mt-3 rounded border border-rose-200 bg-rose-50 p-2">
@@ -558,8 +628,9 @@ function CandidateCard({ candidate: c, evidence, editable, storyKey }: { candida
               ))}
             </select>
           </div>
+          <AngleEditor candidate={c} pending={update.isPending} onSave={(input) => update.mutate(input)} />
           <div className="flex gap-2">
-            <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Editor's notes (passed to the architect)" className="flex-1 rounded-md border border-stone-300 px-2 py-1 text-sm" />
+            <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Editor's notes (passed to the architect)" className="min-w-0 flex-1 rounded-md border border-stone-300 px-2 py-1 text-sm" />
             <button disabled={update.isPending || notes === (c.editorNotes ?? '')} onClick={() => update.mutate({ editorNotes: notes.trim() || null })} className={`${button} bg-stone-800 text-white`}>
               Save notes
             </button>
@@ -581,8 +652,7 @@ function Arc({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function ScoreBars({ candidate: c }: { candidate: StoryCandidateView }) {
-  const s = c.scores!;
+function ScoreBars({ candidate: c, scores: s }: { candidate: StoryCandidateView; scores: StoryScores }) {
   const mult = confidenceMultiplier(c.historicalConfidence);
   return (
     <div>
@@ -613,20 +683,51 @@ function ScoreBars({ candidate: c }: { candidate: StoryCandidateView }) {
 
 // ── Selection ────────────────────────────────────────────────────────────────
 
-function SelectionTab({ view, pack }: { view: StoryView; pack: StoryPackView }) {
+function SelectionTab({ projectId, view, pack, storyKey }: { projectId: string; view: StoryView; pack: StoryPackView; storyKey: StoryKey }) {
   const byKey = new Map(pack.candidates.map((c) => [c.key, c]));
   const order: Record<CandidatePriority, number> = { HIGH: 0, NORMAL: 1, LOW: 2 };
-  const selected = pack.candidates.filter((c) => c.selected && c.status !== 'REJECTED').sort((a, b) => order[a.priority] - order[b.priority] || a.rank - b.rank);
+  // The architect's order: the editor's, where set; otherwise priority, then rank.
+  const selected = pack.candidates
+    .filter((c) => c.selected && c.status !== 'REJECTED')
+    .sort((a, b) => (a.selectionOrder ?? Infinity) - (b.selectionOrder ?? Infinity) || order[a.priority] - order[b.priority] || a.rank - b.rank);
+  const ordered = selected.some((c) => c.selectionOrder !== null);
   const proposed = pack.content.selection.candidateKeys;
   const dropped = proposed.filter((k) => !byKey.get(k)?.selected);
   const added = selected.filter((c) => !c.aiSelected);
+  const ai = pack.content.selection;
+  const queryClient = useQueryClient();
+  const reorder = useMutation({
+    mutationFn: (ids: string[]) => api.reorderSelection(projectId, ids),
+    onSuccess: (next) => {
+      if (storyKey[3] === undefined && (storyKey[2] === undefined || storyKey[2] === next.pack?.version)) queryClient.setQueryData(storyKey, next);
+      else void queryClient.invalidateQueries({ queryKey: ['story'] });
+    },
+  });
+  const move = (i: number, by: -1 | 1) => {
+    const ids = selected.map((c) => c.id);
+    [ids[i], ids[i + by]] = [ids[i + by]!, ids[i]!];
+    reorder.mutate(ids);
+  };
+  const arrow = 'rounded px-1.5 text-stone-500 hover:bg-stone-100 hover:text-stone-900 disabled:opacity-30';
   return (
     <div className="space-y-4">
       <Section title="The documentary these units add up to (AI proposal)">
-        <p className="text-sm font-medium">{pack.content.selection.workingPremise || '—'}</p>
-        <p className="mt-1 text-sm text-stone-600">{pack.content.selection.rationale}</p>
+        <p className="text-sm font-medium">{ai.workingPremise || '—'}</p>
+        <p className="mt-1 text-sm text-stone-600">{ai.rationale}</p>
+        {(ai.centralQuestion || ai.narrativeMode || ai.povStrategy) && (
+          <dl className="mt-2 space-y-0.5 text-sm">
+            {ai.centralQuestion && <Arc label="Question">{ai.centralQuestion}</Arc>}
+            {ai.narrativeMode && <Arc label="Told as">{NARRATIVE_MODE_LABELS[ai.narrativeMode]}</Arc>}
+            {ai.povStrategy && (
+              <Arc label="POV">
+                {POV_STRATEGY_LABELS[ai.povStrategy.type]}
+                {ai.povStrategy.description && <span className="text-stone-600"> — {ai.povStrategy.description}</span>}
+              </Arc>
+            )}
+          </dl>
+        )}
         <p className="mt-2 text-xs text-stone-500">
-          Proposed: {proposed.join(', ') || '—'} · alternates: {pack.content.selection.alternates.join(', ') || '—'}. A proposal only: the editor's selection below is what the architect uses.
+          Proposed: {proposed.join(', ') || '—'} · alternates: {ai.alternates.join(', ') || '—'}. A proposal only: the editor's selection below is what the architect uses.
         </p>
       </Section>
       <Section title={<span className="flex items-center gap-2">Editor's selection <SelectionMeter selection={view.selection} /></span>}>
@@ -634,19 +735,36 @@ function SelectionTab({ view, pack }: { view: StoryView; pack: StoryPackView }) 
           <p className="text-sm text-stone-500">Nothing selected.</p>
         ) : (
           <ol className="space-y-2 text-sm">
-            {selected.map((c) => (
-              <li key={c.id} className="flex flex-wrap items-center gap-2">
+            {selected.map((c, i) => (
+              <li key={c.id} className="flex flex-wrap items-center gap-2" data-selected={c.key}>
+                {view.editable && (
+                  <span className="flex flex-col leading-none">
+                    <button aria-label={`Move ${c.key} up`} disabled={i === 0 || reorder.isPending} onClick={() => move(i, -1)} className={arrow}>
+                      ▲
+                    </button>
+                    <button aria-label={`Move ${c.key} down`} disabled={i === selected.length - 1 || reorder.isPending} onClick={() => move(i, 1)} className={arrow}>
+                      ▼
+                    </button>
+                  </span>
+                )}
+                <span className="w-5 text-right text-xs text-stone-400 tabular-nums">{i + 1}.</span>
                 <span className="font-mono text-xs text-stone-500">{c.key}</span>
                 <span className="font-medium">{c.title}</span>
                 <StoryTypeBadge type={c.storyType} />
                 <HistoricalBadge status={c.historicalStatus} confidence={c.historicalConfidence} />
                 <CandidateStatusBadge status={c.status} />
                 <PriorityBadge priority={c.priority} />
+                {c.narrativeMode && <span className="text-xs text-stone-500">{NARRATIVE_MODE_LABELS[c.narrativeMode]}</span>}
                 {c.aiSelectionReason && <span className="text-xs text-stone-500">— {c.aiSelectionReason}</span>}
               </li>
             ))}
           </ol>
         )}
+        <p className="mt-2 text-xs text-stone-500">
+          {ordered ? "The architect works through the units in your order (it must explain any change)." : 'No order set: the architect sees HIGH priority first, then rank.'}
+          {view.editable && ' Use ▲▼ to set the order.'}
+        </p>
+        {reorder.error && <p className="mt-1 text-sm text-red-700">{reorder.error.message}</p>}
         {(dropped.length > 0 || added.length > 0) && (
           <p className="mt-3 text-xs text-stone-600">
             {added.length > 0 && <>Added by the editor: {added.map((c) => c.key).join(', ')}. </>}
@@ -672,7 +790,6 @@ function SelectionTab({ view, pack }: { view: StoryView; pack: StoryPackView }) 
 // ── Architecture ─────────────────────────────────────────────────────────────
 
 function ArchitectureTab({ architecture: a }: { architecture: StoryArchitectureView }) {
-  const sources = useMemo(() => new Map<string, SourceLike>(a.evidence.sources.map((s) => [s.id, s])), [a.evidence.sources]);
   if (!a.content) return <p className="text-sm text-red-700">The stored architecture could not be read.</p>;
   const c = a.content;
   return (
@@ -682,10 +799,36 @@ function ArchitectureTab({ architecture: a }: { architecture: StoryArchitectureV
         <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${a.qualityPassed ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>Architecture gate {a.qualityPassed ? 'passed' : 'FAILED'}</span>
         <span className="text-stone-600">
           {c.sequences.length} sequences · estimated {mmss(a.estimatedDurationSec)} (target {mmss(a.targetDurationSec)}) · from pack v{a.packVersion ?? '—'} · dossier v{a.dossierVersion ?? '—'}
+          {a.engineVersion === 1 && ' · story engine 1'}
         </span>
       </div>
       {a.notes && <p className="text-sm text-stone-600">Editor's instructions for this version: “{a.notes}”</p>}
 
+      {isArchitectureV2(c) ? <ArchitectureV2 architecture={a} content={c} /> : <ArchitectureV1 architecture={a} content={c} />}
+
+      <Section title="Decisions on this version">
+        {a.approvals.length === 0 ? (
+          <p className="text-sm text-stone-500">None yet.</p>
+        ) : (
+          <ul className="space-y-1 text-sm">
+            {a.approvals.map((x) => (
+              <li key={x.id}>
+                <span className="font-medium">{x.decision.toLowerCase()}</span> by {x.decidedBy ?? 'unknown'} · {formatDate(x.createdAt)}
+                {x.notes && <span className="text-stone-600"> — “{x.notes}”</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+/** A story engine 1 architecture (premise, key events and caveats), kept readable. */
+function ArchitectureV1({ architecture: a, content: c }: { architecture: StoryArchitectureView; content: StoryArchitectureContent }) {
+  const sources = useMemo(() => new Map<string, SourceLike>(a.evidence.sources.map((s) => [s.id, s])), [a.evidence.sources]);
+  return (
+    <>
       <Section title="Premise">
         <p className="text-sm">{c.premise}</p>
         <p className="mt-3 text-xl font-semibold text-violet-900">{c.centralQuestion}</p>
@@ -717,22 +860,7 @@ function ArchitectureTab({ architecture: a }: { architecture: StoryArchitectureV
           </ul>
         </Section>
       )}
-
-      <Section title="Decisions on this version">
-        {a.approvals.length === 0 ? (
-          <p className="text-sm text-stone-500">None yet.</p>
-        ) : (
-          <ul className="space-y-1 text-sm">
-            {a.approvals.map((x) => (
-              <li key={x.id}>
-                <span className="font-medium">{x.decision.toLowerCase()}</span> by {x.decidedBy ?? 'unknown'} · {formatDate(x.createdAt)}
-                {x.notes && <span className="text-stone-600"> — “{x.notes}”</span>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
-    </div>
+    </>
   );
 }
 

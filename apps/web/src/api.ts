@@ -1,5 +1,7 @@
 import type {
   ApprovalInput,
+  ContentOpportunityView,
+  ContentPackageView,
   CreateProjectInput,
   EnqueueJobInput,
   HealthView,
@@ -8,7 +10,9 @@ import type {
   ProjectSummaryView,
   ResearchView,
   RewindInput,
+  StoryJobInput,
   StoryView,
+  UpdateContentOpportunityInput,
   UpdateStoryCandidateInput,
 } from '@docengine/core';
 
@@ -56,5 +60,9 @@ export const api = {
   },
   updateCandidate: (candidateId: string, input: UpdateStoryCandidateInput) => request<StoryView>('PATCH', `/api/story-candidates/${candidateId}`, input),
   mineStory: (id: string, notes?: string) => request<JobView>('POST', `/api/projects/${id}/story/mine`, notes ? { notes } : {}),
-  buildArchitecture: (id: string, notes?: string) => request<JobView>('POST', `/api/projects/${id}/story/architecture`, notes ? { notes } : {}),
+  buildArchitecture: (id: string, input: StoryJobInput = {}) => request<JobView>('POST', `/api/projects/${id}/story/architecture`, input),
+  reorderSelection: (id: string, candidateIds: string[]) => request<StoryView>('PUT', `/api/projects/${id}/story/selection-order`, { candidateIds }),
+  updateOpportunity: (opportunityId: string, input: UpdateContentOpportunityInput) => request<ContentOpportunityView>('PATCH', `/api/content-opportunities/${opportunityId}`, input),
+  /** What a content package request would contain (read only; nothing is generated). */
+  contentPackage: (id: string, input: { documentary?: boolean; shorts?: number | 'all'; languages?: string[] }) => request<ContentPackageView>('POST', `/api/projects/${id}/content-package`, input),
 };

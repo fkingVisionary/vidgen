@@ -228,6 +228,111 @@ export const CHARACTER_KINDS = ['NAMED_PERSON', 'GROUP', 'ROLE'] as const;
 export type CharacterKind = (typeof CHARACTER_KINDS)[number];
 
 // ---------------------------------------------------------------------------
+// Story Engine 2.0 (cinematic storytelling inside the evidence boundary)
+// ---------------------------------------------------------------------------
+
+/** Generation of the story engine that produced a pack or an architecture (1: M3, 2: Story Engine 2.0). */
+export const STORY_ENGINE_VERSIONS = [1, 2] as const;
+export type StoryEngineVersion = (typeof STORY_ENGINE_VERSIONS)[number];
+export const CURRENT_STORY_ENGINE: StoryEngineVersion = 2;
+
+/** How a documentary, a sequence or a story unit is told. Chosen to fit the evidence and the human story. */
+export const NARRATIVE_MODES = [
+  'IMMERSIVE_RECONSTRUCTION', // the viewer is placed inside a reconstructed scene
+  'CHARACTER_FOLLOW', // follow one person or group through events
+  'HISTORICAL_MYSTERY', // an unexplained question drives the telling
+  'INVESTIGATION', // the telling follows how the truth was found
+  'COUNTDOWN', // events race towards a known moment
+  'SURVIVAL', // someone struggles to get through
+  'CONFLICT', // two sides, one dispute
+  'RISE_AND_FALL', // fortune made and lost
+  'HEIST_OPERATION', // a plan, its execution and what went wrong
+  'JOURNEY', // movement through places or stages
+  'COURTROOM_DISPUTE', // claims, evidence and a ruling
+  'DISCOVERY', // how something came to be known
+  'MYTH_VS_RECORD', // the popular story tested against the record
+  'PARALLEL_TIMELINE', // two times told side by side
+  'CAUSE_AND_EFFECT', // a chain of decisions and consequences
+] as const;
+export type NarrativeMode = (typeof NARRATIVE_MODES)[number];
+
+/**
+ * What kind of information a story beat is. The research dossier is the fact
+ * boundary; creative freedom applies to presentation, never to the facts.
+ */
+export const INFORMATION_CLASSES = [
+  'DOCUMENTED', // directly supported by ESTABLISHED claims: may be stated as fact
+  'RECONSTRUCTION', // a plausible scene built from documented circumstances; never presented as a recorded event
+  'UNCERTAIN', // rests on PROBABLE, DISPUTED, UNVERIFIED or MYTH claims: told with its presentation instruction
+  'FICTION', // a declared narrative device (POV, composite, invented dialogue or sensory detail); carries no facts
+] as const;
+export type InformationClass = (typeof INFORMATION_CLASSES)[number];
+
+/** The dramatic job of a beat. A framework, not a template: sequences use what the story needs. */
+export const BEAT_FUNCTIONS = [
+  'COLD_OPEN',
+  'ORIENTATION',
+  'STAKES',
+  'CONFLICT',
+  'ESCALATION',
+  'TURN',
+  'REVEAL',
+  'CONSEQUENCE',
+  'INVESTIGATION',
+  'TRANSITION',
+] as const;
+export type BeatFunction = (typeof BEAT_FUNCTIONS)[number];
+
+/** Who appears in an architecture. Fictional kinds are narrative devices and are always labelled as such. */
+export const CAST_KINDS = [
+  'POV_PROXY', // "you": a fictional viewer proxy, never a historical person
+  'FICTIONAL_COMPOSITE', // an invented character standing for documented people of a kind
+  'REAL_PERSON', // a named person from the evidence
+  'REAL_GROUP', // a group from the evidence ("the buyers")
+  'REAL_ROLE', // a role from the evidence ("a notary")
+] as const;
+export type CastKind = (typeof CAST_KINDS)[number];
+export const FICTIONAL_CAST_KINDS: readonly CastKind[] = ['POV_PROXY', 'FICTIONAL_COMPOSITE'];
+
+/** Whose eyes the documentary is told through. */
+export const POV_STRATEGIES = [
+  'VIEWER_POV', // second person: the viewer is placed in the scene
+  'COMPANION', // the viewer follows a fictional composite companion
+  'CHARACTER_FOLLOW', // the camera follows a real person or group
+  'INVESTIGATOR', // the narrator investigates, revealing the record step by step
+  'NARRATOR', // no POV device
+] as const;
+export type PovStrategy = (typeof POV_STRATEGIES)[number];
+
+/** How the narration must present a claim, set by its verdict (see PRESENTATION_FOR_VERDICT). */
+export const PRESENTATIONS = ['STATE', 'HEDGE', 'PRESENT_AS_DISPUTED', 'PRESENT_AS_UNCONFIRMED', 'INVESTIGATE_AS_MYTH'] as const;
+export type Presentation = (typeof PRESENTATIONS)[number];
+
+/** A line of speech: a verified quotation from the record, or an invented line for a fictional character. */
+export const SPEECH_KINDS = ['RECORDED_QUOTE', 'INVENTED'] as const;
+export type SpeechKind = (typeof SPEECH_KINDS)[number];
+
+/** How far a sequence moves in time from the one before it. */
+export const TIME_JUMPS = ['NONE', 'FORWARD', 'FLASHBACK', 'PARALLEL'] as const;
+export type TimeJump = (typeof TIME_JUMPS)[number];
+
+/** Share of reconstruction and fiction in a telling (computed for architectures, estimated for candidates). */
+export const RECONSTRUCTION_LEVELS = ['NONE', 'LOW', 'MEDIUM', 'HIGH'] as const;
+export type ReconstructionLevel = (typeof RECONSTRUCTION_LEVELS)[number];
+
+// ---------------------------------------------------------------------------
+// Content opportunities (the content package: long-form + short-form)
+// ---------------------------------------------------------------------------
+
+/** What an opportunity found in an approved architecture could become. */
+export const CONTENT_FORMATS = ['LONG_FORM', 'SHORT', 'BOTH'] as const;
+export type ContentFormat = (typeof CONTENT_FORMATS)[number];
+
+/** The editor's decision on a content opportunity. Only a human sets anything but PROPOSED. */
+export const OPPORTUNITY_STATUSES = ['PROPOSED', 'APPROVED', 'REJECTED'] as const;
+export type OpportunityStatus = (typeof OPPORTUNITY_STATUSES)[number];
+
+// ---------------------------------------------------------------------------
 // Visuals, infographics, media
 // ---------------------------------------------------------------------------
 

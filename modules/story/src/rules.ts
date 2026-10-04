@@ -1,4 +1,4 @@
-import { CAVEAT_VERDICTS, type ClaimImportance, type ClaimVerdict } from '@docengine/core';
+import type { ClaimImportance, ClaimVerdict } from '@docengine/core';
 import type { EvidenceBase } from './evidence.ts';
 import { WordIndex, extractFigures, isYear, nameGrounded, nameTokens } from './text.ts';
 
@@ -83,13 +83,8 @@ export function checkPerson(name: string, claimKeys: readonly string[], evidence
   return { grounded: true, link: strongestFirst(evidence, mentioning).slice(0, MAX_AUTO_LINKS) };
 }
 
-/** Claims used that must be told with a caveat (DISPUTED, UNVERIFIED, MYTH). */
-export function caveatClaims(claimKeys: readonly string[], evidence: EvidenceBase): string[] {
-  return claimKeys.filter((k) => {
-    const c = evidence.claim(k);
-    return c !== undefined && CAVEAT_VERDICTS.includes(c.verdict);
-  });
-}
+/** Text addressed to the viewer ("you", "your"): a reconstruction or fiction, never documented fact. */
+export const SECOND_PERSON = /\b(you|your|yours|yourself)\b/i;
 
 /** Keys in dossier order, deduplicated, unknown keys dropped. */
 export function orderedKeys(keys: Iterable<string>, evidence: EvidenceBase): string[] {

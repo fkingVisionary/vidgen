@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { EvidenceBase } from './evidence.ts';
-import { applyAssessments, byRank, isDuplicate, normalizeMined, normalizeSelection, type DraftCandidate, type PackCandidate } from './mining.ts';
+import { applyAssessments, byRank, isDuplicate, legacyStoryFields, mythApplicable, normalizeMined, normalizeSelection, scoresFrom, type DraftCandidate, type PackCandidate } from './mining.ts';
 import { computeMiningReport } from './quality.ts';
-import type { CriticAssessment } from './schemas.ts';
+import type { CriticAssessment, MinedCandidate, SelectionOutput } from './schemas.ts';
 import { FAKE_INVALID, FAKE_VALID, fakeEvidenceInput } from './testing.ts';
 
 const evidence = new EvidenceBase(fakeEvidenceInput());
@@ -10,20 +10,35 @@ const normalizeAll = () => normalizeMined([...FAKE_VALID, ...FAKE_INVALID], evid
 
 const assessment = (ref: string, over: Partial<CriticAssessment> = {}): CriticAssessment => ({
   candidateId: ref,
-  intrigue: 7,
-  humanDrama: 6,
-  stakes: 6,
-  surprise: 5,
+  humanStakes: 7,
+  conflict: 6,
+  mystery: 6,
   escalation: 5,
+  characterPotential: 6,
   visualPotential: 7,
-  financialStakes: 6,
-  emotionalWeight: 5,
+  emotionalPotential: 5,
+  revealPotential: 5,
+  mythInvestigation: 3,
+  significance: 6,
+  relevance: 7,
+  uniqueness: 5,
+  reasons: [{ dimension: 'humanStakes', reason: 'Someone stands to lose (test).' }],
   rationale: 'test',
   support: 'SUPPORTED',
   problems: [],
   caveat: null,
   ...over,
 });
+
+const PROPOSAL: SelectionOutput = {
+  selected: [],
+  workingPremise: '',
+  rationale: '',
+  alternates: [],
+  centralQuestion: 'Why would anyone pay for goods nobody had seen?',
+  narrativeMode: 'IMMERSIVE_RECONSTRUCTION',
+  povStrategy: { type: 'VIEWER_POV', description: 'The viewer joins the traders.' },
+};
 
 function pack(drafts: DraftCandidate[]): PackCandidate[] {
   const { scored } = applyAssessments(drafts, drafts.map((d) => assessment(d.ref)));
@@ -101,16 +116,23 @@ describe('critic assessments', () => {
   it('removes unsupported candidates, adds caveats, clamps scores and ranks', () => {
     const drafts = normalizeAll().kept.slice(0, 4);
     const { scored, removed, unassessed } = applyAssessments(drafts, [
-      assessment(drafts[0]!.ref, { intrigue: 14, humanDrama: -3, stakes: 6.6 }),
+      assessment(drafts[0]!.ref, { humanStakes: 14, conflict: -3, mystery: 6.6 }),
       assessment(drafts[1]!.ref, { support: 'UNSUPPORTED', problems: ['Claims the auction made 100,000 guilders'] }),
       assessment(drafts[2]!.ref, { support: 'NEEDS_CAVEAT', caveat: 'Say the figure is disputed.' }),
       assessment(drafts[2]!.ref, { support: 'UNSUPPORTED' }), // a repeat is ignored
     ]);
     expect(unassessed.map((d) => d.ref)).toEqual([drafts[3]!.ref]);
     expect(removed).toEqual([expect.objectContaining({ title: drafts[1]!.title, reason: 'the critic found statements the evidence does not support: Claims the auction made 100,000 guilders' })]);
-    expect(scored[0]!.scores).toMatchObject({ intrigue: 10, humanDrama: 0, stakes: 7 });
+    expect(scored[0]!.scores.story).toMatchObject({ humanStakes: 10, conflict: 0, mystery: 7 });
     expect(scored[1]!.notes).toContain('Say the figure is disputed.');
-    for (const s of scored) expect(s.rankScore).toBeLessThanOrEqual(s.scores.appeal);
+    for (const s of scored) {
+      // Story appeal = story value moderated by historical value; the rank score is the appeal.
+      expect(s.rankScore).toBe(s.scores.appeal);
+      expect(s.scores.appeal).toBeLessThanOrEqual(s.scores.storyValue);
+      expect(s.scores.history.evidenceQuality).toBe(s.historicalConfidence);
+      expect(s.storyValue).toBe(s.scores.storyValue);
+      expect(s.historicalValue).toBe(s.scores.historicalValue);
+    }
   });
 });
 
@@ -119,7 +141,10 @@ describe('selection proposal', () => {
 
   it('keeps valid keys in the proposed order and tops up to the minimum, editor-approved first', () => {
     const approved = pool.map((c) => (c.key === 'S09' ? { ...c, status: 'APPROVED' as const } : c));
-    const r = normalizeSelection({ selected: [{ candidateKey: 'S03', reason: 'opening' }, { candidateKey: 'S99', reason: '?' }, { candidateKey: 'S03', reason: 'again' }], workingPremise: 'p', rationale: 'r', alternates: ['S03', 'S11', 'S98'] }, approved);
+    const r = normalizeSelection(
+      { ...PROPOSAL, selected: [{ candidateKey: 'S03', reason: 'opening' }, { candidateKey: 'S99', reason: '?' }, { candidateKey: 'S03', reason: 'again' }], workingPremise: 'p', rationale: 'r', alternates: ['S03', 'S11', 'S98'] },
+      approved,
+    );
     expect(r.keys).toEqual(['S03', 'S09', 'S01', 'S02', 'S04']);
     expect(r.reasons.get('S03')).toBe('opening');
     expect(r.alternates).toEqual(['S11']);
@@ -128,7 +153,7 @@ describe('selection proposal', () => {
 
   it('never selects a rejected candidate and cuts to the maximum', () => {
     const withRejected = pool.map((c) => (c.key === 'S02' ? { ...c, status: 'REJECTED' as const } : c));
-    const r = normalizeSelection({ selected: withRejected.map((c) => ({ candidateKey: c.key, reason: '' })), workingPremise: '', rationale: '', alternates: [] }, withRejected);
+    const r = normalizeSelection({ ...PROPOSAL, selected: withRejected.map((c) => ({ candidateKey: c.key, reason: '' })) }, withRejected);
     expect(r.keys).toHaveLength(10);
     expect(r.keys).not.toContain('S02');
     expect(r.notes).toContain('Selection: S02 was rejected by the editor; not selected');
@@ -167,5 +192,79 @@ describe('mining quality gate', () => {
     myth.mythThread = null;
     const report = computeMiningReport({ candidates, evidence, selectionKeys: candidates.slice(0, 6).map((c) => c.key), removed: [], normalizations: [] });
     expect(report.checks.find((c) => c.id === 'myth_framing')).toMatchObject({ status: 'FAIL', metric: 1 });
+  });
+});
+
+describe('Story Engine 2.0 mining', () => {
+  const base = FAKE_VALID[1]!; // The tavern colleges: C002 (ESTABLISHED), C017 (ESTABLISHED); florists
+
+  // Variants of one unit share its claims, so each is normalized on its own (the duplicate rule would merge them).
+  const each = (variants: MinedCandidate[]) => {
+    const runs = variants.map((v) => normalizeMined([v], evidence, { firstRef: 1, known: [], rejected: [] }));
+    return { kept: runs.flatMap((r) => r.kept), notes: runs.flatMap((r) => r.notes) };
+  };
+
+  it('keeps the human stakes and labels the cold open honestly (relabelling is recorded)', () => {
+    const { kept, notes } = each([
+      { ...base, title: 'Addressed to the viewer', coldOpen: { text: 'You push open the door of a crowded room.', basis: 'DOCUMENTED' } },
+      { ...FAKE_VALID[6]!, title: 'A disputed price told as fact', coldOpen: { text: 'A single bulb sold for a fortune.', basis: 'DOCUMENTED' } },
+      { ...base, title: 'Honest documented opening', coldOpen: { text: 'Florists met in taverns to deal.', basis: 'DOCUMENTED' } },
+    ]);
+    expect(kept.map((k) => k.storyDesign.coldOpen.basis)).toEqual(['RECONSTRUCTION', 'UNCERTAIN', 'DOCUMENTED']);
+    expect(notes).toContain('Addressed to the viewer: cold open addressed to the viewer relabelled RECONSTRUCTION');
+    expect(notes).toContain('A disputed price told as fact: cold open relabelled UNCERTAIN (the story rests on claims that are not ESTABLISHED)');
+    expect(kept[0]!.humanStakes).toEqual({ protagonist: 'florists', couldGain: base.couldGain, couldLose: base.couldLose, immediateProblem: base.immediateProblem });
+  });
+
+  it('finds a human story only when a character has something at stake', () => {
+    const { kept } = each([
+      { ...base, title: 'With a protagonist' },
+      { ...base, title: 'No protagonist recorded', protagonist: '' },
+      { ...base, title: 'Protagonist is not a character', protagonist: 'a mysterious stranger' },
+      { ...base, title: 'Nothing at stake', couldGain: '', couldLose: '' },
+    ]);
+    expect(kept.map((k) => [k.title, k.storyDesign.humanStory])).toEqual([
+      ['With a protagonist', true],
+      ['No protagonist recorded', false],
+      ['Protagonist is not a character', false],
+      ['Nothing at stake', false],
+    ]);
+  });
+
+  it('rejects figures in the new story fields that are not in the evidence', () => {
+    const { removed } = normalizeMined([{ ...base, title: 'Invented loss', couldLose: 'A loss of 6,543 guilders.' }], evidence, { firstRef: 1, known: [], rejected: [] });
+    expect(removed[0]!.reason).toBe('uses figures that are not in the dossier: 6543');
+  });
+
+  it('scores story value and historical value separately, with myth potential only where it applies', () => {
+    const drafts = normalizeAll().kept;
+    const myth = drafts.find((d) => d.historicalStatus === 'MYTH_INVESTIGATION')!;
+    const plain = drafts.find((d) => d.historicalStatus === 'ESTABLISHED')!;
+    expect(mythApplicable(myth)).toBe(true);
+    expect(mythApplicable(plain)).toBe(false);
+    const raw = assessment('x', { mythInvestigation: 10, reasons: [{ dimension: 'mystery', reason: ' why ' }, { dimension: 'mystery', reason: 'again' }, { dimension: 'bogus', reason: 'x' }] });
+    const m = scoresFrom(raw, myth);
+    const p = scoresFrom(raw, plain);
+    expect(m.mythApplicable).toBe(true);
+    expect(p.mythApplicable).toBe(false);
+    expect(m.storyValue).toBeGreaterThan(p.storyValue); // the myth dimension only counts for the myth
+    expect(p.reasons).toEqual([{ dimension: 'mystery', reason: 'why' }]);
+    expect(p.history).toEqual({ evidenceQuality: plain.historicalConfidence, significance: 6, relevance: 7, uniqueness: 5 });
+  });
+
+  it('derives engine-2 fields for an engine-1 candidate from what it already says', () => {
+    const f = legacyStoryFields({ storyType: 'MYTH_ORIGIN', characters: [{ name: 'Charles Mackay', kind: 'NAMED_PERSON', role: 'author', claimKeys: ['C012'] }], hook: 'h', setting: 's', stakes: 'st', conflict: 'c', turningPoint: 't', viewerQuestion: 'q?' });
+    expect(f).toMatchObject({ narrativeMode: 'MYTH_VS_RECORD', centralQuestion: 'q?', povStrategy: { type: 'NARRATOR' }, humanStakes: { protagonist: 'Charles Mackay', couldLose: 'st' } });
+    expect(f.storyDesign.coldOpen).toEqual({ text: 'h', basis: 'UNCERTAIN' });
+  });
+
+  it('warns when the proposal includes a unit with no human story', () => {
+    const candidates = pack(normalizeAll().kept.filter((k) => k.title !== 'Critic-flagged story'));
+    candidates[0]!.storyDesign = { ...candidates[0]!.storyDesign, humanStory: false };
+    const report = computeMiningReport({ candidates, evidence, selectionKeys: candidates.slice(0, 6).map((c) => c.key), removed: [], normalizations: [] });
+    expect(report.checks.find((c) => c.id === 'human_stories')).toMatchObject({ status: 'WARN' });
+    candidates[1]!.storyDesign = { ...candidates[1]!.storyDesign, coldOpen: { text: 'You see it all.', basis: 'DOCUMENTED' } };
+    const again = computeMiningReport({ candidates, evidence, selectionKeys: candidates.slice(0, 6).map((c) => c.key), removed: [], normalizations: [] });
+    expect(again.checks.find((c) => c.id === 'cold_open_labelled')).toMatchObject({ status: 'FAIL' });
   });
 });

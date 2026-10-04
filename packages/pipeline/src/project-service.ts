@@ -1,6 +1,9 @@
 import {
+  CandidateOverrides,
   CreateProjectInput,
+  ReorderSelectionInput,
   STATUS_DEFINITIONS,
+  UpdateContentOpportunityInput,
   UpdateStoryCandidateInput,
   assertTransition,
   getTransitionKind,
@@ -15,7 +18,7 @@ import {
   type RewindInput,
   type TransitionKind,
 } from '@docengine/core';
-import type { Approval, Database, Job, Prisma, Project, StoryCandidate, Tx } from '@docengine/database';
+import type { Approval, ContentOpportunity, Database, Job, Prisma, Project, StoryCandidate, Tx } from '@docengine/database';
 import { ConflictError, NotFoundError } from './errors.ts';
 import { EVENT } from './events.ts';
 import { silentLogger, type Logger } from './logger.ts';
@@ -236,13 +239,42 @@ export class ProjectService {
       }
       const priority = input.priority ?? c.priority;
       const editorNotes = input.editorNotes === undefined ? c.editorNotes : input.editorNotes || null;
+
+      // Editorial overrides (Story Engine 2.0): the AI's values stay in their columns; null restores them.
+      const before = CandidateOverrides.safeParse(c.editorOverrides ?? {});
+      const overrides: CandidateOverrides = before.success ? { ...before.data } : {};
+      const overrideChanges: string[] = [];
+      const setOverride = <K extends keyof CandidateOverrides>(key: K, value: CandidateOverrides[K] | null | undefined, label: string) => {
+        if (value === undefined) return;
+        const old = JSON.stringify(overrides[key] ?? null);
+        if (value === null) delete overrides[key];
+        else overrides[key] = value;
+        if (JSON.stringify(overrides[key] ?? null) !== old) overrideChanges.push(value === null ? `${label} reset to the AI's` : `${label} edited`);
+      };
+      setOverride('title', input.title, 'title');
+      setOverride('narrativeMode', input.narrativeMode, 'narrative mode');
+      setOverride('centralQuestion', input.centralQuestion, 'central question');
+      setOverride('povStrategy', input.povStrategy, 'POV strategy');
+
       const changes = [
         status !== c.status ? `${c.status} → ${status}` : null,
         selected !== c.selected ? (selected ? 'selected' : 'deselected') : null,
         priority !== c.priority ? `priority ${priority}` : null,
         editorNotes !== c.editorNotes ? 'notes updated' : null,
+        ...overrideChanges,
       ].filter((x): x is string => x !== null);
-      const updated = await tx.storyCandidate.update({ where: { id: candidateId }, data: { status, selected, priority, editorNotes } });
+      const updated = await tx.storyCandidate.update({
+        where: { id: candidateId },
+        data: {
+          status,
+          selected,
+          priority,
+          editorNotes,
+          ...(overrideChanges.length ? { editorOverrides: overrides as Prisma.InputJsonValue } : {}),
+          // A candidate leaving the selection leaves the editor's order too.
+          ...(!selected && c.selectionOrder !== null ? { selectionOrder: null } : {}),
+        },
+      });
       if (changes.length > 0) {
         await this.event(tx, project.id, EVENT.CANDIDATE_UPDATED, `${c.candidateKey} "${c.title}": ${changes.join(', ')}`, {
           actor,
@@ -251,7 +283,64 @@ export class ProjectService {
           selected,
           priority,
           editorNotes,
+          editorOverrides: overrides,
         });
+      }
+      return updated;
+    });
+  }
+
+  /** Set the editor's order of the selection. The ids must be exactly the selected, non-rejected candidates of the open pack. */
+  async reorderStorySelection(projectId: string, raw: ReorderSelectionInput, actor: Actor): Promise<StoryCandidate[]> {
+    const input = ReorderSelectionInput.parse(raw);
+    return this.db.$transaction(async (tx) => {
+      const project = await this.lockProject(tx, projectId);
+      if (project.status !== 'STORY_SELECTION') {
+        throw new ConflictError(`The selection can be reordered while the project is in STORY_SELECTION (it is ${project.status})`);
+      }
+      const pack = await tx.storyPack.findFirst({ where: { projectId, status: 'IN_REVIEW' }, orderBy: { version: 'desc' }, select: { id: true, version: true } });
+      if (!pack) throw new ConflictError('No story pack is open for selection');
+      const selected = await tx.storyCandidate.findMany({ where: { packId: pack.id, selected: true, status: { not: 'REJECTED' } }, select: { id: true, candidateKey: true } });
+      const ids = new Set(selected.map((c) => c.id));
+      if (new Set(input.candidateIds).size !== input.candidateIds.length || input.candidateIds.length !== ids.size || input.candidateIds.some((id) => !ids.has(id))) {
+        throw new ConflictError(`The order must list each of the ${ids.size} selected candidates exactly once`);
+      }
+      await tx.storyCandidate.updateMany({ where: { packId: pack.id }, data: { selectionOrder: null } });
+      for (const [i, id] of input.candidateIds.entries()) await tx.storyCandidate.update({ where: { id }, data: { selectionOrder: i + 1 } });
+      const keyOf = new Map(selected.map((c) => [c.id, c.candidateKey]));
+      const order = input.candidateIds.map((id) => keyOf.get(id)!);
+      await this.event(tx, projectId, EVENT.SELECTION_REORDERED, `Selection order: ${order.join(', ')}`, { actor, packId: pack.id, order });
+      return tx.storyCandidate.findMany({ where: { packId: pack.id, selected: true, status: { not: 'REJECTED' } }, orderBy: { selectionOrder: 'asc' } });
+    });
+  }
+
+  /**
+   * The editor's decision on one content opportunity. Allowed on the latest
+   * architecture while it is under review or approved; an opportunity is
+   * eligible for production only once both it and its architecture are approved.
+   */
+  async editContentOpportunity(opportunityId: string, raw: UpdateContentOpportunityInput, actor: Actor): Promise<ContentOpportunity> {
+    const input = UpdateContentOpportunityInput.parse(raw);
+    return this.db.$transaction(async (tx) => {
+      const found = await tx.contentOpportunity.findUnique({ where: { id: opportunityId }, select: { projectId: true } });
+      if (!found) throw new NotFoundError('Content opportunity', opportunityId);
+      const project = await this.lockProject(tx, found.projectId);
+      const o = await tx.contentOpportunity.findUniqueOrThrow({ where: { id: opportunityId }, include: { architecture: { select: { id: true, version: true, status: true } } } });
+      const latest = await tx.storyArchitecture.findFirst({ where: { projectId: project.id }, orderBy: { version: 'desc' }, select: { id: true } });
+      if (latest?.id !== o.architectureId) throw new ConflictError(`Opportunity ${o.opportunityKey} belongs to architecture v${o.architecture.version}, which is no longer the latest`);
+      if (o.architecture.status !== 'IN_REVIEW' && o.architecture.status !== 'APPROVED') {
+        throw new ConflictError(`Architecture v${o.architecture.version} is ${o.architecture.status}; opportunities are decided while it is in review or approved`);
+      }
+      const status = input.status ?? o.status;
+      const editorNotes = input.editorNotes === undefined ? o.editorNotes : input.editorNotes || null;
+      const decided = status !== o.status;
+      const updated = await tx.contentOpportunity.update({
+        where: { id: opportunityId },
+        data: { status, editorNotes, ...(decided ? { decidedBy: status === 'PROPOSED' ? null : actor, decidedAt: status === 'PROPOSED' ? null : new Date() } : {}) },
+      });
+      const changes = [decided ? `${o.status} → ${status}` : null, editorNotes !== o.editorNotes ? 'notes updated' : null].filter((x): x is string => x !== null);
+      if (changes.length) {
+        await this.event(tx, project.id, EVENT.OPPORTUNITY_UPDATED, `${o.opportunityKey} "${o.title}" (${o.format}): ${changes.join(', ')}`, { actor, opportunityId, status, editorNotes });
       }
       return updated;
     });

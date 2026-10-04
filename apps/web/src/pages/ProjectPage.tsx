@@ -188,6 +188,11 @@ function StoryCard({ project: p }: { project: ProjectDetailView }) {
           {a.estimatedDurationSec !== null && ` · ~${Math.round(a.estimatedDurationSec / 60)} min`}
         </p>
       )}
+      {a && a.engineVersion === 2 && (
+        <p className="text-xs text-stone-600">
+          Content opportunities: {a.opportunities.shorts} short-form, {a.opportunities.longForm} long-form · {a.opportunities.approved} approved
+        </p>
+      )}
       <Link to={`/projects/${p.slug}/story`} className="mt-2 inline-block rounded-md bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-700">
         Open story →
       </Link>

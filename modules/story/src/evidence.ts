@@ -9,7 +9,7 @@ import {
   type StoryEvidenceClaim,
 } from '@docengine/core';
 import type { Database } from '@docengine/database';
-import { extractFigures, normalize } from './text.ts';
+import { WordIndex, extractFigures, normalize } from './text.ts';
 
 export interface EvidenceCitation {
   sourceId: string;
@@ -178,6 +178,19 @@ export class EvidenceBase {
   /** What the evidence behind these claims says, as one text. */
   textFor(keys: readonly string[]): string {
     return keys.map((k) => this.texts.get(k) ?? '').join('\n');
+  }
+
+  private dossierIndex: WordIndex | null = null;
+
+  /** Every word the dossier uses (claims, quotes, sections, summary): names and places it knows. */
+  dossierWords(): WordIndex {
+    this.dossierIndex ??= new WordIndex([this.summary ?? '', JSON.stringify(this.content), ...this.texts.values()].join('\n'));
+    return this.dossierIndex;
+  }
+
+  /** Verified quotations behind a claim (quotes checked word for word against retrieved text by the research engine). */
+  verifiedQuotes(key: string): string[] {
+    return (this.claims.get(key)?.citations ?? []).filter((x) => x.quoteVerified && x.quote).map((x) => x.quote!);
   }
 
   figuresFor(keys: readonly string[]): Set<string> {

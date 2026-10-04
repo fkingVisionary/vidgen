@@ -5,20 +5,24 @@
  * "(test)" sources; it is not research content and must never be presented
  * as such.
  */
-import type {
-  CitationStance,
-  ClaimImportance,
-  ClaimType,
-  ClaimVerdict,
-  ConfidenceLevel,
-  ResearchDossierContent,
-  SourceType,
+import {
+  PRESENTATION_FOR_VERDICT,
+  type CastKind,
+  type CharacterKind,
+  type CitationStance,
+  type ClaimImportance,
+  type ClaimType,
+  type ClaimVerdict,
+  type ConfidenceLevel,
+  type Presentation,
+  type ResearchDossierContent,
+  type SourceType,
 } from '@docengine/core';
 import type { Database } from '@docengine/database';
 import { ProviderError } from '@docengine/providers';
 import type { AIProvider, ObjectGenerationRequest, ObjectGenerationResult, ProviderInfo, TextGenerationResult } from '@docengine/providers';
 import type { EvidenceInput } from './evidence.ts';
-import type { ArchitectOutput, ArchitectureReviewOutput, CriticOutput, MinedCandidate, MiningOutput, SelectionOutput, SupportVerdict } from './schemas.ts';
+import type { ArchitectOutput, ArchitectSequence, ArchitectureReviewOutput, CriticOutput, MinedCandidate, MiningOutput, OpportunityOutput, SelectionOutput, StoryEditorOutput, SupportVerdict } from './schemas.ts';
 
 // ── Synthetic dossier ────────────────────────────────────────────────────────
 
@@ -177,15 +181,39 @@ const BASE = {
   setting: 'Haarlem',
   timePeriod: 'Winter of 1636',
   desire: 'Buyers wanted to resell at a profit.',
+  couldGain: 'A quick profit on a resale.',
+  couldLose: 'Money promised for bulbs not yet delivered.',
+  immediateProblem: 'Nobody can see what they are buying.',
   conflict: 'Buyers and sellers disagreed about what the contracts meant.',
   stakes: 'Money promised for bulbs not yet delivered.',
   escalation: 'Prices kept rising through the winter.',
   turningPoint: 'The buyers stopped coming.',
+  reveal: 'The contracts were promises, not deliveries.',
   payoff: 'The contracts were never settled in full.',
   whyInteresting: 'Because nobody knows exactly how it ended.',
   viewerQuestion: 'What happened to the contracts?',
+  centralQuestion: 'Why would anyone promise money for something nobody could see?',
+  visualEnvironment: 'A crowded room in winter.',
+  coldOpen: { text: 'You are in a crowded room, and nobody is holding what is being sold.', basis: 'RECONSTRUCTION' as const },
+  povStrategy: { type: 'VIEWER_POV' as const, description: 'The viewer is placed among the traders.' },
+  reconstructionLevel: 'MEDIUM' as const,
   mythThread: null,
   notes: '',
+};
+
+const FAKE_MODES: Record<MinedCandidate['storyType'], MinedCandidate['narrativeMode']> = {
+  CHARACTER: 'CHARACTER_FOLLOW',
+  DEAL: 'CAUSE_AND_EFFECT',
+  MARKET_EVENT: 'COUNTDOWN',
+  FORTUNE: 'RISE_AND_FALL',
+  SCAM: 'HEIST_OPERATION',
+  CONFLICT: 'COURTROOM_DISPUTE',
+  REVERSAL: 'CAUSE_AND_EFFECT',
+  MYSTERY: 'HISTORICAL_MYSTERY',
+  MYTH_ORIGIN: 'MYTH_VS_RECORD',
+  DISCOVERY: 'INVESTIGATION',
+  DISASTER: 'RISE_AND_FALL',
+  SOCIAL_PHENOMENON: 'IMMERSIVE_RECONSTRUCTION',
 };
 
 type Character = MinedCandidate['characters'][number];
@@ -194,7 +222,17 @@ const role = (name: string, claimKeys: string[]): Character => ({ name, kind: 'R
 const person = (name: string, claimKeys: string[]): Character => ({ name, kind: 'NAMED_PERSON', role: 'central figure', claimKeys });
 
 function mined(title: string, storyType: MinedCandidate['storyType'], claimKeys: string[], characters: Character[], extra: Partial<MinedCandidate> = {}): MinedCandidate {
-  return { ...BASE, title, hook: `What really happened in "${title}"?`, storyType, claimKeys, characters, ...extra };
+  return {
+    ...BASE,
+    title,
+    hook: `What really happened in "${title}"?`,
+    storyType,
+    narrativeMode: FAKE_MODES[storyType],
+    protagonist: characters[0]?.name ?? '',
+    claimKeys,
+    characters,
+    ...extra,
+  };
 }
 
 const myth = (claimKeys: string[], whoSpreadIt = 'Later retellings') => ({
@@ -240,27 +278,302 @@ export const FAKE_INVALID: MinedCandidate[] = [
   mined('Critic-flagged story', 'REVERSAL', ['C017', 'C014'], [group('growers', ['C017'])]),
 ];
 
-// ── Fake AI ──────────────────────────────────────────────────────────────────
+// ── Scripted architecture ────────────────────────────────────────────────────
 
-interface FakeUnit {
+/** A selected unit as the fake architect needs it. */
+export interface FakeUnit {
   key: string;
   claims: string[];
-  characters: string[];
+  characters: { name: string; kind: CharacterKind }[];
 }
 
 export interface FakeArchitectOptions {
-  /** Leave out the caveats for disputed/myth claims. */
-  omitCaveats?: boolean;
+  /** Leave out the presentation entries for claims that are not ESTABLISHED. */
+  omitPresentation?: boolean;
+  /** Label every claim's beat DOCUMENTED, whatever its verdict (a rule violation for claims that are not ESTABLISHED). */
+  allDocumented?: boolean;
   secondsPerSequence?: number;
-  /** Add this person (not in the evidence) to every sequence. */
+  /** Add this person (not in the evidence) to the cast and to every sequence. */
   inventPerson?: string;
   /** Only use this many units (the rest go unused, without a reason). */
   useUnits?: number;
-  /** Labelled background claims for the first sequence. */
+  /** Labelled background claims for the first sequence (used in an orientation beat). */
   contextClaims?: { claimKey: string; purpose: string }[];
   /** Use this claim (outside the selected units) as story evidence in the first sequence: a rule violation. */
   outsideCore?: string;
+  /** Add a fictional composite who observes, with an invented line, in a FICTION beat of the first sequence. */
+  composite?: { name: string; basis?: string[] };
+  /** Change the output at will (the last step). */
+  transform?: (out: ArchitectOutput) => ArchitectOutput;
 }
+
+const CAST_KIND: Record<CharacterKind, CastKind> = { NAMED_PERSON: 'REAL_PERSON', GROUP: 'REAL_GROUP', ROLE: 'REAL_ROLE' };
+
+/** What a presentation instruction says, by kind (the HEDGE wording is required). */
+export const FAKE_INSTRUCTIONS: Record<Presentation, string> = {
+  STATE: 'State it (test).',
+  HEDGE: 'Records suggest this: word it as probable, not certain (test).',
+  PRESENT_AS_DISPUTED: 'Present it as disputed and give both sides (test).',
+  PRESENT_AS_UNCONFIRMED: 'Say plainly that it is unconfirmed (test).',
+  INVESTIGATE_AS_MYTH: 'Tell it as a legend under investigation (test).',
+};
+
+const DRAMA_FUNCTIONS = ['CONFLICT', 'ESCALATION', 'REVEAL', 'TURN'] as const;
+
+/**
+ * A rule-abiding Story Engine 2.0 architecture for these units: one sequence
+ * per unit, a reconstructed opening beat with the viewer's POV, one labelled
+ * beat per claim (DOCUMENTED for ESTABLISHED claims, UNCERTAIN otherwise),
+ * presentation entries, continuity threads and Q0 answered in the last
+ * sequence. Options introduce specific violations.
+ */
+export function fakeArchitectOutput(units: readonly FakeUnit[], verdictOf: (claimKey: string) => ClaimVerdict | undefined, o: FakeArchitectOptions = {}): ArchitectOutput {
+  const used = units.slice(0, o.useUnits ?? units.length);
+  const cast: ArchitectOutput['cast'] = [{ id: 'pov', name: 'You', kind: 'POV_PROXY', description: 'A newcomer among the traders (test).', claimKeys: [], justification: 'The viewer needs a way into the trade (test).' }];
+  const castIdOf = new Map<string, string>();
+  for (const u of used) {
+    for (const c of u.characters) {
+      const known = castIdOf.get(c.name);
+      if (known) {
+        const member = cast.find((m) => m.id === known)!;
+        member.claimKeys = [...new Set([...member.claimKeys, ...u.claims])];
+        continue;
+      }
+      const id = `R${castIdOf.size + 1}`;
+      castIdOf.set(c.name, id);
+      cast.push({ id, name: c.name, kind: CAST_KIND[c.kind], description: `${c.name} as the evidence records them (test).`, claimKeys: [...u.claims], justification: '' });
+    }
+  }
+  if (o.inventPerson) cast.push({ id: 'X1', name: o.inventPerson, kind: 'REAL_PERSON', description: 'A trader (test).', claimKeys: [used[0]?.claims[0] ?? ''], justification: '' });
+  if (o.composite) {
+    cast.push({
+      id: 'F1',
+      name: o.composite.name,
+      kind: 'FICTIONAL_COMPOSITE',
+      description: 'A typical buyer of the kind the records describe (test).',
+      claimKeys: o.composite.basis ?? [used[0]?.claims[0] ?? ''],
+      justification: 'A typical participant lets the viewer follow the trade without inventing a real person (test).',
+    });
+  }
+
+  const verdict = (k: string) => verdictOf(k) ?? 'ESTABLISHED';
+  const presentationFor = (keys: readonly string[]) =>
+    o.omitPresentation
+      ? []
+      : [...new Set(keys)].filter((k) => verdict(k) !== 'ESTABLISHED').map((k) => ({ claimKey: k, presentation: PRESENTATION_FOR_VERDICT[verdict(k)], instruction: FAKE_INSTRUCTIONS[PRESENTATION_FOR_VERDICT[verdict(k)]] }));
+
+  const sequences: ArchitectSequence[] = used.map((u, i) => {
+    const n = i + 1;
+    const last = n === used.length;
+    const real = u.characters.map((c) => castIdOf.get(c.name)!).slice(0, 2);
+    const outside = i === 0 && o.outsideCore ? [o.outsideCore] : [];
+    const context = i === 0 ? (o.contextClaims ?? []) : [];
+    // A reconstruction never rests on a myth: the opening and the consequence use the unit's first other claim.
+    const anchor = u.claims.find((k) => verdict(k) !== 'MYTH') ?? u.claims[0]!;
+    const beats: ArchitectSequence['beats'] = [
+      {
+        function: i === 0 ? 'COLD_OPEN' : 'STAKES',
+        basis: verdict(anchor) === 'MYTH' ? 'UNCERTAIN' : 'RECONSTRUCTION',
+        description: 'You stand at the edge of the crowd as the bidding starts (test).',
+        claimKeys: [anchor],
+        castIds: ['pov', ...real],
+        speech: [],
+      },
+    ];
+    if (context.length) {
+      const basis = context.every((c) => verdict(c.claimKey) === 'ESTABLISHED') ? 'DOCUMENTED' : 'UNCERTAIN';
+      beats.push({ function: 'ORIENTATION', basis, description: 'How the trade worked, in brief (test).', claimKeys: context.map((c) => c.claimKey), castIds: real.slice(0, 1), speech: [] });
+    }
+    const claimBeats = u.claims.length === 1 ? [u.claims[0]!, u.claims[0]!] : u.claims.slice(0, 4);
+    claimBeats.forEach((k, j) => {
+      const v = verdict(k);
+      const basis = o.allDocumented || v === 'ESTABLISHED' ? 'DOCUMENTED' : 'UNCERTAIN';
+      beats.push({
+        function: v === 'MYTH' ? 'INVESTIGATION' : DRAMA_FUNCTIONS[j % DRAMA_FUNCTIONS.length]!,
+        basis,
+        description: v === 'MYTH' ? 'The popular story is tested against the record (test).' : 'The record shows what happened next (test).',
+        claimKeys: [k, ...(j === 1 ? outside : [])],
+        castIds: [...real],
+        speech: [],
+      });
+    });
+    if (o.composite && i === 0) {
+      beats.push({ function: 'ESCALATION', basis: 'FICTION', description: `${o.composite.name.split(' ')[0]} counts his coins and watches the bidding from the back (test).`, claimKeys: [], castIds: ['F1'], speech: [{ speakerId: 'F1', text: 'Everyone here is buying paper, not flowers.', kind: 'INVENTED', claimKey: null }] });
+    }
+    beats.push({
+      function: verdict(anchor) === 'MYTH' ? 'INVESTIGATION' : 'CONSEQUENCE',
+      basis: o.allDocumented || verdict(anchor) === 'ESTABLISHED' ? 'DOCUMENTED' : 'UNCERTAIN',
+      description: 'What it cost, as far as the record goes (test).',
+      claimKeys: [anchor],
+      castIds: [...real],
+      speech: [],
+    });
+    if (o.inventPerson) beats[1]!.castIds = [...beats[1]!.castIds, 'X1'];
+    const allKeys = [...u.claims, ...outside, ...context.map((c) => c.claimKey)];
+    return {
+      title: `The story of ${u.key}`,
+      purpose: 'Moves the documentary on (test).',
+      mode: 'IMMERSIVE_RECONSTRUCTION',
+      candidateKeys: [u.key],
+      openingHook: 'What happened next?',
+      question: 'Why did it happen?',
+      conflict: 'A conflict (test).',
+      escalation: 'It escalates (test).',
+      reveal: 'A reveal (test).',
+      consequence: 'A consequence (test).',
+      endingBeat: 'And then… (test).',
+      transition: last ? '' : 'From here the story moves on (test).',
+      beats,
+      setting: { location: { value: 'a crowded tavern room (test)', basis: 'RECONSTRUCTION' }, date: { value: '', basis: 'RECONSTRUCTION' }, timeOfDay: { value: 'evening', basis: 'RECONSTRUCTION' } },
+      visual: {
+        environment: 'Candle-lit interior in winter (test).',
+        keyObjects: ['written contracts'],
+        physicalActions: ['a hand signing'],
+        emotionalState: 'tension',
+        visualMetaphor: 'paper blowing in the wind',
+        mustShow: [{ detail: 'the written contract', claimKeys: [anchor] }],
+        mustAvoid: ['modern clothing'],
+        shotIdeas: ['close-up on drying ink'],
+      },
+      continuity: {
+        carriesIn: n > 1 ? ['the unsettled contracts'] : [],
+        carriesOut: last ? [] : ['the unsettled contracts'],
+        opens: [{ id: `Q${n}`, question: 'What will it cost them (test)?' }],
+        resolves: [...(n > 1 ? [`Q${n - 1}`] : []), ...(last ? [`Q${n}`, 'Q0'] : [])],
+        timeJump: 'NONE',
+      },
+      claimKeys: [...u.claims, ...outside],
+      contextClaims: context,
+      presentation: presentationFor(allKeys),
+      estimatedDurationSec: o.secondsPerSequence ?? 120,
+    };
+  });
+
+  const out: ArchitectOutput = {
+    logline: 'Ordinary traders promise fortunes for flowers nobody can see, until the buyers stop coming (test).',
+    centralQuestion: 'Why did a flower trade end in court?',
+    centralHumanStakes: 'Their savings and their good name (test).',
+    narrativeMode: 'IMMERSIVE_RECONSTRUCTION',
+    secondaryModes: ['MYTH_VS_RECORD'],
+    povStrategy: { type: 'VIEWER_POV', description: 'The viewer is a newcomer among the traders (test).' },
+    cast,
+    thesis: 'The record tells a smaller, stranger story than the legend (test).',
+    narrativeSpine: 'From contracts to collapse to legend (test).',
+    resolution: 'The courts and the record answer it (test).',
+    orderNote: '',
+    sequences,
+    unusedCandidates: [],
+  };
+  return o.transform ? o.transform(out) : out;
+}
+
+/** The units of an architect prompt ("## S03 · … — title [TYPE]", "characters: …", "claims: …"). */
+export function parseFakeUnits(prompt: string): FakeUnit[] {
+  const section = prompt.slice(prompt.indexOf('# Selected story units'), prompt.indexOf('# Story evidence'));
+  return section
+    .split(/^## /m)
+    .slice(1)
+    .map((block) => ({
+      key: /^(S\d+)/.exec(block)?.[1] ?? '',
+      claims: (/^claims: (.*)$/m.exec(block)?.[1] ?? '').split(', ').filter(Boolean),
+      characters: (/^characters: (.*)$/m.exec(block)?.[1] ?? '')
+        .split('; ')
+        .map((c) => /^(.*) \((NAMED_PERSON|GROUP|ROLE)\):/.exec(c))
+        .filter((m): m is RegExpExecArray => m !== null)
+        .map((m) => ({ name: m[1]!, kind: m[2] as CharacterKind })),
+    }))
+    .filter((u) => u.key);
+}
+
+type ShownBeat = ArchitectSequence['beats'][number] & { id: string };
+type ShownSequence = Omit<ArchitectSequence, 'beats'> & { beats: ShownBeat[] };
+/** An architecture as the reviewers and the opportunities step see it: beat ids included. */
+export type ShownArchitecture = Omit<ArchitectOutput, 'sequences'> & { sequences: ShownSequence[] };
+
+/** The architecture JSON a reviewer or the opportunities step was shown. */
+function shownArchitecture(prompt: string): ShownArchitecture {
+  const json = /^# (?:Architecture|The architecture)[^\n]*\n([\s\S]*?)\n\n# Evidence/m.exec(prompt)?.[1];
+  if (!json) throw new Error('fake AI: no architecture in the prompt');
+  return JSON.parse(json);
+}
+
+/** Opportunities the fake proposes: a short per sequence (up to five), a long-form thread, and two the rules must remove. */
+export function fakeOpportunities(arch: ShownArchitecture): OpportunityOutput['opportunities'] {
+  const base = {
+    centralQuestion: 'What happens when nobody can see what they are buying?',
+    angle: 'One decision, followed to its consequence (test).',
+    escalation: 'Each bid raises the stakes (test).',
+    payoff: 'The contracts turn out to be promises (test).',
+    suggestedEnding: 'A question left hanging (test).',
+    visualConcept: 'Close on hands, contracts and candlelight (test).',
+    independent: true,
+    requiresContext: false,
+    contextNote: '',
+    whyItWorks: 'A clear hook and a payoff in under a minute (test).',
+  };
+  const shorts = arch.sequences.slice(0, 5).map((s, i) => {
+    const beats = s.beats.filter((b) => b.claimKeys.length > 0);
+    return {
+      ...base,
+      format: i === 1 ? ('BOTH' as const) : ('SHORT' as const),
+      title: `Short: ${s.title}`,
+      hook: 'Would you pay for a flower you have never seen?',
+      standalonePremise: 'A trade in promises, told in one scene (test).',
+      beatIds: beats.map((b) => b.id),
+      claimKeys: [...new Set(beats.flatMap((b) => b.claimKeys))],
+      castIds: [...new Set(beats.flatMap((b) => b.castIds))],
+      targetDurationSec: 45 + i * 10,
+      hookScore: 9 - i,
+      payoffScore: 7,
+      standaloneScore: 8 - (i % 2),
+      visualScore: 7,
+      emotionScore: 6,
+      paceScore: 8,
+    };
+  });
+  const firstBeats = arch.sequences.map((s) => s.beats.find((b) => b.claimKeys.length > 0)!).filter(Boolean);
+  return [
+    ...shorts,
+    {
+      ...base,
+      format: 'LONG_FORM',
+      title: 'The whole trade, from promise to court',
+      hook: 'How a trade in promises ended in court.',
+      standalonePremise: 'The documentary itself (test).',
+      beatIds: firstBeats.map((b) => b.id),
+      claimKeys: [...new Set(firstBeats.flatMap((b) => b.claimKeys))],
+      castIds: [],
+      targetDurationSec: 780,
+      independent: true,
+      hookScore: 7,
+      payoffScore: 8,
+      standaloneScore: 9,
+      visualScore: 7,
+      emotionScore: 7,
+      paceScore: 3,
+    },
+    { ...base, format: 'SHORT', title: 'A beat that does not exist', hook: 'Hook (test)?', standalonePremise: 'Premise (test).', beatIds: ['99.1'], claimKeys: [], castIds: [], targetDurationSec: 60, hookScore: 10, payoffScore: 10, standaloneScore: 10, visualScore: 10, emotionScore: 10, paceScore: 10 },
+    {
+      ...base,
+      format: 'SHORT',
+      title: 'The invented fortune',
+      hook: 'A fortune of 7,777 guilders vanished overnight.',
+      standalonePremise: 'Premise (test).',
+      beatIds: shorts[0]?.beatIds ?? [],
+      claimKeys: shorts[0]?.claimKeys ?? [],
+      castIds: [],
+      targetDurationSec: 60,
+      hookScore: 10,
+      payoffScore: 10,
+      standaloneScore: 10,
+      visualScore: 10,
+      emotionScore: 10,
+      paceScore: 10,
+    },
+  ];
+}
+
+// ── Fake AI ──────────────────────────────────────────────────────────────────
 
 export class FakeStoryAI implements AIProvider {
   readonly info: ProviderInfo = {
@@ -277,6 +590,8 @@ export class FakeStoryAI implements AIProvider {
   prompts: Record<string, string[]> = {};
   /** Fail the next call for this task with a transient error (the job is retried). */
   failNextTask: string | null = null;
+  /** Fail every call for this task with a permanent error (the step is reported unavailable). */
+  brokenTask: string | null = null;
   /** Successive story.mine responses (the last one repeats). */
   mineBatches: MinedCandidate[][] = [[...FAKE_VALID, ...FAKE_INVALID]];
   /** Critic support verdicts by candidate title (default SUPPORTED). */
@@ -286,10 +601,14 @@ export class FakeStoryAI implements AIProvider {
   /** Picks the proposed selection from the ranked keys. */
   selectKeys: (keys: string[]) => string[] = (keys) => [...keys.slice(0, 7), 'S99'];
   architectOptions: FakeArchitectOptions = {};
-  /** The reviewer adds the caveats the automated findings ask for. */
-  reviewFixesCaveats = false;
-  /** The reviewer turns story evidence from outside the selected units into labelled context claims. */
-  reviewMovesOutsideToContext = false;
+  /** The story editor's revision of the draft (default: none). */
+  storyEditorRevision: ((draft: ShownArchitecture) => ShownArchitecture | null) | null = null;
+  /** The story editor's answers to the quality-bar questions (default: all pass). */
+  storyEditorPasses = true;
+  /** The fact checker fixes what the automated findings report: presentation, mislabelled beats, story evidence from outside the selection. */
+  factCheckFixes = false;
+  /** The opportunities the fake proposes for an architecture (default: fakeOpportunities). */
+  opportunities: (arch: ShownArchitecture) => OpportunityOutput['opportunities'] = fakeOpportunities;
 
   async generateText(): Promise<TextGenerationResult> {
     throw new Error('not used by the story stages');
@@ -303,6 +622,7 @@ export class FakeStoryAI implements AIProvider {
       this.failNextTask = null;
       throw new ProviderError('fake-ai', 'overloaded (test)', true);
     }
+    if (this.brokenTask === req.task) throw new ProviderError('fake-ai', 'refused (test)', false);
     const object = this.respond(req.task, user);
     return {
       object: req.schema.parse(object),
@@ -317,7 +637,7 @@ export class FakeStoryAI implements AIProvider {
         return { candidates: this.mineBatches[Math.min(n, this.mineBatches.length - 1)]! } satisfies MiningOutput;
       }
       case 'story.critic': {
-        const found = [...user.matchAll(/^### (M\d+) — (.+) \[[A-Z_]+\]$/gm)].map((m) => ({ ref: m[1]!, title: m[2]! }));
+        const found = [...user.matchAll(/^### ([MK]\d+) — (.+) \[[A-Z_]+\]$/gm)].map((m) => ({ ref: m[1]!, title: m[2]! }));
         return {
           assessments: found
             .filter((c) => {
@@ -329,14 +649,23 @@ export class FakeStoryAI implements AIProvider {
               const support = this.support[c.title] ?? 'SUPPORTED';
               return {
                 candidateId: c.ref,
-                intrigue: 4 + ((i * 3) % 7),
-                humanDrama: 3 + ((i * 5) % 8),
-                stakes: 5 + (i % 5),
-                surprise: 2 + ((i * 7) % 9),
+                humanStakes: 3 + ((i * 5) % 8),
+                conflict: 5 + (i % 5),
+                mystery: 4 + ((i * 3) % 7),
                 escalation: 4 + ((i * 2) % 6),
+                characterPotential: 3 + ((i * 4) % 7),
                 visualPotential: 6 + (i % 4),
-                financialStakes: 3 + ((i * 4) % 7),
-                emotionalWeight: 4 + ((i * 6) % 6),
+                emotionalPotential: 4 + ((i * 6) % 6),
+                revealPotential: 2 + ((i * 7) % 9),
+                mythInvestigation: c.title.toLowerCase().includes('myth') || c.title.includes('ruin') || c.title.includes('sailor') ? 9 : 2,
+                significance: 5 + (i % 4),
+                relevance: 6 + (i % 3),
+                uniqueness: 3 + ((i * 2) % 6),
+                reasons: [
+                  { dimension: 'humanStakes', reason: `Who stands to lose in ${c.title} (test).` },
+                  { dimension: 'mystery', reason: 'An open question (test).' },
+                  { dimension: 'notADimension', reason: 'Ignored by the rules (test).' },
+                ],
                 rationale: `Test assessment of ${c.title}.`,
                 support,
                 problems: support === 'SUPPORTED' ? [] : ['An overstated statement (test).'],
@@ -353,89 +682,78 @@ export class FakeStoryAI implements AIProvider {
           workingPremise: 'A test premise about contracts and legend.',
           rationale: 'They work together (test).',
           alternates: keys.filter((k) => !chosen.includes(k)).slice(0, 2),
+          centralQuestion: 'Why did promises outrun the goods (test)?',
+          narrativeMode: 'IMMERSIVE_RECONSTRUCTION',
+          povStrategy: { type: 'VIEWER_POV', description: 'The viewer is a newcomer among the traders (test).' },
         } satisfies SelectionOutput;
       }
-      case 'story.architect':
-        return this.architect(user);
+      case 'story.architect': {
+        // Verdicts the prompt lists ("C006 PROBABLE → HEDGE"); every other claim is ESTABLISHED.
+        const verdicts = new Map([...user.matchAll(/(C\d+) ([A-Z]+) → [A-Z_]+/g)].map((m) => [m[1]!, m[2] as ClaimVerdict]));
+        return fakeArchitectOutput(parseFakeUnits(user), (k) => verdicts.get(k), this.architectOptions);
+      }
+      case 'story.storyEditor':
+        return this.storyEditor(user);
       case 'story.review':
-        return this.review(user);
+        return this.factCheck(user);
+      case 'story.opportunities':
+        return { opportunities: this.opportunities(shownArchitecture(user)) } satisfies OpportunityOutput;
       default:
         throw new Error(`unexpected task ${task}`);
     }
   }
 
-  private architect(user: string): ArchitectOutput {
-    const o = this.architectOptions;
-    const units: FakeUnit[] = user
-      .split(/^## /m)
-      .slice(1)
-      .map((block) => ({
-        key: /^(S\d+)/.exec(block)?.[1] ?? '',
-        claims: (/^claims: (.*)$/m.exec(block)?.[1] ?? '').split(', ').filter(Boolean),
-        characters: (/^characters: (.*)$/m.exec(block)?.[1] ?? '')
-          .split('; ')
-          .map((c) => c.replace(/ \([A-Z_]+\):.*$/, ''))
-          .filter(Boolean),
-      }))
-      .filter((u) => u.key);
-    const caveatKeys = [...(/^Claims that need a caveat.*: (.*)$/m.exec(user)?.[1] ?? '').matchAll(/(C\d+)/g)].map((m) => m[1]!);
-    const used = units.slice(0, o.useUnits ?? units.length);
+  private storyEditor(user: string): StoryEditorOutput {
+    const draft = shownArchitecture(user);
+    const revised = this.storyEditorRevision ? this.storyEditorRevision(structuredClone(draft)) : null;
+    const answer = (why: string) => ({ pass: this.storyEditorPasses, why });
     return {
-      premise: 'A test premise.',
-      centralQuestion: 'Why did a flower trade end in court?',
-      narrativeSpine: 'From contracts to collapse to legend (test).',
-      resolution: 'The courts and the record answer it (test).',
-      sequences: used.map((u, i) => {
-        const outside = i === 0 && o.outsideCore ? [o.outsideCore] : [];
-        const context = i === 0 ? (o.contextClaims ?? []) : [];
-        const cited = [...u.claims, ...outside, ...context.map((c) => c.claimKey)];
-        return {
-          title: `The story of ${u.key}`,
-          purpose: 'Test purpose.',
-          candidateKeys: [u.key],
-          openingHook: 'What happened next?',
-          narrativeQuestion: 'Why did it happen?',
-          keyEvents: [
-            { event: 'The first turn (test).', claimKeys: [u.claims[0]!] },
-            { event: 'The second turn (test).', claimKeys: [u.claims[1] ?? u.claims[0]!, ...outside] },
-          ],
-          characters: [...u.characters, ...(o.inventPerson ? [o.inventPerson] : [])],
-          conflict: 'A conflict (test).',
-          escalation: 'It escalates (test).',
-          reveal: 'A reveal (test).',
-          endingBeat: 'And then… (test).',
-          claimKeys: [...u.claims, ...outside],
-          contextClaims: context,
-          caveats: o.omitCaveats ? [] : cited.filter((k) => caveatKeys.includes(k)).map((k) => ({ claimKey: k, framing: 'Present it as disputed or as legend (test).' })),
-          estimatedDurationSec: o.secondsPerSequence ?? 120,
-        };
-      }),
-      unusedCandidates: [],
+      scores: { immersion: 7, humanStakes: 6, narrativeDrive: 7, continuity: 8, cinematicPotential: 7, clarity: 8 },
+      qualityBar: {
+        storyWithoutCitations: answer('The traders carry it (test).'),
+        compellingDocumentary: answer('It builds to the court (test).'),
+        truthAndExperience: answer('The legend is tested on screen (test).'),
+      },
+      issues: [{ severity: 'MINOR', description: 'The second sequence could open closer to the action (test).', sequenceNumbers: [2], claimKeys: [], fixedInRevision: revised !== null }],
+      revised,
     };
   }
 
-  private review(user: string): ArchitectureReviewOutput {
-    if (!this.reviewFixesCaveats && !this.reviewMovesOutsideToContext) {
+  private factCheck(user: string): ArchitectureReviewOutput {
+    if (!this.factCheckFixes) {
       return { issues: [{ severity: 'MINOR', description: 'Polish the hook (test).', sequenceNumbers: [1], claimKeys: [], fixedInRevision: false }], revised: null };
     }
-    const json = /# Architecture\n([\s\S]*?)\n\n# Evidence/.exec(user)?.[1];
-    const draft = JSON.parse(json!) as ArchitectOutput;
+    const draft = shownArchitecture(user);
     const issues: ArchitectureReviewOutput['issues'] = [];
-    if (this.reviewFixesCaveats) {
-      const missing = [...user.matchAll(/^- Sequence (\d+): uses (C\d+) \(/gm)].map((m) => ({ seq: Number(m[1]), key: m[2]! }));
-      for (const m of missing) draft.sequences[m.seq - 1]!.caveats.push({ claimKey: m.key, framing: 'Present it as disputed or as legend (review fix).' });
-      issues.push({ severity: 'CRITICAL', description: 'Disputed or myth claims told without caveats.', sequenceNumbers: missing.map((m) => m.seq), claimKeys: missing.map((m) => m.key), fixedInRevision: true });
+    const seq = (n: string) => draft.sequences[Number(n) - 1]!;
+    // Beats presented as documented on claims that are not ESTABLISHED, and myths outside an investigation: relabel them UNCERTAIN.
+    const mislabelled = [...user.matchAll(/^- Sequence (\d+): beat (\d+\.\d+) (?:is presented as documented fact but rests on|uses a MYTH claim)/gm)];
+    for (const m of mislabelled) {
+      const beat = seq(m[1]!).beats.find((b) => b.id === m[2]);
+      if (beat) beat.basis = 'UNCERTAIN';
     }
-    if (this.reviewMovesOutsideToContext) {
-      const outside = [...user.matchAll(/^- Sequence (\d+): uses (C\d+) as story evidence/gm)].map((m) => ({ seq: Number(m[1]), key: m[2]! }));
-      for (const m of outside) {
-        const sq = draft.sequences[m.seq - 1]!;
-        sq.claimKeys = sq.claimKeys.filter((k) => k !== m.key);
-        for (const e of sq.keyEvents) e.claimKeys = e.claimKeys.filter((k) => k !== m.key);
-        sq.contextClaims.push({ claimKey: m.key, purpose: 'Background only: explains the setting (review fix).' });
-      }
-      issues.push({ severity: 'CRITICAL', description: 'Story beats taken from claims outside the selection.', sequenceNumbers: outside.map((m) => m.seq), claimKeys: outside.map((m) => m.key), fixedInRevision: true });
+    if (mislabelled.length) issues.push({ severity: 'CRITICAL', description: 'Uncertain material presented as documented fact.', sequenceNumbers: mislabelled.map((m) => Number(m[1])), claimKeys: [], fixedInRevision: true });
+    // Presentation entries: added, or corrected to what the verdict requires.
+    const presentation = [...user.matchAll(/^- Sequence (\d+): (?:uses (C\d+) \((\w+)\) without saying how|presents (C\d+) \((\w+)\) as|the instruction for (C\d+) \((\w+)\))/gm)];
+    for (const m of presentation) {
+      const key = (m[2] ?? m[4] ?? m[6])!;
+      const verdict = (m[3] ?? m[5] ?? m[7]) as ClaimVerdict;
+      const s = seq(m[1]!);
+      const required = PRESENTATION_FOR_VERDICT[verdict];
+      s.presentation = [...s.presentation.filter((p) => p.claimKey !== key), { claimKey: key, presentation: required, instruction: `${FAKE_INSTRUCTIONS[required]} (review fix)` }];
     }
+    if (presentation.length) {
+      issues.push({ severity: 'CRITICAL', description: 'Uncertain material told without its presentation.', sequenceNumbers: presentation.map((m) => Number(m[1])), claimKeys: presentation.map((m) => (m[2] ?? m[4] ?? m[6])!), fixedInRevision: true });
+    }
+    // Story evidence from outside the selection becomes labelled background.
+    const outside = [...user.matchAll(/^- Sequence (\d+): uses (C\d+) as story evidence/gm)].map((m) => ({ seq: m[1]!, key: m[2]! }));
+    for (const m of outside) {
+      const s = seq(m.seq);
+      s.claimKeys = s.claimKeys.filter((k) => k !== m.key);
+      for (const b of s.beats) b.claimKeys = b.claimKeys.filter((k) => k !== m.key);
+      s.contextClaims.push({ claimKey: m.key, purpose: 'Background only: explains the setting (review fix).' });
+    }
+    if (outside.length) issues.push({ severity: 'CRITICAL', description: 'Story beats taken from claims outside the selection.', sequenceNumbers: outside.map((m) => Number(m.seq)), claimKeys: outside.map((m) => m.key), fixedInRevision: true });
     return { issues, revised: draft };
   }
 }

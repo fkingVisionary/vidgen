@@ -1,16 +1,27 @@
-import type { StoryScoreKey } from './contracts/story.ts';
+import type { HistoricalValueKey, OpportunityScoreKey, StoryScoreKey, StoryValueKey } from './contracts/story.ts';
 import type {
   ApprovalGate,
+  BeatFunction,
   CandidatePriority,
   CandidateStatus,
+  CastKind,
   ClaimVerdict,
+  ContentFormat,
   HistoricalStatus,
+  InformationClass,
   JobType,
+  NarrativeMode,
+  OpportunityStatus,
+  PovStrategy,
+  Presentation,
   ProjectStatus,
+  ReconstructionLevel,
   SourceType,
+  SpeechKind,
   Stage,
   StageState,
   StoryType,
+  TimeJump,
 } from './enums.ts';
 
 /** Human-readable labels for the dashboard. Kept out of the enums so copy can change freely. */
@@ -149,4 +160,137 @@ export const STORY_SCORE_LABELS: Record<StoryScoreKey, string> = {
   visualPotential: 'Visual potential',
   financialStakes: 'Economic significance',
   emotionalWeight: 'Emotional weight',
+};
+
+// ---------------------------------------------------------------------------
+// Story Engine 2.0
+// ---------------------------------------------------------------------------
+
+export const NARRATIVE_MODE_LABELS: Record<NarrativeMode, string> = {
+  IMMERSIVE_RECONSTRUCTION: 'Immersive reconstruction',
+  CHARACTER_FOLLOW: 'Character follow',
+  HISTORICAL_MYSTERY: 'Historical mystery',
+  INVESTIGATION: 'Investigation',
+  COUNTDOWN: 'Countdown',
+  SURVIVAL: 'Survival',
+  CONFLICT: 'Conflict',
+  RISE_AND_FALL: 'Rise and fall',
+  HEIST_OPERATION: 'Heist / operation',
+  JOURNEY: 'Journey',
+  COURTROOM_DISPUTE: 'Courtroom / dispute',
+  DISCOVERY: 'Discovery',
+  MYTH_VS_RECORD: 'Myth vs record',
+  PARALLEL_TIMELINE: 'Parallel timeline',
+  CAUSE_AND_EFFECT: 'Cause and effect',
+};
+
+export const INFORMATION_CLASS_LABELS: Record<InformationClass, string> = {
+  DOCUMENTED: 'Documented fact',
+  RECONSTRUCTION: 'Reconstruction',
+  UNCERTAIN: 'Uncertain history',
+  FICTION: 'Fictional device',
+};
+
+/** What each information class allows, for the dashboard legend. */
+export const INFORMATION_CLASS_HELP: Record<InformationClass, string> = {
+  DOCUMENTED: 'Stated directly. Rests only on ESTABLISHED claims.',
+  RECONSTRUCTION: 'A plausible scene built from documented circumstances. Never presented as a recorded event.',
+  UNCERTAIN: 'Probable, disputed, unverified or myth material, told with its presentation instruction.',
+  FICTION: 'A declared narrative device (POV, composite, invented dialogue). Carries no facts of its own.',
+};
+
+export const BEAT_FUNCTION_LABELS: Record<BeatFunction, string> = {
+  COLD_OPEN: 'Cold open',
+  ORIENTATION: 'Orientation',
+  STAKES: 'Stakes',
+  CONFLICT: 'Conflict',
+  ESCALATION: 'Escalation',
+  TURN: 'Turn',
+  REVEAL: 'Reveal',
+  CONSEQUENCE: 'Consequence',
+  INVESTIGATION: 'Investigation',
+  TRANSITION: 'Transition',
+};
+
+export const CAST_KIND_LABELS: Record<CastKind, string> = {
+  POV_PROXY: 'Fictional POV (the viewer)',
+  FICTIONAL_COMPOSITE: 'Fictional composite',
+  REAL_PERSON: 'Real person',
+  REAL_GROUP: 'Real group',
+  REAL_ROLE: 'Real role',
+};
+
+export const POV_STRATEGY_LABELS: Record<PovStrategy, string> = {
+  VIEWER_POV: 'Viewer POV ("you")',
+  COMPANION: 'Fictional companion',
+  CHARACTER_FOLLOW: 'Follow a real character',
+  INVESTIGATOR: 'Investigator',
+  NARRATOR: 'Narrator (no POV device)',
+};
+
+export const PRESENTATION_LABELS: Record<Presentation, string> = {
+  STATE: 'State as fact',
+  HEDGE: 'Hedge (probable)',
+  PRESENT_AS_DISPUTED: 'Present as disputed',
+  PRESENT_AS_UNCONFIRMED: 'Present as unconfirmed',
+  INVESTIGATE_AS_MYTH: 'Investigate as myth',
+};
+
+export const SPEECH_KIND_LABELS: Record<SpeechKind, string> = {
+  RECORDED_QUOTE: 'Recorded quote',
+  INVENTED: 'Invented line',
+};
+
+export const TIME_JUMP_LABELS: Record<TimeJump, string> = {
+  NONE: 'Continues',
+  FORWARD: 'Jumps forward',
+  FLASHBACK: 'Flashback',
+  PARALLEL: 'Parallel time',
+};
+
+export const RECONSTRUCTION_LEVEL_LABELS: Record<ReconstructionLevel, string> = {
+  NONE: 'None',
+  LOW: 'Low',
+  MEDIUM: 'Medium',
+  HIGH: 'High',
+};
+
+export const STORY_VALUE_LABELS: Record<StoryValueKey, string> = {
+  humanStakes: 'Human stakes',
+  conflict: 'Conflict',
+  mystery: 'Mystery / question',
+  escalation: 'Escalation',
+  characterPotential: 'Character potential',
+  visualPotential: 'Visual potential',
+  emotionalPotential: 'Emotional potential',
+  revealPotential: 'Reveal potential',
+  mythInvestigation: 'Myth / investigation potential',
+};
+
+export const HISTORICAL_VALUE_LABELS: Record<HistoricalValueKey, string> = {
+  evidenceQuality: 'Evidence quality',
+  significance: 'Historical significance',
+  relevance: 'Relevance',
+  uniqueness: 'Uniqueness',
+};
+
+export const CONTENT_FORMAT_LABELS: Record<ContentFormat, string> = {
+  LONG_FORM: 'Long-form',
+  SHORT: 'Short',
+  BOTH: 'Short + long-form',
+};
+
+export const OPPORTUNITY_STATUS_LABELS: Record<OpportunityStatus, string> = {
+  PROPOSED: 'Proposed',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+};
+
+export const OPPORTUNITY_SCORE_LABELS: Record<OpportunityScoreKey, string> = {
+  hook: 'Hook',
+  payoff: 'Payoff',
+  standalone: 'Standalone',
+  visual: 'Visual punch',
+  emotion: 'Emotional pull',
+  pace: 'Fits the short format',
 };

@@ -13,7 +13,8 @@ import { parseEnv } from './env.ts';
 import { ALL_MOCK, createProviders } from '@docengine/providers';
 import { FAKE_CORPUS_GATE, FakeResearchAI, FakeResearchProvider } from '@docengine/research/testing';
 import { FakeStoryAI, seedFakeDossier } from '@docengine/story/testing';
-import type { ResearchView, StoryView } from '@docengine/core';
+import { StoryArchitectureContent, type ResearchView, type StoryView } from '@docengine/core';
+import { Prisma } from '@docengine/database';
 
 const db = useTestDatabase();
 let open: { app: FastifyInstance; c: AppContainer }[] = [];
@@ -273,6 +274,166 @@ describe('story API', () => {
     expect(view.pack!.candidates.find((x) => x.title === first!.title)).toMatchObject({ status: 'APPROVED', priority: 'HIGH' });
     expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/story?pack=1` })).json<StoryView>()).toMatchObject({ editable: false, pack: { version: 1 } });
     expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/story?pack=7` })).statusCode).toBe(404);
+  });
+});
+
+describe('Story Engine 2.0 API', () => {
+  async function minedProject(app: FastifyInstance, c: AppContainer) {
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
+    await db.project.update({ where: { id: p.id }, data: { status: 'RESEARCH_COMPLETE', phaseSeq: 2 } });
+    await seedFakeDossier(db, p.id);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/mine`, payload: {} })).statusCode).toBe(202);
+    await c.runner.drain();
+    return p;
+  }
+  const story = async (app: FastifyInstance, id: string) => (await app.inject({ method: 'GET', url: `/api/projects/${id}/story` })).json<StoryView>();
+  const patch = (app: FastifyInstance, id: string, payload: Record<string, unknown>) => app.inject({ method: 'PATCH', url: `/api/story-candidates/${id}`, payload });
+  const decide = (app: FastifyInstance, id: string, payload: Record<string, unknown>) => app.inject({ method: 'PATCH', url: `/api/content-opportunities/${id}`, payload });
+
+  it('lets the editor retitle, re-angle and order the units, decide each opportunity, and request a content package', async () => {
+    const { app, c } = await start({}, { fakeStory: true });
+    const p = await minedProject(app, c);
+    let view = await story(app, p.id);
+    const pack = view.pack!;
+    expect(pack.engineVersion).toBe(2);
+    for (const cand of pack.candidates) {
+      expect(cand).toMatchObject({ engineVersion: 2, scores: { version: 2 }, editorOverrides: {}, selectionOrder: null });
+      expect(cand.storyValue).not.toBeNull();
+      expect(cand.historicalValue).not.toBeNull();
+      expect(cand.humanStakes).not.toBeNull();
+      expect(cand.storyDesign?.coldOpen.basis).toBeDefined();
+    }
+
+    // The editor's title, mode, central question and POV are kept beside the AI's; null restores the AI's.
+    const [first] = pack.candidates;
+    let res = await patch(app, first!.id, { title: 'Paper flowers', narrativeMode: 'HEIST_OPERATION', centralQuestion: 'Who was left holding the contracts?', povStrategy: { type: 'INVESTIGATOR', description: 'Open the notary files.' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<StoryView>().pack!.candidates[0]).toMatchObject({
+      title: 'Paper flowers',
+      aiTitle: first!.title,
+      narrativeMode: 'HEIST_OPERATION',
+      aiNarrativeMode: first!.aiNarrativeMode,
+      centralQuestion: 'Who was left holding the contracts?',
+      povStrategy: { type: 'INVESTIGATOR', description: 'Open the notary files.' },
+      editorOverrides: { title: 'Paper flowers', narrativeMode: 'HEIST_OPERATION', centralQuestion: 'Who was left holding the contracts?', povStrategy: { type: 'INVESTIGATOR', description: 'Open the notary files.' } },
+    });
+    res = await patch(app, first!.id, { title: null });
+    expect(res.json<StoryView>().pack!.candidates[0]).toMatchObject({ title: first!.title, narrativeMode: 'HEIST_OPERATION' });
+    expect(res.json<StoryView>().pack!.candidates[0]!.editorOverrides).not.toHaveProperty('title');
+    expect((await patch(app, first!.id, { narrativeMode: 'NOT_A_MODE' })).statusCode).toBe(400);
+
+    // The editor's order: exactly the current selection, or nothing changes.
+    const selected = pack.candidates.filter((x) => x.selected).map((x) => x.id);
+    const order = (candidateIds: string[]) => app.inject({ method: 'PUT', url: `/api/projects/${p.id}/story/selection-order`, payload: { candidateIds } });
+    expect((await order(selected.slice(1))).statusCode).toBe(409);
+    res = await order([...selected].reverse());
+    expect(res.statusCode).toBe(200);
+    view = res.json<StoryView>();
+    expect(selected.map((id) => view.pack!.candidates.find((x) => x.id === id)!.selectionOrder)).toEqual(selected.map((_, i) => selected.length - i));
+    expect(await db.projectEvent.count({ where: { projectId: p.id, type: 'SELECTION_REORDERED' } })).toBe(1);
+
+    // The architect works in the editor's order, with the editor's angle.
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture`, payload: { preferences: { centralQuestion: 'Why did a promise become a legend?' } } })).statusCode).toBe(202);
+    await c.runner.drain();
+    const prompt = (c.providers.ai as FakeStoryAI).prompts['story.architect']![0]!;
+    const lastKey = pack.candidates.find((x) => x.id === selected.at(-1))!.key;
+    expect(prompt).toMatch(new RegExp(`^## ${lastKey} · #1 in the editor's order`, 'm'));
+    expect(prompt).toContain('- central question: Why did a promise become a legend?');
+    expect(prompt).toContain('told as: HEIST_OPERATION; POV INVESTIGATOR (Open the notary files.)');
+
+    view = await story(app, p.id);
+    const arch = view.architecture!;
+    expect(arch).toMatchObject({ engineVersion: 2, status: 'IN_REVIEW', opportunities: { shorts: 5, longForm: 1, approved: 0 }, content: { engineVersion: 2 } });
+    expect(arch.opportunityList.map((o) => `${o.key} ${o.format} ${o.rank ?? '-'}`)).toEqual(['O01 SHORT 1', 'O02 BOTH 2', 'O03 SHORT 3', 'O04 SHORT 4', 'O05 SHORT 5', 'O06 LONG_FORM -']);
+    for (const o of arch.opportunityList) {
+      expect(o).toMatchObject({ status: 'PROPOSED', eligible: false, architectureVersion: 1 });
+      expect(o.claimIds).toHaveLength(o.content!.claimKeys.length);
+      expect(o.content!.claimKeys.every((k) => arch.evidence.claims.some((x) => x.key === k))).toBe(true);
+    }
+    expect(view.architectures[0]).toMatchObject({ engineVersion: 2, opportunities: { shorts: 5, longForm: 1, approved: 0 } });
+
+    // Nothing is eligible before the architecture is approved.
+    let pkg = (await app.inject({ method: 'GET', url: `/api/projects/${p.id}/content-package?shorts=3` })).json();
+    expect(pkg).toMatchObject({ generated: false, documentary: { included: false, eligible: false }, shorts: { requested: 3, available: 0, returned: 0, items: [] }, architecture: { version: 1, status: 'IN_REVIEW' } });
+    expect(pkg.notes).toContain('Story architecture v1 is IN_REVIEW: nothing is eligible until an architecture is approved.');
+
+    // The editor decides each opportunity; the architecture decision is separate.
+    const [o1, o2, o3, o4, , o6] = arch.opportunityList;
+    for (const o of [o1!, o2!, o3!, o6!]) expect((await decide(app, o.id, { status: 'APPROVED' })).json()).toMatchObject({ status: 'APPROVED', decidedBy: 'dashboard', eligible: false });
+    expect((await decide(app, o4!.id, { status: 'REJECTED', editorNotes: 'Too close to O03.' })).json()).toMatchObject({ status: 'REJECTED', editorNotes: 'Too close to O03.' });
+    expect((await decide(app, o4!.id, { status: 'MAYBE' })).statusCode).toBe(400);
+    expect((await decide(app, '0190a0a0-0000-7000-8000-000000000000', { status: 'APPROVED' })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/approvals`, payload: { gate: 'STORY', decision: 'APPROVED' } })).statusCode).toBe(201);
+    expect((await story(app, p.id)).architecture!.opportunities).toEqual({ shorts: 5, longForm: 1, approved: 4 });
+
+    // The package: the approved documentary plus the top approved shorts by rank; nothing generated.
+    pkg = (await app.inject({ method: 'GET', url: `/api/projects/${p.id}/content-package?documentary=true&shorts=2&languages=en,es,de` })).json();
+    expect(pkg).toMatchObject({
+      request: { documentary: true, shorts: 2, languages: ['en', 'es', 'de'] },
+      architecture: { version: 1, status: 'APPROVED' },
+      documentary: { included: true, eligible: true, reason: null },
+      shorts: { requested: 2, available: 3, returned: 2 },
+      generated: false,
+      languages: { requested: ['en', 'es', 'de'] },
+    });
+    expect(pkg.shorts.items.map((o: { key: string; eligible: boolean }) => `${o.key} ${o.eligible}`)).toEqual(['O01 true', 'O02 true']);
+    expect(pkg.longForm.map((o: { key: string }) => o.key)).toEqual(['O06']);
+    expect(pkg.languages.note).toMatch(/^Localization is not built yet/);
+
+    const post = (payload: unknown) => app.inject({ method: 'POST', url: `/api/projects/${p.id}/content-package`, payload: payload as Record<string, unknown> });
+    pkg = (await post({ documentary: true, shorts: 6, languages: ['en', 'es', 'de'] })).json();
+    expect(pkg.shorts).toMatchObject({ requested: 6, available: 3, returned: 3 });
+    expect(pkg.notes).toContain('6 shorts requested; 3 approved short opportunities are available.');
+    expect((await post({ shorts: 'all' })).json().shorts.returned).toBe(3);
+    expect((await post({ documentary: false, shorts: 1 })).json()).toMatchObject({ documentary: { included: false, eligible: true }, shorts: { returned: 1 } });
+    expect((await post({ shorts: 99 })).statusCode).toBe(400);
+    expect((await post({ languages: ['english'] })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/content-package?shorts=abc` })).statusCode).toBe(400);
+    // Reading the package changes nothing.
+    expect(await db.contentOpportunity.count({ where: { projectId: p.id, status: 'APPROVED' } })).toBe(4);
+  });
+
+  it('keeps serving engine-1 packs and architectures beside engine-2 ones', async () => {
+    const { app, c } = await start({}, { fakeStory: true });
+    const p = await minedProject(app, c);
+    // What an engine-1 pack looks like after the additive migration: engine_version 1, v1 scores, the new columns empty.
+    const pack = await db.storyPack.findFirstOrThrow({ where: { projectId: p.id } });
+    await db.storyPack.update({ where: { id: pack.id }, data: { engineVersion: 1 } });
+    await db.storyCandidate.updateMany({
+      where: { packId: pack.id },
+      data: {
+        scores: { intrigue: 7, humanDrama: 6, stakes: 7, surprise: 5, escalation: 6, visualPotential: 7, financialStakes: 8, emotionalWeight: 5, appeal: 6.6, rationale: 'Engine-1 scores (test).' },
+        narrativeMode: null,
+        centralQuestion: null,
+        povStrategy: Prisma.DbNull,
+        humanStakes: Prisma.DbNull,
+        storyDesign: Prisma.DbNull,
+        reconstructionLevel: null,
+        storyValue: null,
+        historicalValue: null,
+      },
+    });
+    const candidates = await db.storyCandidate.findMany({ where: { packId: pack.id }, orderBy: { rank: 'asc' } });
+    const v1 = StoryArchitectureContent.parse({
+      premise: 'An engine-1 premise.',
+      centralQuestion: 'Why did it end in court?',
+      narrativeSpine: 'Spine.',
+      resolution: 'Answer.',
+      sequences: [
+        { number: 1, title: 'The contracts', purpose: 'Opens.', candidateIds: [candidates[0]!.id], candidateKeys: [candidates[0]!.candidateKey], openingHook: 'Hook.', narrativeQuestion: 'Q?', keyEvents: [{ event: 'E', claimKeys: ['C001'] }], characters: [], conflict: '', escalation: '', reveal: '', endingBeat: '', claimKeys: ['C001'], sourceIds: [], caveats: [], historicalStatus: 'ESTABLISHED', historicalConfidence: 9, estimatedDurationSec: 120 },
+      ],
+      unusedCandidates: [],
+    });
+    await db.storyArchitecture.create({ data: { projectId: p.id, dossierId: pack.dossierId, packId: pack.id, version: 1, engineVersion: 1, status: 'APPROVED', content: v1, targetDurationSec: 750, estimatedDurationSec: 120, qualityPassed: true } });
+
+    const view = await story(app, p.id);
+    expect(view.pack).toMatchObject({ engineVersion: 1 });
+    expect(view.pack!.candidates[0]).toMatchObject({ engineVersion: 1, scores: { intrigue: 7, appeal: 6.6 }, storyValue: null, humanStakes: null, storyDesign: null, narrativeMode: null, povStrategy: null });
+    expect(view.architecture).toMatchObject({ engineVersion: 1, opportunities: { shorts: 0, longForm: 0, approved: 0 }, opportunityList: [], content: { premise: 'An engine-1 premise.' } });
+    expect(view.architecture!.evidence.claims.map((x) => x.key)).toEqual(['C001']);
+    const pkg = (await app.inject({ method: 'GET', url: `/api/projects/${p.id}/content-package` })).json();
+    expect(pkg).toMatchObject({ documentary: { included: true, eligible: true }, shorts: { available: 0, returned: 0 }, architecture: { version: 1, logline: null, centralQuestion: 'Why did it end in court?' } });
+    expect(pkg.notes).toContain('Architecture v1 was built by story engine 1, which does not identify content opportunities.');
   });
 });
 

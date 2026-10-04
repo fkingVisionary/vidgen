@@ -1,13 +1,16 @@
 import {
+  CURRENT_STORY_ENGINE,
+  HumanStakes,
+  MythThread,
+  PovChoice,
   QualityReport,
+  StoryCharacter,
+  StoryDesign,
   StoryJobInput,
   StoryPackContent,
-  StoryScores,
-  StoryCharacter,
-  MythThread,
+  StoryScoresV2,
   historicalConfidenceOf,
   historicalStatusOf,
-  rankScore,
   runtimeTarget,
   type RuntimeTarget,
 } from '@docengine/core';
@@ -17,20 +20,34 @@ import { z } from 'zod';
 import { StepCheckpoint } from './checkpoint.ts';
 import { DEFAULT_STORY_CONFIG, type StoryConfig } from './config.ts';
 import { EvidenceBase } from './evidence.ts';
-import { applyAssessments, byRank, normalizeMined, normalizeSelection, type DraftCandidate, type KnownCandidate, type PackCandidate, type RemovedCandidate, type ScoredCandidate } from './mining.ts';
+import {
+  applyAssessments,
+  byRank,
+  legacyStoryFields,
+  NOT_SCORED,
+  normalizeMined,
+  normalizeSelection,
+  scoresFrom,
+  type DraftCandidate,
+  type KnownCandidate,
+  type PackCandidate,
+  type RemovedCandidate,
+  type ScoredCandidate,
+} from './mining.ts';
 import { PROMPT_VERSION, criticSystemPrompt, miningSystemPrompt, miningUserPrompt, selectionSystemPrompt } from './prompts.ts';
 import { computeMiningReport } from './quality.ts';
 import { CriticOutput, MiningOutput, SelectionOutput } from './schemas.ts';
 import { CostCeiling, countBy, renderCandidateForCritic } from './util.ts';
 
 /**
- * STORY_MINING stage. Mines the project's approved research dossier for
- * story units (not facts), checks every one against the evidence, has a
- * critic score its appeal and support, ranks them (appeal weighted by
- * historical confidence) and proposes a selection for the documentary.
+ * STORY_MINING stage (Story Engine 2.0). Mines the project's approved
+ * research dossier for human stories (not facts), checks every one against
+ * the evidence, has a critic score its STORY VALUE and HISTORICAL VALUE
+ * separately (with a reason per dimension), ranks them by STORY APPEAL and
+ * proposes a selection, a central question, a narrative mode and a POV.
  *
- *   mine → evidence rules → critic (scores + support) → [top-up] → rank
- *        → proposed selection → mining gate → story pack vN
+ *   [score carried engine-1 units] → mine → evidence rules → critic
+ *        → [top-up] → rank → proposed selection → mining gate → story pack vN
  *
  * Candidates the editor approved or flagged in the previous pass are carried
  * into the new pack; rejected ones are not proposed again. Nothing is
@@ -41,7 +58,7 @@ export function createStoryMiningStage(overrides: Partial<StoryConfig> = {}): St
   return { type: 'STORY_MINING', mock: false, run: (ctx) => new MiningRun(ctx, cfg).run() };
 }
 
-const STEPS = ['mine', 'score', 'rescore', 'topUp', 'topUpScore', 'topUpRescore', 'select'] as const;
+const STEPS = ['carriedScore', 'mine', 'score', 'rescore', 'topUp', 'topUpScore', 'topUpRescore', 'select'] as const;
 type Step = (typeof STEPS)[number];
 
 interface Stats {
@@ -63,6 +80,8 @@ interface Stats {
 interface Prior {
   version: number;
   carried: PackCandidate[];
+  /** Carried from an engine-1 pack: scored again by the engine-2 critic before ranking. */
+  legacy: PackCandidate[];
   rejected: { key: string; title: string; hook: string; editorNotes: string | null; claimKeys: string[] }[];
 }
 
@@ -112,7 +131,7 @@ class MiningRun {
       { dossierId: dossier.id, editorNotes },
     );
 
-    const carried = prior?.carried ?? [];
+    const carried = [...(prior?.carried ?? []), ...(await this.scoreLegacy(prior?.legacy ?? [], evidence))];
     const known: KnownCandidate[] = carried.map((c) => ({ label: `${c.title} (carried over)`, title: c.title, claimKeys: c.claimKeys }));
     const rejected: KnownCandidate[] = (prior?.rejected ?? []).map((r) => ({ label: r.title, title: r.title, claimKeys: r.claimKeys }));
     const removed: RemovedCandidate[] = [];
@@ -175,7 +194,7 @@ class MiningRun {
     });
 
     // 5. Propose a selection for the documentary (the editor decides).
-    let proposal: SelectionOutput = { selected: [], workingPremise: '', rationale: '', alternates: [] };
+    let proposal: SelectionOutput = { selected: [], workingPremise: '', rationale: '', alternates: [], centralQuestion: '', narrativeMode: 'CAUSE_AND_EFFECT', povStrategy: { type: 'NARRATOR', description: '' } };
     if (pool.length > 0) proposal = await this.steps.step('select', SelectionOutput, () => this.select(pool, target, editorNotes));
     else await this.steps.skip('select');
     const selection = normalizeSelection(proposal, pool, cfg.limits.selection);
@@ -191,7 +210,15 @@ class MiningRun {
     this.stats.resumedSteps = [...this.steps.reused];
     this.stats.durationMs = Date.now() - started;
     const content: StoryPackContent = {
-      selection: { candidateKeys: selection.keys, workingPremise: selection.workingPremise, rationale: selection.rationale, alternates: selection.alternates },
+      selection: {
+        candidateKeys: selection.keys,
+        workingPremise: selection.workingPremise,
+        rationale: selection.rationale,
+        alternates: selection.alternates,
+        centralQuestion: selection.centralQuestion,
+        narrativeMode: pool.length > 0 ? selection.narrativeMode : null,
+        povStrategy: pool.length > 0 ? selection.povStrategy : null,
+      },
       removed: removed.map((r) => ({ title: r.title, storyType: r.storyType, reason: r.reason, claimKeys: r.claimKeys })),
       carriedOver: pool.filter((c) => c.carriedFrom).map((c) => ({ fromPackVersion: c.carriedFrom!.packVersion, fromKey: c.carriedFrom!.key, key: c.key })),
       editorNotes,
@@ -202,9 +229,15 @@ class MiningRun {
     const failed = report.checks.filter((c) => c.status === 'FAIL').map((c) => `${c.label} (${c.detail})`);
     await ctx.progress(`Story pack v${pack.version} saved: ${pool.length} candidates, ${selection.keys.length} proposed for the documentary — quality gate ${report.passed ? 'PASSED' : 'FAILED'}`, {
       packId: pack.id,
-      ranked: pool.map((c) => `${c.key} ${c.title} [${c.storyType}, ${c.historicalStatus} ${c.historicalConfidence}/10, rank ${c.rankScore}]`),
+      ranked: pool.map(
+        (c) =>
+          `${c.key} ${c.title} [${c.narrativeMode}, appeal ${c.rankScore} = story ${c.storyValue} × history ${c.historicalValue}; ${c.historicalStatus} ${c.historicalConfidence}/10${c.storyDesign.humanStory ? '' : '; no human story'}]`,
+      ),
       selection: selection.keys,
       workingPremise: selection.workingPremise,
+      centralQuestion: selection.centralQuestion,
+      narrativeMode: selection.narrativeMode,
+      povStrategy: selection.povStrategy,
       failedChecks: failed,
     });
     if (!report.passed) {
@@ -331,7 +364,8 @@ class MiningRun {
     const lines = pool.map((c) => {
       const editor = c.status !== 'PROPOSED' || c.priority !== 'NORMAL' ? ` [editor: ${c.status}${c.priority !== 'NORMAL' ? `, ${c.priority} priority` : ''}${c.editorNotes ? ` — ${c.editorNotes}` : ''}]` : '';
       const people = c.characters.map((ch) => ch.name).join(', ');
-      return `${c.key} · rank ${c.rank} · score ${c.rankScore} · ${c.historicalStatus} ${c.historicalConfidence}/10 · ${c.storyType}${editor}\n   ${c.title} — ${c.hook}\n   ${c.timePeriod}; ${people}\n   viewer question: ${c.viewerQuestion}`;
+      const stakes = c.storyDesign.humanStory ? `${c.humanStakes.protagonist} — could gain: ${c.humanStakes.couldGain || '—'}; could lose: ${c.humanStakes.couldLose || '—'}` : 'no human story found';
+      return `${c.key} · rank ${c.rank} · appeal ${c.rankScore} (story ${c.storyValue}, history ${c.historicalValue}) · ${c.historicalStatus} ${c.historicalConfidence}/10 · ${c.storyType} · ${c.narrativeMode}${editor}\n   ${c.title} — ${c.hook}\n   ${c.timePeriod}; ${people}\n   human stakes: ${stakes}\n   viewer question: ${c.viewerQuestion}`;
     });
     const r = await ctx.callProvider(
       'ai',
@@ -368,6 +402,7 @@ class MiningRun {
     });
     if (!pack) return null;
     const carried: PackCandidate[] = [];
+    const legacy: PackCandidate[] = [];
     const rejected: Prior['rejected'] = [];
     for (const c of pack.candidates) {
       const claimKeys = [...evidence.claims.keys()].filter((k) => c.claims.some((x) => x.claim.claimKey === k));
@@ -376,15 +411,34 @@ class MiningRun {
         continue;
       }
       if (c.status !== 'APPROVED' && c.status !== 'FLAGGED') continue;
-      const scores = StoryScores.safeParse(c.scores);
       const characters = z.array(StoryCharacter).safeParse(c.characters);
       const myth = c.mythThread === null ? { success: true as const, data: null } : MythThread.safeParse(c.mythThread);
-      if (!scores.success || !characters.success || !myth.success || claimKeys.length === 0) {
+      if (!characters.success || !myth.success || claimKeys.length === 0) {
         this.ctx.logger.warn({ candidateId: c.id }, 'carried-over candidate has invalid stored data; not carried');
         continue;
       }
       const confidence = historicalConfidenceOf(evidence.storyClaims(claimKeys));
-      carried.push({
+      const historicalStatus = historicalStatusOf(claimKeys.map((k) => evidence.claim(k)!.verdict));
+      // Engine-2 data when the candidate has it; otherwise derived from what it already says, and scored again.
+      const scores = StoryScoresV2.safeParse(c.scores);
+      const humanStakes = HumanStakes.safeParse(c.humanStakes);
+      const storyDesign = StoryDesign.safeParse(c.storyDesign);
+      const pov = PovChoice.safeParse(c.povStrategy);
+      const isV2 = scores.success && humanStakes.success && storyDesign.success && pov.success && c.narrativeMode !== null;
+      const base = { storyType: c.storyType, characters: characters.data, hook: c.hook, setting: c.setting, stakes: c.stakes, conflict: c.conflict, turningPoint: c.turningPoint, viewerQuestion: c.viewerQuestion };
+      const story2 = isV2
+        ? {
+            humanStakes: humanStakes.data,
+            storyDesign: storyDesign.data,
+            narrativeMode: c.narrativeMode!,
+            povStrategy: pov.data,
+            centralQuestion: c.centralQuestion ?? c.viewerQuestion,
+            reconstructionLevel: c.reconstructionLevel ?? 'LOW',
+          }
+        : legacyStoryFields(base);
+      // Recomputed on this pass's evidence: history moves with the evidence quality.
+      const v2Scores = isV2 ? rescore(scores.data, confidence, myth.data, historicalStatus) : null;
+      (isV2 ? carried : legacy).push({
         title: c.title,
         hook: c.hook,
         storyType: c.storyType,
@@ -400,13 +454,17 @@ class MiningRun {
         whyInteresting: c.whyInteresting,
         viewerQuestion: c.viewerQuestion,
         mythThread: myth.data,
+        ...story2,
         claimKeys,
         notes: c.notes ? [c.notes] : [],
-        historicalStatus: historicalStatusOf(claimKeys.map((k) => evidence.claim(k)!.verdict)),
+        historicalStatus,
         historicalConfidence: confidence,
         sourceIds: evidence.sourcesFor(claimKeys),
-        scores: scores.data,
-        rankScore: rankScore(scores.data.appeal, confidence),
+        // Placeholder for engine-1 candidates until scoreLegacy replaces it.
+        scores: v2Scores ?? EMPTY_SCORES,
+        rankScore: v2Scores?.appeal ?? 0,
+        storyValue: v2Scores?.storyValue ?? 0,
+        historicalValue: v2Scores?.historicalValue ?? 0,
         key: c.candidateKey,
         rank: c.rank,
         status: c.status,
@@ -417,7 +475,29 @@ class MiningRun {
         carriedFrom: { packVersion: pack.version, key: c.candidateKey },
       });
     }
-    return { version: pack.version, carried, rejected };
+    return { version: pack.version, carried, legacy, rejected };
+  }
+
+  /**
+   * Candidates the editor approved or flagged in an engine-1 pack are scored
+   * by the engine-2 critic before they join the ranking. They stay in the pack
+   * whatever the critic says (the editor chose them); its concerns become notes.
+   */
+  private async scoreLegacy(legacy: readonly PackCandidate[], evidence: EvidenceBase): Promise<PackCandidate[]> {
+    if (legacy.length === 0) {
+      await this.steps.skip('carriedScore');
+      return [];
+    }
+    const drafts: DraftCandidate[] = legacy.map((c, i) => ({ ...c, ref: `K${String(i + 1).padStart(2, '0')}` }));
+    const out = await this.steps.step('carriedScore', CriticOutput, () => this.critic(drafts, evidence));
+    const byRef = new Map(out.assessments.map((a) => [a.candidateId.trim(), a]));
+    return legacy.map((c, i) => {
+      const a = byRef.get(drafts[i]!.ref);
+      if (!a) return { ...c, scores: { ...EMPTY_SCORES, rationale: NOT_SCORED }, notes: [...c.notes, 'Carried from an engine-1 pack; the critic did not score it (its scores are zero, not assessed).'] };
+      const scores = scoresFrom(a, c);
+      const concern = a.support === 'SUPPORTED' ? [] : [`Critic (${a.support}): ${(a.caveat ?? '').trim() || a.problems.join('; ') || a.rationale}`];
+      return { ...c, scores, rankScore: scores.appeal, storyValue: scores.storyValue, historicalValue: scores.historicalValue, notes: [...c.notes, ...concern] };
+    });
   }
 
   // ── Persist ────────────────────────────────────────────────────────────────
@@ -437,6 +517,7 @@ class MiningRun {
             projectId: project.id,
             dossierId,
             version: (last?.version ?? 0) + 1,
+            engineVersion: CURRENT_STORY_ENGINE,
             status: report.passed ? 'IN_REVIEW' : 'DRAFT',
             content: contentJson as unknown as Prisma.InputJsonValue,
             qualityReport: reportJson as unknown as Prisma.InputJsonValue,
@@ -468,6 +549,14 @@ class MiningRun {
             viewerQuestion: c.viewerQuestion,
             mythThread: c.mythThread ? (c.mythThread as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
             scores: c.scores as unknown as Prisma.InputJsonValue,
+            storyValue: c.storyValue,
+            historicalValue: c.historicalValue,
+            narrativeMode: c.narrativeMode,
+            centralQuestion: c.centralQuestion || null,
+            povStrategy: c.povStrategy as unknown as Prisma.InputJsonValue,
+            humanStakes: c.humanStakes as unknown as Prisma.InputJsonValue,
+            storyDesign: c.storyDesign as unknown as Prisma.InputJsonValue,
+            reconstructionLevel: c.reconstructionLevel,
             historicalStatus: c.historicalStatus,
             historicalConfidence: c.historicalConfidence,
             rankScore: c.rankScore,
@@ -496,6 +585,32 @@ class MiningRun {
   private noteModel(model: string | undefined) {
     if (model && !this.stats.models.includes(model)) this.stats.models.push(model);
   }
+}
+
+/** A placeholder until an engine-1 candidate is scored (never persisted: scoreLegacy replaces it). */
+const EMPTY_SCORES: StoryScoresV2 = {
+  version: 2,
+  story: { humanStakes: 0, conflict: 0, mystery: 0, escalation: 0, characterPotential: 0, visualPotential: 0, emotionalPotential: 0, revealPotential: 0, mythInvestigation: 0 },
+  mythApplicable: false,
+  history: { evidenceQuality: 0, significance: 0, relevance: 0, uniqueness: 0 },
+  storyValue: 0,
+  historicalValue: 0,
+  appeal: 0,
+  reasons: [],
+  rationale: '',
+};
+
+/** Engine-2 scores of a carried candidate, recomputed on this pass's evidence (the critic's numbers are kept). */
+function rescore(s: StoryScoresV2, confidence: number, myth: unknown, historicalStatus: PackCandidate['historicalStatus']): StoryScoresV2 {
+  const assessment = {
+    ...s.story,
+    significance: s.history.significance,
+    relevance: s.history.relevance,
+    uniqueness: s.history.uniqueness,
+    reasons: s.reasons,
+    rationale: s.rationale,
+  };
+  return scoresFrom(assessment as Parameters<typeof scoresFrom>[0], { historicalConfidence: confidence, mythThread: myth, historicalStatus });
 }
 
 function toPackCandidate(s: ScoredCandidate): PackCandidate {

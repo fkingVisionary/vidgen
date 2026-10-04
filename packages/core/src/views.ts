@@ -10,8 +10,13 @@ import type {
   ClaimType,
   ClaimVerdict,
   ConfidenceLevel,
+  ContentFormat,
   CostBasis,
   HistoricalStatus,
+  NarrativeMode,
+  OpportunityStatus,
+  ReconstructionLevel,
+  StoryEngineVersion,
   JobStatus,
   JobType,
   LanguageVersionStatus,
@@ -22,7 +27,18 @@ import type {
   StoryType,
 } from './enums.ts';
 import type { QualityReport, ResearchDossierContent } from './contracts/research.ts';
-import type { MythThread, StoryArchitectureContent, StoryCharacter, StoryPackContent, StoryScores } from './contracts/story.ts';
+import type {
+  AnyStoryArchitectureContent,
+  AnyStoryScores,
+  CandidateOverrides,
+  ContentOpportunityContent,
+  HumanStakes,
+  MythThread,
+  PovChoice,
+  StoryCharacter,
+  StoryDesign,
+  StoryPackContent,
+} from './contracts/story.ts';
 import type { AvailableActions } from './pipeline.ts';
 import type { StageView } from './stages.ts';
 
@@ -209,6 +225,7 @@ export interface ArtifactCostView {
 export interface StoryPackSummaryView {
   id: string;
   version: number;
+  engineVersion: StoryEngineVersion;
   status: ArtifactStatus;
   qualityPassed: boolean | null;
   candidateCount: number;
@@ -219,6 +236,9 @@ export interface StoryPackSummaryView {
 export interface StoryArchitectureSummaryView {
   id: string;
   version: number;
+  engineVersion: StoryEngineVersion;
+  /** Content opportunities identified in this architecture (engine 2). */
+  opportunities: { shorts: number; longForm: number; approved: number };
   status: ArtifactStatus;
   qualityPassed: boolean | null;
   packVersion: number | null;
@@ -233,10 +253,62 @@ export interface StorySummaryView {
   architecture: StoryArchitectureSummaryView | null;
 }
 
+/** A content opportunity found in an architecture: a structured brief, never a script or a video. */
+export interface ContentOpportunityView {
+  id: string;
+  key: string;
+  architectureId: string;
+  architectureVersion: number;
+  format: ContentFormat;
+  status: OpportunityStatus;
+  /** Rank among SHORT and BOTH opportunities by short-form potential (1 = best); null for LONG_FORM. */
+  rank: number | null;
+  /** SHORT-FORM POTENTIAL, 0–10. */
+  shortScore: number | null;
+  title: string;
+  hook: string;
+  centralQuestion: string;
+  targetDurationSec: number | null;
+  independent: boolean;
+  requiresContext: boolean;
+  historicalStatus: HistoricalStatus;
+  historicalConfidence: number;
+  content: ContentOpportunityContent | null;
+  /** Ids of the approved dossier's claims it rests on (research_claims.id). */
+  claimIds: string[];
+  editorNotes: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  /** Approved by the editor and built on an approved architecture: usable by a future production request. */
+  eligible: boolean;
+  createdAt: string;
+}
+
+/**
+ * What a content package request would contain today: the approved long-form
+ * documentary and the top approved short opportunities. Nothing is generated.
+ */
+export interface ContentPackageView {
+  projectId: string;
+  request: { documentary: boolean; shorts: number | 'all'; languages: string[] };
+  architecture: { id: string; version: number; status: ArtifactStatus; logline: string | null; centralQuestion: string | null; estimatedDurationSec: number | null } | null;
+  documentary: { included: boolean; eligible: boolean; reason: string | null };
+  shorts: { requested: number | 'all'; available: number; returned: number; items: ContentOpportunityView[] };
+  longForm: ContentOpportunityView[];
+  languages: { requested: string[]; note: string };
+  /** Always false: production (scripts, voice, video, captions, renders, exports) is not built. */
+  generated: false;
+  notes: string[];
+}
+
 export interface StoryCandidateView {
   id: string;
   key: string;
+  /** Engine of the pack the candidate belongs to. */
+  engineVersion: StoryEngineVersion;
+  /** The editor's title if set, otherwise the AI's. */
   title: string;
+  aiTitle: string;
   hook: string;
   storyType: StoryType;
   characters: StoryCharacter[];
@@ -251,8 +323,24 @@ export interface StoryCandidateView {
   whyInteresting: string;
   viewerQuestion: string;
   mythThread: MythThread | null;
-  /** Null only if stored scores fail validation. */
-  scores: StoryScores | null;
+  /** Null only if stored scores fail validation. Engine 1: 8 appeal components; engine 2: story and historical value. */
+  scores: AnyStoryScores | null;
+  /** Engine 2: STORY VALUE and HISTORICAL VALUE (0–10); rankScore is then STORY APPEAL. */
+  storyValue: number | null;
+  historicalValue: number | null;
+  /** Engine 2 fields: effective values (the editor's override, else the AI's) and the AI's originals. */
+  narrativeMode: NarrativeMode | null;
+  aiNarrativeMode: NarrativeMode | null;
+  centralQuestion: string | null;
+  aiCentralQuestion: string | null;
+  povStrategy: PovChoice | null;
+  aiPovStrategy: PovChoice | null;
+  humanStakes: HumanStakes | null;
+  storyDesign: StoryDesign | null;
+  reconstructionLevel: ReconstructionLevel | null;
+  editorOverrides: CandidateOverrides;
+  /** Position in the editor's order of the selection, if set. */
+  selectionOrder: number | null;
   historicalStatus: HistoricalStatus;
   historicalConfidence: number;
   rankScore: number;
@@ -291,8 +379,10 @@ export interface StoryPackView extends StoryPackSummaryView {
 export interface StoryArchitectureView extends StoryArchitectureSummaryView {
   packId: string | null;
   dossierVersion: number | null;
-  /** Null only if the stored content fails validation. */
-  content: StoryArchitectureContent | null;
+  /** Null only if the stored content fails validation. Engine 2 content has engineVersion 2. */
+  content: AnyStoryArchitectureContent | null;
+  /** Content opportunities identified in this architecture, ranked (shorts first). */
+  opportunityList: ContentOpportunityView[];
   qualityReport: QualityReport | null;
   stats: Record<string, unknown>;
   notes: string | null;

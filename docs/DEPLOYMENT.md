@@ -151,6 +151,21 @@ The job runs in the embedded worker. A deploy, restart or variable change
 during a run returns the job to the queue; the next container resumes it, but
 the step that was running starts over.
 
+## Deploying Story Engine 2.0
+
+No new environment variables or services. The pre-deploy command applies
+migration `20261004120000_story_engine_2`, which is additive only: four new
+enums, nullable columns on `story_candidates`, `engine_version` (default 1) on
+`story_packs` and `story_architectures`, and two new tables
+(`content_opportunities`, `content_opportunity_claims`). Existing packs and
+architectures are not changed: they keep `engine_version = 1` and stay
+readable on the Story page. Research tables are untouched.
+
+A saved checkpoint from a story job started before the deploy is ignored (the
+prompt version changed), so a Retry of such a job starts its model calls
+again. An architecture costs four model calls instead of two (story editor and
+content opportunities added).
+
 ## Environment variables
 
 `✓` = read by V1 code. Planned variables are documented now so the shape is

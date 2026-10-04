@@ -1,8 +1,9 @@
 # Status — what exists, honestly
 
-Last updated: milestone 3 (story mining + story architecture), deployed to
-Railway; story mining has run on the real dossier, story architecture not yet
-(2026-10-04).
+Last updated: Story Engine 2.0 + content opportunity scaffolding — built and
+tested locally, **not deployed**, not yet run with the real model
+(2026-10-04). Milestone 3 (story engine 1) is deployed to Railway; story
+mining has run on the real dossier.
 
 ## IMPLEMENTED (real, tested)
 
@@ -12,7 +13,7 @@ Railway; story mining has run on the real dossier, story architecture not yet
 | Domain model | Status machine (24 statuses, 7 transition kinds), pipeline table, stage derivation, progress, available actions | `packages/core/src/*.test.ts` |
 | Contracts | zod schemas: API inputs, story candidates and architecture (StoryCharacter, MythThread, StoryScores, StoryPackContent, StoryArchitectureContent), VoiceSettings, ShotDirection, QaFindings, InfographicSpec (mandatory source, finite numbers, approximate flags, reference checks) | `contracts.test.ts` |
 | Cost math | Usage × rate card in micro-dollars, unpriced-usage reporting, exact sums | `cost.test.ts` |
-| Database | Prisma 7 schema (25 tables, 29 enums), four migrations (initial; research engine; job checkpoint; story mining), timestamptz, UUIDv7, cascade rules, enum parity test vs core | `enum-parity.test.ts`, integration tests; the story migration was applied by the production image to a database in the current production shape |
+| Database | Prisma 7 schema (27 tables, 33 enums), five migrations (initial; research engine; job checkpoint; story mining; story engine 2 — additive only), timestamptz, UUIDv7, cascade rules, enum parity test vs core | `enum-parity.test.ts`, integration tests; the story migration was applied by the production image to a database in the current production shape |
 | Project service | Create (with master language version), enqueue, retry, approve/reject/flag (artifact version linked: dossier, story architecture), rewind, restart a phase (rewind + enqueue), editor changes to story candidates; row-locked transactions; audit events; stale-job protection | `project-service.int.test.ts`, `runner.int.test.ts` |
 | Job system | Postgres queue (`SKIP LOCKED`), runner with concurrency, heartbeat, exponential backoff, non-retryable errors, abandoned-job recovery, shutdown release, provider-call ledger | `runner.int.test.ts` |
 | API | Fastify: health, projects (list/create/detail by id or slug), jobs (enqueue/get/retry), approvals, rewind; zod validation; error mapping; Basic auth; security headers; static dashboard + SPA fallback; graceful shutdown | `app.int.test.ts`, `env.test.ts`, manual SIGTERM test |
@@ -28,9 +29,14 @@ Railway; story mining has run on the real dossier, story architecture not yet
 | `pnpm research:run` (M2) | CLI: run research for a project to completion and print the evidence report | Container run (refuses clearly without credentials) |
 | **Story mining** (M3) | Mines the approved dossier for 15–30 story units (not facts): characters, desire, conflict, stakes, escalation, turning point, payoff, viewer question, myth thread. Deterministic evidence rules (dossier claims only; named people and figures must be in the evidence — the claim they come from is linked, otherwise the candidate is removed; MYTH claims only as a myth investigation; duplicates and editor-rejected look-alikes removed); a critic checks support and scores 8 appeal components; historical status and confidence computed from the claims' verdicts; rank = appeal × evidence factor; top-up pass when too few survive; AI-proposed selection of 5–10; mining gate; versioned pack. Another pass carries over approved/flagged candidates and excludes rejected ones | `mining.test.ts`, `text.test.ts`, `story.test.ts`, `story.int.test.ts` (scripted fake AI, real Postgres: gate failure, retry without new model calls, resume after a transient error, carry-over) |
 | **Story architecture** (M3) | Builds premise, central question, narrative spine, resolution and sequences (hook, question, key events with claims, characters, conflict, escalation, reveal, ending beat, caveats, duration) from the editor's selection. Story evidence is the selected units' own claims only; other dossier claims appear only as labelled background (purpose, own sources) and may not add a story, person, event, figure, date or beat; sources, historical status and confidence derived per sequence; a fact-checking reviewer may return a corrected version (kept only if it has no more evidence problems); architecture gate (traceability, framing of disputed/myth claims, invented people, figures, HIGH-priority units, runtime, story vs list of facts); rework uses the editor's rejection notes | `architecture.test.ts`, `story.int.test.ts` |
+| **Story mining 2.0** (SE2) | Each candidate also carries its human stakes (protagonist, could gain, could lose, immediate problem), a reveal, a central question, a visual environment, a cold open labelled with its information class (a second-person opening is relabelled RECONSTRUCTION; a "documented" one on non-established claims is relabelled UNCERTAIN), a narrative mode (15), a POV strategy and a reconstruction level. The critic scores STORY VALUE (9 dimensions, one reason each; myth/investigation potential only where it applies) and HISTORICAL VALUE (computed evidence quality + significance, relevance, uniqueness) separately; STORY APPEAL ranks the pack. Approved and flagged candidates carried from an engine-1 pack are scored by the engine-2 critic (one extra call) and kept whatever it says, its concerns as notes. Mining gate adds labelled cold opens (FAIL), human stories (WARN) and carried candidates scored (WARN) | `mining.test.ts` (6 SE2 tests), `story.test.ts`, `story.int.test.ts` (incl. carrying engine-1 candidates into an SE2 pass) |
+| **Story architecture 2.0** (SE2) | Logline, central question (Q0), central human stakes, narrative mode(s), POV strategy, cast (real and fictional, declared), thesis, spine, resolution; sequences of beats labelled DOCUMENTED / RECONSTRUCTION / UNCERTAIN / FICTION with function, claims, cast present and planned speech; setting with its basis, visual thinking (environment, objects, actions, emotion, metaphor, must show with claims, must avoid, shot ideas), continuity (carries in/out, questions opened/resolved, time jumps), presentation instructions; reconstruction shares and level. Deterministic rules (≈ 45 finding kinds; ARCHITECTURE.md §13) enforce the classes, presentation (PROBABLE worded as a hedge), the fiction boundary, verified quotations, names/places/figures/dates, continuity, the editor's priorities and order. Story editor then fact checker, each revision kept only if it adds no evidence problems; warnings (reconstruction budget, fiction count, interiority, continuity threads) never fail the gate | `architecture.test.ts` (32 tests), `story.int.test.ts` (12 architecture tests) |
+| **Content opportunities** (SE2) | After a passed gate: LONG_FORM / SHORT / BOTH opportunities traced to beat ids, claims only from those beats or their sequences, no new figures/people/names/quotations, presentation copied from the architecture, ranked by short-form potential, at most 12, never padded; stored with claim links; approved or rejected one by one; `GET|POST /api/projects/:id/content-package` resolves the approved documentary + top N approved shorts (read only, `generated: false`, languages recorded only) | `opportunities.test.ts` (8 tests), `story.int.test.ts`, `app.int.test.ts` |
+| **Story API + dashboard 2.0** (SE2) | `PATCH /api/story-candidates/:id` also takes title / narrative mode / central question / POV (null restores the AI's), `PUT …/story/selection-order`, `PATCH /api/content-opportunities/:id`, content package; architecture job takes preferences. Story page: story value / historical value bars with reasons and the appeal formula, "why it is compelling", human stakes, labelled cold open, angle editor, selection order ▲▼, generation preferences, v2 architecture (cast with FICTIONAL badges, colour-coded beats, invented lines marked as fiction, setting, visual, continuity, presentation, reconstruction meter, the story editor's quality bar), Opportunities tab (filters, top N, approve/reject, traceability, package preview). Engine-1 packs and architectures still render | `app.int.test.ts` (2 SE2 tests incl. engine-1 records); Playwright at 412 px on fake-AI data: angle edit, reorder, architecture, opportunity approval, package preview, engine-1 pages — no horizontal overflow, no console errors |
+| **Research boundary** (SE2) | Story code never writes research tables (static guard over the story stages and story API) and does not use the research module; a full mining → architecture → approval → opportunity decision run leaves the research tables byte-for-byte equal; `modules/research` unchanged | `boundaries.test.ts`, `story.int.test.ts` |
 | **Story API + dashboard** (M3) | `GET /api/projects/:id/story`, `PATCH /api/story-candidates/:id`, `POST …/story/mine`, `POST …/story/architecture` (selection checked first); Story page: ranked candidates with scores and the ranking formula, arcs, myth threads, evidence (claims, quotes, sources), editor controls (approve/reject/flag, in-the-documentary, priority, notes), selection vs AI proposal, architecture with sequences and per-sequence evidence, both gate reports, cost; approval panel (Approve / Reject → Rework / Flag). Project pages are linked by an Overview · Research dossier · Story bar; the Research and Story stage boxes open their pages; new pages open at the top; pages fit a phone screen | `app.int.test.ts`; Playwright run on fake-AI data (editor actions, selection limits, rejection) with no console errors; Playwright at a 412 px phone viewport: every route into the Story page, no horizontal overflow |
 
-Test counts at time of writing: **267 unit** (17 files) + **52 integration** (5 files), all passing.
+Test counts at time of writing: **312 unit** (19 files) + **59 integration** (5 files), all passing.
 
 ## FIRST LIVE RUN (Railway, 2026-10-04)
 
@@ -94,6 +100,12 @@ a retry two minutes later succeeded.
 
 ## NOT YET VERIFIED LIVE
 
+- **Story Engine 2.0 as a whole**: not deployed; no run with the real model.
+  Every SE2 behaviour above was tested with a scripted fake AI and synthetic
+  data only. Planned acceptance run after a deploy approval: a fresh SE2
+  mining pass on the existing approved Tulip dossier v1 (no new research).
+- The real cost of an SE2 architecture (four calls instead of two) and of SE2
+  mining (larger outputs).
 - A story architecture that passes its gate with the real model (the first
   run failed on the rules bug above; a Retry with the fix is pending).
 - The cost of a clean research run end to end (the first run included failed
@@ -118,6 +130,7 @@ a retry two minutes later succeeded.
 ## NOT YET BUILT (no code, no schema beyond notes)
 
 - Script engine, script QA scores (milestone 4 onward)
+- Anything generated from content opportunities: short scripts, voice, video, captions, renders, platform exports (the content package endpoint only resolves what would be used)
 - Narration generation, subtitles (SRT/VTT), audio mixing, sound design, music/SFX selection
 - Visual director, continuity bibles (character/location/object/style), image/video generation
 - Infographic renderer, editing/timeline engine, final render, automated QA

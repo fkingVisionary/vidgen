@@ -1,20 +1,27 @@
 import {
   STORY_LIMITS,
-  STORY_SCORE_KEYS,
-  appealScore,
+  STORY_VALUE_KEYS,
   historicalConfidenceOf,
   historicalStatusOf,
-  rankScore,
+  historicalValue,
+  storyAppeal,
+  storyValue,
   type CandidatePriority,
   type CandidateStatus,
   type HistoricalStatus,
+  type HumanStakes,
   type MythThread,
+  type NarrativeMode,
+  type PovChoice,
+  type ReconstructionLevel,
   type StoryCharacter,
-  type StoryScores,
+  type StoryDesign,
+  type StoryScoresV2,
   type StoryType,
+  type StoryValueKey,
 } from '@docengine/core';
 import type { EvidenceBase } from './evidence.ts';
-import { checkFigures, checkPerson, orderedKeys } from './rules.ts';
+import { SECOND_PERSON, checkFigures, checkPerson, orderedKeys } from './rules.ts';
 import type { CriticAssessment, MinedCandidate, SelectionOutput, SupportVerdict } from './schemas.ts';
 import { jaccard, mentionsName, titleSimilarity } from './text.ts';
 
@@ -37,6 +44,13 @@ export interface DraftCandidate {
   whyInteresting: string;
   viewerQuestion: string;
   mythThread: MythThread | null;
+  // Story Engine 2.0: the human story and how it could be told.
+  humanStakes: HumanStakes;
+  storyDesign: StoryDesign;
+  narrativeMode: NarrativeMode;
+  povStrategy: PovChoice;
+  centralQuestion: string;
+  reconstructionLevel: ReconstructionLevel;
   /** Every claim the story rests on, in dossier order. */
   claimKeys: string[];
   /** Caveats the telling must respect. */
@@ -47,8 +61,11 @@ export interface DraftCandidate {
 }
 
 export interface ScoredCandidate extends DraftCandidate {
-  scores: StoryScores;
+  scores: StoryScoresV2;
+  /** STORY APPEAL: story value moderated by historical value. */
   rankScore: number;
+  storyValue: number;
+  historicalValue: number;
   support: SupportVerdict;
 }
 
@@ -101,6 +118,8 @@ const LABEL: Record<(typeof NARRATIVE_FIELDS)[number], string> = {
 /** Text of a candidate that can carry facts (checked for figures). */
 export function candidateTexts(c: Omit<DraftCandidate, 'ref' | 'notes' | 'historicalStatus' | 'historicalConfidence' | 'sourceIds' | 'claimKeys'> & { notes?: readonly string[] }): string[] {
   const m = c.mythThread;
+  const h = c.humanStakes;
+  const d = c.storyDesign;
   return [
     c.title,
     c.hook,
@@ -114,6 +133,15 @@ export function candidateTexts(c: Omit<DraftCandidate, 'ref' | 'notes' | 'histor
     c.payoff,
     c.whyInteresting,
     c.viewerQuestion,
+    c.centralQuestion,
+    c.povStrategy.description,
+    h.protagonist,
+    h.couldGain,
+    h.couldLose,
+    h.immediateProblem,
+    d.coldOpen.text,
+    d.reveal,
+    d.visualEnvironment,
     ...c.characters.map((ch) => ch.role),
     ...(m ? [m.popularStory, m.origin, m.whoSpreadIt, m.whatHappened, m.whyItSurvived] : []),
   ];
@@ -157,7 +185,7 @@ export function normalizeMined(
 
     // People: a named person must be in the evidence. If they are elsewhere in the dossier, link those claims.
     const characters: StoryCharacter[] = [];
-    const coreText = [m.title, m.hook, m.desire, m.conflict, m.stakes, m.escalation, m.turningPoint, m.payoff].join(' ');
+    const coreText = [m.title, m.hook, m.desire, m.conflict, m.stakes, m.escalation, m.turningPoint, m.payoff, m.protagonist, m.coldOpen.text, m.reveal].join(' ');
     let invented: string | null = null;
     for (const ch of m.characters) {
       const name = clean(ch.name);
@@ -213,6 +241,7 @@ export function normalizeMined(
       whyInteresting: clean(m.whyInteresting),
       viewerQuestion: clean(m.viewerQuestion),
       mythThread,
+      ...storyEngine2Fields(m, characters),
     };
 
     // Figures must come from the evidence; a figure from another claim links that claim.
@@ -225,6 +254,16 @@ export function normalizeMined(
 
     const claimKeys = orderedKeys(keys, evidence);
     const verdicts = claimKeys.map((k) => evidence.claim(k)!.verdict);
+    // The cold open is labelled honestly: a scene addressed to the viewer is a reconstruction, and only
+    // ESTABLISHED claims make documented fact. Relabelling is recorded, never silent.
+    const open = draft.storyDesign.coldOpen;
+    if (open.basis === 'DOCUMENTED' && SECOND_PERSON.test(open.text)) {
+      open.basis = 'RECONSTRUCTION';
+      notes.push(`${title}: cold open addressed to the viewer relabelled RECONSTRUCTION`);
+    } else if (open.basis === 'DOCUMENTED' && verdicts.some((v) => v !== 'ESTABLISHED')) {
+      open.basis = 'UNCERTAIN';
+      notes.push(`${title}: cold open relabelled UNCERTAIN (the story rests on claims that are not ESTABLISHED)`);
+    }
     if (verdicts.includes('MYTH')) {
       const t = mythThread;
       if (!t || !t.popularStory || !t.origin || !t.whoSpreadIt || !t.whatHappened || !t.whyItSurvived) {
@@ -253,12 +292,68 @@ export function normalizeMined(
   return { kept, removed, notes };
 }
 
+/**
+ * The Story Engine 2.0 fields of a mined candidate, cleaned. A human story is
+ * found when the protagonist is one of the story's characters (people, groups
+ * or roles from the evidence) and something is at stake for them.
+ */
+function storyEngine2Fields(m: MinedCandidate, characters: readonly StoryCharacter[]) {
+  const protagonist = clean(m.protagonist);
+  const humanStakes: HumanStakes = {
+    protagonist,
+    couldGain: clean(m.couldGain),
+    couldLose: clean(m.couldLose),
+    immediateProblem: clean(m.immediateProblem),
+  };
+  const isCharacter = protagonist !== '' && characters.some((c) => normalizeName(c.name) === normalizeName(protagonist) || normalizeName(protagonist).includes(normalizeName(c.name)));
+  const storyDesign: StoryDesign = {
+    coldOpen: { text: clean(m.coldOpen.text), basis: m.coldOpen.basis },
+    reveal: clean(m.reveal),
+    visualEnvironment: clean(m.visualEnvironment),
+    humanStory: isCharacter && (humanStakes.couldGain !== '' || humanStakes.couldLose !== ''),
+  };
+  return {
+    humanStakes,
+    storyDesign,
+    narrativeMode: m.narrativeMode,
+    povStrategy: { type: m.povStrategy.type, description: clean(m.povStrategy.description) },
+    centralQuestion: clean(m.centralQuestion),
+    reconstructionLevel: m.reconstructionLevel,
+  };
+}
+
+const normalizeName = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, ' ').replace(/\s+/g, ' ').trim();
+
 const clampScore = (n: number) => Math.min(10, Math.max(0, Math.round(Number.isFinite(n) ? n : 0)));
+
+const HISTORY_SCORED = ['significance', 'relevance', 'uniqueness'] as const;
+const KNOWN_DIMENSIONS = new Set<string>([...STORY_VALUE_KEYS, ...HISTORY_SCORED]);
+
+/** Myth/investigation potential only counts for units with disputed, unverified or myth material. */
+export function mythApplicable(c: { mythThread: unknown; historicalStatus: HistoricalStatus }): boolean {
+  return c.mythThread !== null || c.historicalStatus === 'CONTESTED' || c.historicalStatus === 'UNCERTAIN' || c.historicalStatus === 'MYTH_INVESTIGATION';
+}
+
+/** Story Engine 2.0 scores from the critic's raw numbers: story value, historical value and story appeal. */
+export function scoresFrom(a: CriticAssessment, c: { historicalConfidence: number; mythThread: unknown; historicalStatus: HistoricalStatus }): StoryScoresV2 {
+  const story = Object.fromEntries(STORY_VALUE_KEYS.map((k) => [k, clampScore(a[k])])) as Record<StoryValueKey, number>;
+  const applicable = mythApplicable(c);
+  const history = { evidenceQuality: c.historicalConfidence, significance: clampScore(a.significance), relevance: clampScore(a.relevance), uniqueness: clampScore(a.uniqueness) };
+  const sv = storyValue(story, applicable);
+  const hv = historicalValue(history);
+  const reasons: StoryScoresV2['reasons'] = [];
+  for (const r of a.reasons) {
+    const dimension = r.dimension.trim();
+    if (KNOWN_DIMENSIONS.has(dimension) && clean(r.reason) && !reasons.some((x) => x.dimension === dimension)) reasons.push({ dimension, reason: clean(r.reason) });
+  }
+  return { version: 2, story, mythApplicable: applicable, history, storyValue: sv, historicalValue: hv, appeal: storyAppeal(sv, hv), reasons, rationale: clean(a.rationale) };
+}
 
 /**
  * Apply the critic's assessments: UNSUPPORTED candidates are removed (with the
  * critic's findings), NEEDS_CAVEAT adds the caveat, scores are clamped to
- * 0–10 and combined into appeal and rank score.
+ * 0–10 and combined into story value, historical value and STORY APPEAL (the
+ * rank score).
  */
 export function applyAssessments(
   drafts: readonly DraftCandidate[],
@@ -280,15 +375,16 @@ export function applyAssessments(
       removed.push({ title: d.title, storyType: d.storyType, reason: `the critic found statements the evidence does not support: ${problems}`, claimKeys: d.claimKeys });
       continue;
     }
-    const components = Object.fromEntries(STORY_SCORE_KEYS.map((k) => [k, clampScore(a[k])])) as Record<(typeof STORY_SCORE_KEYS)[number], number>;
-    const appeal = appealScore(components);
+    const scores = scoresFrom(a, d);
     const notes = [...d.notes];
     if (a.support === 'NEEDS_CAVEAT') notes.push(clean(a.caveat) || a.problems.filter((p) => p.trim()).join('; ') || 'The critic asked for a caveat.');
     scored.push({
       ...d,
       notes,
-      scores: { ...components, appeal, rationale: clean(a.rationale) },
-      rankScore: rankScore(appeal, d.historicalConfidence),
+      scores,
+      rankScore: scores.appeal,
+      storyValue: scores.storyValue,
+      historicalValue: scores.historicalValue,
       support: a.support,
     });
   }
@@ -306,6 +402,9 @@ export interface SelectionResult {
   workingPremise: string;
   rationale: string;
   alternates: string[];
+  centralQuestion: string;
+  narrativeMode: NarrativeMode | null;
+  povStrategy: PovChoice | null;
   notes: string[];
 }
 
@@ -355,5 +454,51 @@ export function normalizeSelection(
     if (fill.length) notes.push(`Selection: added ${fill.map((c) => c.key).join(', ')} to reach the minimum of ${limits.min}`);
   }
   const alternates = [...new Set(raw.alternates.map((a) => a.trim()))].filter((k) => byKey.has(k) && !keys.includes(k) && byKey.get(k)!.status !== 'REJECTED');
-  return { keys, reasons, workingPremise: clean(raw.workingPremise), rationale: clean(raw.rationale), alternates, notes };
+  return {
+    keys,
+    reasons,
+    workingPremise: clean(raw.workingPremise),
+    rationale: clean(raw.rationale),
+    alternates,
+    centralQuestion: clean(raw.centralQuestion),
+    narrativeMode: raw.narrativeMode ?? null,
+    povStrategy: raw.povStrategy ? { type: raw.povStrategy.type, description: clean(raw.povStrategy.description) } : null,
+    notes,
+  };
+}
+
+/** The narrative mode an engine-1 candidate is given when it is carried into an engine-2 pack (the editor can change it). */
+export const DEFAULT_MODE_FOR_TYPE: Readonly<Record<StoryType, NarrativeMode>> = {
+  CHARACTER: 'CHARACTER_FOLLOW',
+  DEAL: 'CAUSE_AND_EFFECT',
+  MARKET_EVENT: 'COUNTDOWN',
+  FORTUNE: 'RISE_AND_FALL',
+  SCAM: 'HEIST_OPERATION',
+  CONFLICT: 'CONFLICT',
+  REVERSAL: 'CAUSE_AND_EFFECT',
+  MYSTERY: 'HISTORICAL_MYSTERY',
+  MYTH_ORIGIN: 'MYTH_VS_RECORD',
+  DISCOVERY: 'DISCOVERY',
+  DISASTER: 'RISE_AND_FALL',
+  SOCIAL_PHENOMENON: 'IMMERSIVE_RECONSTRUCTION',
+};
+
+/**
+ * Engine-2 fields for a candidate carried over from an engine-1 pack, derived
+ * only from what that candidate already says (nothing new is asserted). The
+ * critic then scores it like any other candidate.
+ */
+/** The critic's rationale on a carried engine-1 candidate it returned no assessment for. */
+export const NOT_SCORED = 'Not scored: the critic returned no assessment for this carried candidate.';
+
+export function legacyStoryFields(c: { storyType: StoryType; characters: readonly StoryCharacter[]; hook: string; setting: string; stakes: string; conflict: string; turningPoint: string; viewerQuestion: string }) {
+  const protagonist = c.characters[0]?.name ?? '';
+  return {
+    humanStakes: { protagonist, couldGain: '', couldLose: c.stakes, immediateProblem: c.conflict } satisfies HumanStakes,
+    storyDesign: { coldOpen: { text: c.hook, basis: 'UNCERTAIN' as const }, reveal: c.turningPoint, visualEnvironment: c.setting, humanStory: protagonist !== '' && c.stakes !== '' } satisfies StoryDesign,
+    narrativeMode: DEFAULT_MODE_FOR_TYPE[c.storyType],
+    povStrategy: { type: 'NARRATOR' as const, description: '' } satisfies PovChoice,
+    centralQuestion: c.viewerQuestion,
+    reconstructionLevel: 'LOW' as const,
+  };
 }

@@ -205,6 +205,47 @@ enum CandidatePriority {
   LOW
 }
 
+/// Story Engine 2.0: how a documentary, sequence or story unit is told.
+enum NarrativeMode {
+  IMMERSIVE_RECONSTRUCTION
+  CHARACTER_FOLLOW
+  HISTORICAL_MYSTERY
+  INVESTIGATION
+  COUNTDOWN
+  SURVIVAL
+  CONFLICT
+  RISE_AND_FALL
+  HEIST_OPERATION
+  JOURNEY
+  COURTROOM_DISPUTE
+  DISCOVERY
+  MYTH_VS_RECORD
+  PARALLEL_TIMELINE
+  CAUSE_AND_EFFECT
+}
+
+/// Share of reconstruction and fiction in a telling.
+enum ReconstructionLevel {
+  NONE
+  LOW
+  MEDIUM
+  HIGH
+}
+
+/// What a content opportunity could become.
+enum ContentFormat {
+  LONG_FORM
+  SHORT
+  BOTH
+}
+
+/// The editor's decision on a content opportunity.
+enum OpportunityStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+}
+
 enum VisualType {
   CINEMATIC_RECONSTRUCTION
   ARCHIVAL_STYLE
@@ -342,23 +383,24 @@ model Project {
   createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  languageVersions LanguageVersion[]
-  jobs             Job[]
-  approvals        Approval[]
-  events           ProjectEvent[]
-  providerCalls    ProviderCall[]
-  assets           MediaAsset[]
-  sources          Source[]
-  dossiers         ResearchDossier[]
-  storyPacks       StoryPack[]
-  storyCandidates  StoryCandidate[]
-  stories          StoryArchitecture[]
-  scripts          Script[]
-  storyboards      Storyboard[]
-  infographics     Infographic[]
-  timelines        Timeline[]
-  renders          Render[]
-  qaReports        QaReport[]
+  languageVersions     LanguageVersion[]
+  jobs                 Job[]
+  approvals            Approval[]
+  events               ProjectEvent[]
+  providerCalls        ProviderCall[]
+  assets               MediaAsset[]
+  sources              Source[]
+  dossiers             ResearchDossier[]
+  storyPacks           StoryPack[]
+  storyCandidates      StoryCandidate[]
+  stories              StoryArchitecture[]
+  contentOpportunities ContentOpportunity[]
+  scripts              Script[]
+  storyboards          Storyboard[]
+  infographics         Infographic[]
+  timelines            Timeline[]
+  renders              Render[]
+  qaReports            QaReport[]
 
   @@index([status])
   @@map("projects")
@@ -652,13 +694,14 @@ model ResearchDossier {
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  job             Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
-  claims          ResearchClaim[]
-  storyPacks      StoryPack[]
-  storyCandidates StoryCandidate[]
-  stories         StoryArchitecture[]
-  approvals       Approval[]
+  project              Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  job                  Job?                 @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  claims               ResearchClaim[]
+  storyPacks           StoryPack[]
+  storyCandidates      StoryCandidate[]
+  stories              StoryArchitecture[]
+  contentOpportunities ContentOpportunity[]
+  approvals            Approval[]
 
   @@unique([projectId, version])
   @@map("research_dossiers")
@@ -686,9 +729,10 @@ model ResearchClaim {
   createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  dossier         ResearchDossier       @relation(fields: [dossierId], references: [id], onDelete: Cascade)
-  citations       ClaimCitation[]
-  storyCandidates StoryCandidateClaim[]
+  dossier              ResearchDossier           @relation(fields: [dossierId], references: [id], onDelete: Cascade)
+  citations            ClaimCitation[]
+  storyCandidates      StoryCandidateClaim[]
+  contentOpportunities ContentOpportunityClaim[]
 
   @@unique([dossierId, claimKey])
   @@index([dossierId])
@@ -734,6 +778,8 @@ model StoryPack {
   /// The approved research dossier version that was mined.
   dossierId     String         @map("dossier_id") @db.Uuid
   version       Int
+  /// Story engine that mined the pack (1: milestone 3, 2: Story Engine 2.0). Older rows are 1.
+  engineVersion Int            @default(1) @map("engine_version")
   status        ArtifactStatus @default(DRAFT)
   /// StoryPackContent contract: the selection proposal, candidates removed by the rules and why, editor brief.
   content       Json           @default("{}")
@@ -764,52 +810,71 @@ model StoryPack {
 /// those claims' verdicts, never chosen by the model. The editorial fields
 /// (status, selected, priority, editor notes) are set by a human.
 model StoryCandidate {
-  id                   String            @id @default(uuid(7)) @db.Uuid
-  packId               String            @map("pack_id") @db.Uuid
-  projectId            String            @map("project_id") @db.Uuid
-  dossierId            String            @map("dossier_id") @db.Uuid
+  id                   String               @id @default(uuid(7)) @db.Uuid
+  packId               String               @map("pack_id") @db.Uuid
+  projectId            String               @map("project_id") @db.Uuid
+  dossierId            String               @map("dossier_id") @db.Uuid
   /// Stable key within the pack ("S07"), in rank order at creation.
-  candidateKey         String            @map("candidate_key")
+  candidateKey         String               @map("candidate_key")
   title                String
   /// One-sentence hook.
   hook                 String
-  storyType            StoryType         @map("story_type")
+  storyType            StoryType            @map("story_type")
   /// StoryCharacter[] contract: name, kind (named person, group, role), role in the story, claim keys.
-  characters           Json              @default("[]")
+  characters           Json                 @default("[]")
   setting              String
-  timePeriod           String            @map("time_period")
+  timePeriod           String               @map("time_period")
   desire               String
   conflict             String
   stakes               String
   escalation           String
-  turningPoint         String            @map("turning_point")
+  turningPoint         String               @map("turning_point")
   payoff               String
-  whyInteresting       String            @map("why_interesting")
+  whyInteresting       String               @map("why_interesting")
   /// The question this story makes the viewer want answered.
-  viewerQuestion       String            @map("viewer_question")
+  viewerQuestion       String               @map("viewer_question")
   /// MythThread contract, for units built on a myth: popular story → origin → who spread it → what happened → why it survived.
-  mythThread           Json?             @map("myth_thread")
+  mythThread           Json?                @map("myth_thread")
   /// StoryScores contract: component scores (0–10) and the critic's rationale.
   scores               Json
-  historicalStatus     HistoricalStatus  @map("historical_status")
+  historicalStatus     HistoricalStatus     @map("historical_status")
   /// 0–10, from the verdicts and confidence of the linked claims and the number of sources behind them.
-  historicalConfidence Int               @map("historical_confidence")
+  historicalConfidence Int                  @map("historical_confidence")
   /// Appeal weighted by historical confidence (see packages/core/src/story.ts).
-  rankScore            Float             @map("rank_score")
+  rankScore            Float                @map("rank_score")
   /// Position in the pack by rank score when it was mined (1 = best).
   rank                 Int
   /// Caveats the telling must respect (disputed figures, uncertain dates, critic's notes).
   notes                String?
   /// Part of the AI's proposed selection (kept to compare with the editor's choice).
-  aiSelected           Boolean           @default(false) @map("ai_selected")
-  aiSelectionReason    String?           @map("ai_selection_reason")
-  status               CandidateStatus   @default(PROPOSED)
+  aiSelected           Boolean              @default(false) @map("ai_selected")
+  aiSelectionReason    String?              @map("ai_selection_reason")
+  status               CandidateStatus      @default(PROPOSED)
   /// In the editor's selection for the documentary.
-  selected             Boolean           @default(false)
-  priority             CandidatePriority @default(NORMAL)
-  editorNotes          String?           @map("editor_notes")
-  createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  selected             Boolean              @default(false)
+  priority             CandidatePriority    @default(NORMAL)
+  editorNotes          String?              @map("editor_notes")
+  // Story Engine 2.0 (null on engine-1 candidates)
+  /// The AI's suggested narrative mode (the editor's choice is in editor_overrides).
+  narrativeMode        NarrativeMode?       @map("narrative_mode")
+  /// The AI's suggested central question.
+  centralQuestion      String?              @map("central_question")
+  /// PovChoice contract: the AI's suggested point-of-view strategy.
+  povStrategy          Json?                @map("pov_strategy")
+  /// HumanStakes contract: protagonist, could gain, could lose, immediate problem.
+  humanStakes          Json?                @map("human_stakes")
+  /// StoryDesign contract: labelled cold open, reveal, visual environment, human story found.
+  storyDesign          Json?                @map("story_design")
+  reconstructionLevel  ReconstructionLevel? @map("reconstruction_level")
+  /// STORY VALUE and HISTORICAL VALUE, 0–10 (rank_score is then STORY APPEAL).
+  storyValue           Float?               @map("story_value")
+  historicalValue      Float?               @map("historical_value")
+  /// CandidateOverrides contract: the editor's title, narrative mode, central question, POV strategy.
+  editorOverrides      Json?                @map("editor_overrides")
+  /// The editor's order of the selection (1 = first).
+  selectionOrder       Int?                 @map("selection_order")
+  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   pack    StoryPack             @relation(fields: [packId], references: [id], onDelete: Cascade)
   project Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -844,8 +909,10 @@ model StoryArchitecture {
   /// Story pack whose selected candidates it was built from.
   packId               String?        @map("pack_id") @db.Uuid
   version              Int
+  /// Story engine that built it (1: milestone 3, 2: Story Engine 2.0). Older rows are 1.
+  engineVersion        Int            @default(1) @map("engine_version")
   status               ArtifactStatus @default(DRAFT)
-  /// StoryArchitectureContent contract (premise, central question, spine, sequences with claims and sources).
+  /// StoryArchitectureContent contract (engine 1) or StoryArchitectureContentV2 (engine 2).
   content              Json
   targetDurationSec    Int?           @map("target_duration_sec")
   estimatedDurationSec Int?           @map("estimated_duration_sec")
@@ -859,15 +926,73 @@ model StoryArchitecture {
   createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project   Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  dossier   ResearchDossier? @relation(fields: [dossierId], references: [id], onDelete: SetNull)
-  pack      StoryPack?       @relation(fields: [packId], references: [id], onDelete: SetNull)
-  job       Job?             @relation(fields: [jobId], references: [id], onDelete: SetNull)
-  scripts   Script[]
-  approvals Approval[]
+  project              Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  dossier              ResearchDossier?     @relation(fields: [dossierId], references: [id], onDelete: SetNull)
+  pack                 StoryPack?           @relation(fields: [packId], references: [id], onDelete: SetNull)
+  job                  Job?                 @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  scripts              Script[]
+  approvals            Approval[]
+  contentOpportunities ContentOpportunity[]
 
   @@unique([projectId, version])
   @@map("story_architectures")
+}
+
+/// A content opportunity found in a story architecture: a structured brief for a future
+/// long-form or short-form production. Never a script, voice, video or export.
+model ContentOpportunity {
+  id                   String            @id @default(uuid(7)) @db.Uuid
+  projectId            String            @map("project_id") @db.Uuid
+  architectureId       String            @map("architecture_id") @db.Uuid
+  /// The approved research dossier the architecture was built on.
+  dossierId            String            @map("dossier_id") @db.Uuid
+  /// Stable key within the architecture ("O01"): shorts by rank, then long-form.
+  opportunityKey       String            @map("opportunity_key")
+  format               ContentFormat
+  status               OpportunityStatus @default(PROPOSED)
+  /// Rank among SHORT and BOTH opportunities by short-form potential (1 = best); null for LONG_FORM.
+  rank                 Int?
+  /// SHORT-FORM POTENTIAL, 0–10.
+  shortScore           Float?            @map("short_score")
+  title                String
+  hook                 String
+  centralQuestion      String            @map("central_question")
+  targetDurationSec    Int?              @map("target_duration_sec")
+  /// Understandable without the long-form documentary.
+  independent          Boolean
+  requiresContext      Boolean           @map("requires_context")
+  historicalStatus     HistoricalStatus  @map("historical_status")
+  historicalConfidence Int               @map("historical_confidence")
+  /// ContentOpportunityContent contract: premise, angle, escalation, payoff, ending, visual concept,
+  /// source beats, sequences and units, claim keys, sources, presentation instructions, scores.
+  content              Json
+  editorNotes          String?           @map("editor_notes")
+  decidedBy            String?           @map("decided_by")
+  decidedAt            DateTime?         @map("decided_at") @db.Timestamptz(3)
+  createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project      Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  architecture StoryArchitecture         @relation(fields: [architectureId], references: [id], onDelete: Cascade)
+  dossier      ResearchDossier           @relation(fields: [dossierId], references: [id], onDelete: Cascade)
+  claims       ContentOpportunityClaim[]
+
+  @@unique([architectureId, opportunityKey])
+  @@index([projectId, status])
+  @@map("content_opportunities")
+}
+
+/// The approved dossier claims a content opportunity rests on.
+model ContentOpportunityClaim {
+  opportunityId String @map("opportunity_id") @db.Uuid
+  claimId       String @map("claim_id") @db.Uuid
+
+  opportunity ContentOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  claim       ResearchClaim      @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@id([opportunityId, claimId])
+  @@index([claimId])
+  @@map("content_opportunity_claims")
 }
 
 /// Language-neutral script structure (scenes). The words live in SceneNarration, per language.

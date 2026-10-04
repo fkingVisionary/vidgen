@@ -37,6 +37,10 @@ const PAIRS: Record<string, readonly string[]> = {
   HistoricalStatus: core.HISTORICAL_STATUSES,
   CandidateStatus: core.CANDIDATE_STATUSES,
   CandidatePriority: core.CANDIDATE_PRIORITIES,
+  NarrativeMode: core.NARRATIVE_MODES,
+  ReconstructionLevel: core.RECONSTRUCTION_LEVELS,
+  ContentFormat: core.CONTENT_FORMATS,
+  OpportunityStatus: core.OPPORTUNITY_STATUSES,
 };
 
 describe('Prisma enums ↔ core enums', () => {

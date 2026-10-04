@@ -34,15 +34,20 @@ export function renderCandidateForCritic(d: DraftCandidate, evidence: EvidenceBa
     `### ${d.ref} — ${d.title} [${d.storyType}]`,
     `hook: ${d.hook}`,
     `characters: ${d.characters.map((c) => `${c.name} (${c.kind}): ${c.role}`).join('; ')}`,
-    `setting: ${d.setting} | period: ${d.timePeriod}`,
-    `desire: ${d.desire}`,
+    `protagonist: ${d.humanStakes.protagonist || '(none recorded)'} | wants: ${d.desire} | could gain: ${d.humanStakes.couldGain} | could lose: ${d.humanStakes.couldLose}`,
+    `immediate problem: ${d.humanStakes.immediateProblem}`,
+    `setting: ${d.setting} | period: ${d.timePeriod} | on screen: ${d.storyDesign.visualEnvironment}`,
     `conflict: ${d.conflict}`,
     `stakes: ${d.stakes}`,
     `escalation: ${d.escalation}`,
     `turning point: ${d.turningPoint}`,
-    `payoff: ${d.payoff}`,
+    `reveal: ${d.storyDesign.reveal}`,
+    `consequence: ${d.payoff}`,
+    `cold open [${d.storyDesign.coldOpen.basis}]: ${d.storyDesign.coldOpen.text}`,
     `why interesting: ${d.whyInteresting}`,
     `viewer question: ${d.viewerQuestion}`,
+    `central question: ${d.centralQuestion}`,
+    `told as: ${d.narrativeMode}; POV ${d.povStrategy.type}${d.povStrategy.description ? ` (${d.povStrategy.description})` : ''}; reconstruction ${d.reconstructionLevel}`,
   ];
   if (d.mythThread) {
     const m = d.mythThread;

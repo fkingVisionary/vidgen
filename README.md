@@ -5,7 +5,8 @@ AI-assisted production system for premium historical & economic documentaries
 visuals & infographics → edit → QA → render → publish, with a human approving
 every important step.
 
-**Current state: V1, milestone 3 — story mining and story architecture.** The
+**Current state: V1, milestone 3 + Story Engine 2.0 (built and tested locally;
+not deployed yet).** The
 pipeline, database, job system, provider abstractions and dashboard are real
 and tested (milestone 1). The **Research** stage is real when Anthropic
 (Claude) and Tavily are configured: it builds a versioned dossier of claims
@@ -14,7 +15,12 @@ with verdicts and verbatim-verified citations, and stops for human review
 of evidence-backed story units, which the editor curates; **story
 architecture** turns the editor's selection into a documentary blueprint
 (premise, central question, spine, sequences), which a human approves
-(milestone 3; real when Claude is configured). Every later stage (script,
+(milestone 3; real when Claude is configured). **Story Engine 2.0** makes that
+blueprint cinematic inside the same evidence boundary — human stakes, narrative
+modes, a point of view, beats labelled documented / reconstruction / uncertain
+/ fiction, setting, visual thinking, continuity — and identifies content
+opportunities (shorts and long-form threads) for the editor to approve one by
+one; nothing is generated from them yet. Every later stage (script,
 voice, visuals, edit, publish) is still a clearly labelled **MOCK**. First test
 episode: *Tulip Mania — The Bubble That Became a Legend*.
 
@@ -135,15 +141,28 @@ node apps/api/dist/research.js tulip-mania      # production image / Railway she
 With `AI_PROVIDER=anthropic`, once a research dossier is approved:
 
 1. Project page or Story page → **Run Story Mining**. The pack lists 15–30
-   ranked candidates with their arc, scores, historical status and evidence,
-   plus candidates the evidence rules removed and why.
+   ranked candidates with their human stakes, cold open (labelled by
+   information class), story value and historical value (shown separately,
+   with reasons), story appeal, historical status and evidence, plus
+   candidates the evidence rules removed and why.
 2. On the **Story** page, approve, reject or flag candidates, choose 5–10 for
    the documentary (the AI's proposal is preselected), set priorities, add
-   notes — or request another mining pass with a brief.
-3. **Generate Story Architecture** (refused until 5–10 units are selected).
-4. Review it: **Approve Story Architecture**, **Reject → Rework** (back to
-   the selection; the next version uses your notes) or **Flag**. Nothing moves
-   on to the script automatically.
+   notes, change a unit's title, narrative mode, central question or POV (the
+   AI's values are kept), order the selection (▲▼ on the Selection tab) — or
+   request another mining pass with a brief.
+3. **Generate Story Architecture** (refused until 5–10 units are selected),
+   optionally with preferences for the narrative mode, POV and central
+   question.
+4. Review it: logline, central question, cast (fictional devices are
+   labelled), beats colour-coded by information class, presentation of
+   uncertain material, setting, visual notes, continuity, the reconstruction
+   level and the story editor's quality bar. **Approve Story Architecture**,
+   **Reject → Rework** (back to the selection; the next version uses your
+   notes) or **Flag**. Nothing moves on to the script automatically.
+5. On the **Opportunities** tab, approve or reject each short or long-form
+   opportunity. `GET|POST /api/projects/:id/content-package` (e.g.
+   `{"documentary": true, "shorts": 6, "languages": ["en","es","de"]}`)
+   returns what a production request would use; it generates nothing.
 
 `STORY_MAX_COST_USD=15` stops a mining or architecture job whose recorded
 spend passes it. Like research, retries reuse completed model calls.
