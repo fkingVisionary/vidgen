@@ -1,13 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
-import { Link } from 'react-router';
+import { useEffect, type ReactNode } from 'react';
+import { Link, useLocation, useNavigationType } from 'react-router';
 import { api } from '../api.ts';
+
+/** Opens each newly visited page at the top; Back and Forward keep the browser's own scroll restoration. */
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  const navigationType = useNavigationType();
+  useEffect(() => {
+    if (navigationType !== 'POP') window.scrollTo(0, 0);
+  }, [pathname, navigationType]);
+  return null;
+}
 
 export function Layout({ children }: { children: ReactNode }) {
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 30_000 });
   const h = health.data;
   return (
     <div className="min-h-screen">
+      <ScrollToTop />
       <header className="border-b border-stone-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
           <Link to="/" className="font-semibold tracking-tight">

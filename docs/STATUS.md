@@ -1,7 +1,8 @@
 # Status — what exists, honestly
 
-Last updated: milestone 3 (story mining + story architecture), built and tested
-locally; **not yet deployed or run on the real dossier** (2026-10-04).
+Last updated: milestone 3 (story mining + story architecture), deployed to
+Railway; story mining has run on the real dossier, story architecture not yet
+(2026-10-04).
 
 ## IMPLEMENTED (real, tested)
 
@@ -27,7 +28,7 @@ locally; **not yet deployed or run on the real dossier** (2026-10-04).
 | `pnpm research:run` (M2) | CLI: run research for a project to completion and print the evidence report | Container run (refuses clearly without credentials) |
 | **Story mining** (M3) | Mines the approved dossier for 15–30 story units (not facts): characters, desire, conflict, stakes, escalation, turning point, payoff, viewer question, myth thread. Deterministic evidence rules (dossier claims only; named people and figures must be in the evidence — the claim they come from is linked, otherwise the candidate is removed; MYTH claims only as a myth investigation; duplicates and editor-rejected look-alikes removed); a critic checks support and scores 8 appeal components; historical status and confidence computed from the claims' verdicts; rank = appeal × evidence factor; top-up pass when too few survive; AI-proposed selection of 5–10; mining gate; versioned pack. Another pass carries over approved/flagged candidates and excludes rejected ones | `mining.test.ts`, `text.test.ts`, `story.test.ts`, `story.int.test.ts` (scripted fake AI, real Postgres: gate failure, retry without new model calls, resume after a transient error, carry-over) |
 | **Story architecture** (M3) | Builds premise, central question, narrative spine, resolution and sequences (hook, question, key events with claims, characters, conflict, escalation, reveal, ending beat, caveats, duration) from the editor's selection. Story evidence is the selected units' own claims only; other dossier claims appear only as labelled background (purpose, own sources) and may not add a story, person, event, figure, date or beat; sources, historical status and confidence derived per sequence; a fact-checking reviewer may return a corrected version (kept only if it has no more evidence problems); architecture gate (traceability, framing of disputed/myth claims, invented people, figures, HIGH-priority units, runtime, story vs list of facts); rework uses the editor's rejection notes | `architecture.test.ts`, `story.int.test.ts` |
-| **Story API + dashboard** (M3) | `GET /api/projects/:id/story`, `PATCH /api/story-candidates/:id`, `POST …/story/mine`, `POST …/story/architecture` (selection checked first); Story page: ranked candidates with scores and the ranking formula, arcs, myth threads, evidence (claims, quotes, sources), editor controls (approve/reject/flag, in-the-documentary, priority, notes), selection vs AI proposal, architecture with sequences and per-sequence evidence, both gate reports, cost; approval panel (Approve / Reject → Rework / Flag) | `app.int.test.ts`; Playwright run on fake-AI data (editor actions, selection limits, rejection) with no console errors |
+| **Story API + dashboard** (M3) | `GET /api/projects/:id/story`, `PATCH /api/story-candidates/:id`, `POST …/story/mine`, `POST …/story/architecture` (selection checked first); Story page: ranked candidates with scores and the ranking formula, arcs, myth threads, evidence (claims, quotes, sources), editor controls (approve/reject/flag, in-the-documentary, priority, notes), selection vs AI proposal, architecture with sequences and per-sequence evidence, both gate reports, cost; approval panel (Approve / Reject → Rework / Flag). Project pages are linked by an Overview · Research dossier · Story bar; the Research and Story stage boxes open their pages; new pages open at the top; pages fit a phone screen | `app.int.test.ts`; Playwright run on fake-AI data (editor actions, selection limits, rejection) with no console errors; Playwright at a 412 px phone viewport: every route into the Story page, no horizontal overflow |
 
 Test counts at time of writing: **264 unit** (17 files) + **51 integration** (5 files), all passing.
 
@@ -40,7 +41,7 @@ Project *Tulip Mania*, real Claude (`claude-opus-5-5`) and Tavily (API key):
 | Discovery | 12 questions, 48 searches → 265 candidate sources |
 | Selection | 44 selected → 41 unique documents retrieved and read |
 | Evidence | 666 quotes verified verbatim against the retrieved text, 16 rejected |
-| Dossier v1 | 79 claims, 41 cited sources, quality gate **PASSED**, awaiting human review |
+| Dossier v1 | 79 claims, 41 cited sources, quality gate **PASSED**, approved by the editor |
 | Verdicts | ESTABLISHED 42 · PROBABLE 9 · DISPUTED 15 · UNVERIFIED 3 · MYTH 10 |
 | Timing | synthesis ≈ 15 min (one model call over all evidence) |
 | Cost | on the project's Cost card; it includes the failed attempts below, so it is not the cost of a clean run |
@@ -60,15 +61,29 @@ Found live and fixed (each with tests):
    grammar is too large"; an unpublished internal limit). Fixed with an
    automatic schema-in-instructions fallback (`d55b038`); the retry resumed at
    synthesis and reused every earlier step.
+5. The Story page was hard to find on a phone: the only links were an inline
+   link and a button below the jobs table, the "Story · In progress" stage box
+   was not a link, and the dossier's "Story material" tab (research notes) did
+   not point to it. Fixed: an Overview · Research dossier · Story bar on every
+   project page, clickable stage boxes, a "Review story candidates" button,
+   a pointer from the dossier's story material, pages that open at the top and
+   fit a phone screen.
 
 Docker note: in the development sandbox, outbound TLS from inside Docker is
 intercepted, so local image builds used a test-only copy of the Dockerfile
 that trusts the sandbox CA. The committed Dockerfile is what Railway builds.
 
+Story mining, live on the approved dossier v1 (2026-10-04): 24 candidates
+proposed, none removed by the evidence rules or the critic (7 need a caveat),
+8 proposed for the documentary, mining gate **PASSED**; 3 model calls,
+≈ $1.87 estimated, 9 min 18 s. The first attempt failed on its first call,
+before any work, because the Anthropic account's credit balance was too low;
+a retry two minutes later succeeded.
+
 ## NOT YET VERIFIED LIVE
 
-- Story mining and story architecture with the real model on the approved
-  *Tulip Mania* dossier (needs the deploy, the dossier's approval, and a run).
+- Story architecture with the real model on the *Tulip Mania* selection
+  (needs the editor's selection and a run).
 - The cost of a clean research run end to end (the first run included failed
   attempts).
 

@@ -34,6 +34,7 @@ import { Link, useParams, useSearchParams } from 'react-router';
 import { api } from '../api.ts';
 import { CandidateStatusBadge, HistoricalBadge, PriorityBadge, SourceTypeBadge, StatusBadge, StoryTypeBadge } from '../components/badges.tsx';
 import { ClaimCard, ClaimRefs, QualityReportView, Section, type SourceLike } from '../components/evidence.tsx';
+import { ProjectNav } from '../components/ProjectNav.tsx';
 import { formatDate, formatUsd } from '../format.ts';
 
 type Tab = 'candidates' | 'selection' | 'architecture' | 'quality' | 'runs';
@@ -110,7 +111,8 @@ export function StoryPage() {
             </select>
           )}
         </div>
-        <p className="mt-1 text-xs text-stone-500">
+        <ProjectNav project={p} />
+        <p className="mt-2 text-xs text-stone-500">
           Story units mined from the approved research dossier{v.pack ? ` v${v.pack.dossierVersion}` : ''}. Every unit and sequence traces to dossier claims and their sources; historical status and confidence are computed from the claims' verdicts. Nothing here is approved automatically.
         </p>
       </div>

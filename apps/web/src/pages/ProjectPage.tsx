@@ -14,6 +14,7 @@ import { useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { api } from '../api.ts';
 import { JobStatusBadge, MockBadge, StatusBadge } from '../components/badges.tsx';
+import { ProjectNav, hasStoryPage } from '../components/ProjectNav.tsx';
 import { ProgressBar, StagePipeline } from '../components/StagePipeline.tsx';
 import { formatDate, formatDuration, formatRuntime, formatUsd } from '../format.ts';
 
@@ -42,6 +43,7 @@ export function ProjectPage() {
           <ProgressBar value={p.progress} />
         </div>
         {p.workingTitle && <p className="text-stone-600 italic">{p.workingTitle}</p>}
+        <ProjectNav project={p} />
         <dl className="mt-3 grid gap-x-6 gap-y-1 text-sm text-stone-600 sm:grid-cols-2">
           <Meta label="Topic">{p.topic}</Meta>
           <Meta label="Category">{p.category ?? '—'}</Meta>
@@ -55,14 +57,21 @@ export function ProjectPage() {
         {p.description && <p className="mt-2 max-w-3xl text-sm text-stone-600">{p.description}</p>}
       </div>
 
-      <StagePipeline stages={p.stages} />
+      <StagePipeline
+        stages={p.stages}
+        links={{
+          RESEARCH: p.research ? `/projects/${p.slug}/research` : undefined,
+          STORY: hasStoryPage(p) ? `/projects/${p.slug}/story` : undefined,
+        }}
+      />
 
+      {/* min-w-0: without it a grid column grows to its widest content (the jobs table) and the page overflows on phones. */}
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
+        <div className="min-w-0 space-y-6 lg:col-span-2">
           <NextActions project={p} />
           <JobsTable project={p} />
         </div>
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           {(p.story.pack || p.story.architecture || p.status === 'RESEARCH_COMPLETE') && <StoryCard project={p} />}
           {p.research && (
             <Card title="Research dossier">
@@ -210,6 +219,9 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
   const rewind = useProjectMutation(p, () => api.rewind(p.id, { to: rewindTo as ProjectStatus, reason }));
   const active = p.jobs.filter((j) => j.status === 'QUEUED' || j.status === 'RUNNING');
   const error = enqueue.error ?? decide.error ?? rewind.error;
+  // The architecture is generated from the Story page, where the selection it is built from is visible.
+  const runnableJobs = p.status === 'STORY_SELECTION' ? p.actions.runnableJobs.filter((t) => t !== 'STORY_ARCHITECTURE') : p.actions.runnableJobs;
+  const storyPage = `/projects/${p.slug}/story`;
 
   return (
     <Card title="Next actions">
@@ -221,15 +233,31 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
         )}
 
         {p.status === 'STORY_SELECTION' && (
+          <div className="rounded-md border border-sky-200 bg-sky-50 p-3">
+            <p className="text-sm font-medium text-sky-950">Your turn: choose the stories</p>
+            <p className="mt-1 text-sm text-sky-900">
+              Story mining found {p.story.pack?.candidateCount ?? 0} story candidates; {p.story.pack?.selectedCount ?? 0} are selected for the documentary so far. On the Story page,
+              read them, approve, reject or flag each one, keep 5–10 selected, then generate the story architecture there.
+            </p>
+            <Link to={storyPage} className={`${button} mt-2 inline-block bg-sky-700 text-white hover:bg-sky-600`}>
+              Review story candidates →
+            </Link>
+          </div>
+        )}
+
+        {(p.status === 'STORY_MINING' || p.status === 'STORY_ARCHITECTING') && (
           <p className="text-sm">
-            Curate the story candidates on the <Link className="font-medium underline" to={`/projects/${p.slug}/story`}>Story page</Link>: approve, reject or flag them, choose 5–10 for the documentary, then generate the architecture.
+            {p.status === 'STORY_MINING' ? 'Story mining is running.' : 'The story architecture is being generated.'}{' '}
+            <Link className="font-medium underline" to={storyPage}>
+              Follow it on the Story page →
+            </Link>
           </p>
         )}
 
-        {p.actions.runnableJobs.length > 0 && (
+        {runnableJobs.length > 0 && (
           <div>
             <div className="flex flex-wrap gap-2">
-              {p.actions.runnableJobs.map((type) => {
+              {runnableJobs.map((type) => {
                 const busy = active.some((j) => j.type === type);
                 return (
                   <button
@@ -245,7 +273,7 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
             </div>
             <p className="mt-1 text-xs text-stone-500">
               {p.actions.startsPhase ? `Starts the “${STATUS_LABELS[p.actions.startsPhase]}” phase. ` : ''}
-              {p.actions.runnableJobs.map((t) => `${JOB_TYPE_LABELS[t]}: ${realStages.includes(t) ? 'real' : 'MOCK placeholder'}`).join(' · ')}
+              {runnableJobs.map((t) => `${JOB_TYPE_LABELS[t]}: ${realStages.includes(t) ? 'real' : 'MOCK placeholder'}`).join(' · ')}
             </p>
           </div>
         )}
@@ -254,14 +282,20 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
           <div className="rounded-md border border-violet-200 bg-violet-50 p-3">
             <p className="text-sm font-medium text-violet-900">Human approval required: {GATE_LABELS[p.actions.gate.gate]}</p>
             {p.actions.gate.gate === 'RESEARCH' && p.research && (
-              <p className="text-xs text-violet-800">
-                Review <Link className="underline" to={`/projects/${p.slug}/research`}>research dossier v{p.research.version}</Link> before deciding.
-              </p>
+              <div className="mt-1">
+                <p className="text-xs text-violet-800">Read the dossier before deciding.</p>
+                <Link to={`/projects/${p.slug}/research`} className={`${button} mt-1 inline-block bg-violet-700 text-white hover:bg-violet-600`}>
+                  Open research dossier v{p.research.version} →
+                </Link>
+              </div>
             )}
             {p.actions.gate.gate === 'STORY' && p.story.architecture && (
-              <p className="text-xs text-violet-800">
-                Review <Link className="underline" to={`/projects/${p.slug}/story`}>story architecture v{p.story.architecture.version}</Link> before deciding.
-              </p>
+              <div className="mt-1">
+                <p className="text-xs text-violet-800">Read the story architecture before deciding.</p>
+                <Link to={storyPage} className={`${button} mt-1 inline-block bg-violet-700 text-white hover:bg-violet-600`}>
+                  Open story architecture v{p.story.architecture.version} →
+                </Link>
+              </div>
             )}
             {!p.actions.canApprove && <p className="text-xs text-violet-800">Approval unlocks once the automated jobs for this step have succeeded.</p>}
             <textarea
@@ -285,7 +319,7 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
           </div>
         )}
 
-        {p.actions.runnableJobs.length === 0 && !p.actions.gate && p.status !== 'FAILED' && (
+        {runnableJobs.length === 0 && !p.actions.gate && p.status !== 'FAILED' && p.status !== 'STORY_SELECTION' && (
           <p className="text-sm text-stone-500">{p.status === 'PUBLISHED' ? 'Published. Nothing left to do.' : 'No actions available in this status.'}</p>
         )}
 

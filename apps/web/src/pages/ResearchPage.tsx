@@ -6,12 +6,14 @@ import {
   type ApprovalDecision,
   type ClaimVerdict,
   type DossierView,
+  type ProjectDetailView,
 } from '@docengine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { api } from '../api.ts';
 import { SourceTypeBadge, VerdictBadge } from '../components/badges.tsx';
+import { ProjectNav, hasStoryPage } from '../components/ProjectNav.tsx';
 import { ClaimCard, ClaimRefs, QualityReportView, Section } from '../components/evidence.tsx';
 import { formatDate, formatUsd } from '../format.ts';
 
@@ -36,6 +38,7 @@ export function ResearchPage() {
       <div className="space-y-2">
         <Link to={`/projects/${p.slug}`} className="text-sm text-stone-500 hover:underline">← {p.title}</Link>
         <h1 className="text-2xl font-semibold">Research dossier</h1>
+        <ProjectNav project={p} />
         <p className="text-sm text-stone-500">No dossier yet. Run the Research stage from the project page.</p>
       </div>
     );
@@ -73,7 +76,8 @@ export function ResearchPage() {
             </select>
           )}
         </div>
-        <p className="mt-1 text-xs text-stone-500">
+        <ProjectNav project={p} />
+        <p className="mt-2 text-xs text-stone-500">
           Generated {formatDate(d.createdAt)} · {String(d.stats.models ? (d.stats.models as string[]).join(', ') : '')} · research cost {formatUsd(d.cost.totalUsd)}
           {d.cost.includesEstimates ? ' (estimated)' : ''} over {d.cost.calls} provider calls
         </p>
@@ -104,10 +108,34 @@ export function ResearchPage() {
 
       {tab === 'claims' && <ClaimsTab dossier={d} />}
       {tab === 'sources' && <SourcesTab dossier={d} />}
-      {tab === 'story' && <StoryTab dossier={d} />}
+      {tab === 'story' && (
+        <>
+          <StoryMaterialNote project={p} />
+          <StoryTab dossier={d} />
+        </>
+      )}
       {tab === 'questions' && <QuestionsTab dossier={d} />}
       {tab === 'quality' && <QualityTab dossier={d} />}
     </div>
+  );
+}
+
+/** The dossier's story material is research notes; mined story candidates live on the Story page. */
+function StoryMaterialNote({ project: p }: { project: ProjectDetailView }) {
+  return (
+    <p className="rounded-md border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
+      This is the story material noted during research.{' '}
+      {hasStoryPage(p) ? (
+        <>
+          The story candidates mined from the approved dossier, and the story selection, are on the{' '}
+          <Link className="font-medium underline" to={`/projects/${p.slug}/story`}>
+            Story page →
+          </Link>
+        </>
+      ) : (
+        'Story candidates are mined from the dossier once it is approved, and appear on the Story page.'
+      )}
+    </p>
   );
 }
 
