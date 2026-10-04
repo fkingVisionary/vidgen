@@ -7,14 +7,48 @@ access (see [Enabling real research](#enabling-real-research)).
 
 ## Services
 
+Exactly two Railway services:
+
 | Service | What | Required now |
 |---|---|---|
-| **app** | This repository, built from `Dockerfile` (config in `railway.json`) | Yes |
-| **Postgres** | Railway PostgreSQL | Yes |
+| **app** (e.g. `vidgen`) | This whole repository as **one** service, built from the root `Dockerfile` | Yes |
+| **Postgres** | Railway PostgreSQL (Database → PostgreSQL) | Yes |
 | worker | Same image, start command `node apps/api/dist/worker.js` | No — only when generation load justifies it |
 | Object storage | Cloudflare R2 (S3-compatible), outside Railway | No — arrives with real voice/visual providers |
 
-## What Railway does on each deploy (from `railway.json`)
+`apps/api`, `apps/web`, `modules/research` and `packages/*` are parts of the
+one application, **not** separate services.
+
+> **Do not add the app with "+ New → GitHub Repository".** Railway's automatic
+> import detects the pnpm workspace and stages one service per package
+> (`@docengine/api`, `@docengine/research`, `@docengine/web`), each with its
+> own build and start commands. None of them works on its own. Railway
+> documents this auto-import and no repository setting turns it off. Create an
+> **Empty Service** and connect the repository to it instead (below).
+
+> **`railway.json` is not read.** Railway has deprecated Config as Code:
+> new services cannot use `railway.json` / `railway.toml`, and existing ones
+> stop reading them on 2026-12-01. The file stays in the repository only as a
+> record of the same values; the settings below must be set on the service.
+
+## Service settings (app)
+
+| Setting (Railway → service → Settings) | Value |
+|---|---|
+| Source | GitHub repository, branch to deploy; **Root Directory empty** (repository root) |
+| Builder | Dockerfile, path `Dockerfile` (Railway also auto-detects it at the root) |
+| Start command | leave empty: the Dockerfile's `CMD` is `node apps/api/dist/server.js` |
+| **Pre-deploy command** | `sh scripts/release.sh` |
+| Healthcheck path | `/api/health`, timeout `120` s |
+| Restart policy | On failure, max `5` retries |
+| Draining seconds | `30` |
+
+**The pre-deploy command is required.** Without it no migrations run: the app
+starts against an empty database and logs `relation "jobs" does not exist`
+every second, while Railway still shows the deployment as SUCCESS (the health
+check only proves the database is reachable).
+
+## What happens on each deploy
 
 1. **Build** the `Dockerfile` (multi-stage: install → `prisma generate` →
    build dashboard → bundle API → production-only dependencies).
@@ -27,37 +61,45 @@ access (see [Enabling real research](#enabling-real-research)).
 4. **Health check:** waits for `GET /api/health` → 200 (database reachable)
    before routing traffic. Timeout 120 s.
 5. On the next deploy the old container gets SIGTERM; it stops taking
-   requests, returns in-flight jobs to the queue and exits (up to 30 s,
-   `drainingSeconds`).
+   requests, returns in-flight jobs to the queue and exits (up to 30 s).
+   **A deploy, restart or variable change interrupts a running research
+   job.** It resumes from its saved progress, but the step that was running
+   (for example synthesis) starts over and is paid again, so avoid changes
+   while research runs.
+
+Every push to the connected branch deploys automatically.
 
 ## Step by step (first deploy)
 
-1. **Create the project.** Railway dashboard → *New Project* → *Deploy from
-   GitHub repo* → choose this repository and the branch to deploy. Railway
-   reads `railway.json` and uses the Dockerfile builder.
-2. **Add PostgreSQL.** In the project canvas → *Create* → *Database* →
-   *PostgreSQL*.
-3. **Set variables on the app service** (*Variables* tab):
+1. **Create an empty project.** Railway dashboard → *New Project* → *Empty
+   project*.
+2. **Add PostgreSQL.** *+ New* → *Database* → *PostgreSQL*. A service named
+   `Postgres` appears.
+3. **Add the app as one service.** *+ New* → *Empty Service*; rename it (e.g.
+   `vidgen`). Then *Settings* → *Source* → *Connect Repo* → this repository →
+   choose the branch. Leave *Root Directory* empty.
+4. **Service settings:** set everything in the table above (pre-deploy
+   command, healthcheck, restart policy, draining).
+5. **Variables** on the app service (*Variables* tab):
 
    | Variable | Value |
    |---|---|
-   | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (reference variable — uses Railway's private network) |
-   | `NODE_ENV` | `production` |
+   | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (reference variable — Railway's private network) |
    | `DASHBOARD_PASSWORD` | a strong secret, **≥ 12 characters** (the app refuses to start without it in production) |
    | `DASHBOARD_USER` | optional, default `admin` |
 
-   Leave all `*_PROVIDER` variables unset (they default to `mock`).
-4. **Expose it.** App service → *Settings* → *Networking* → *Generate Domain*.
+   `NODE_ENV=production` is already set in the image. Leave the `*_PROVIDER`
+   variables unset (they default to `mock`) until you enable real research.
+6. **Deploy:** Railway stages all of the above; press *Deploy* on the
+   "Apply N changes" bar.
+7. **Expose it.** App service → *Settings* → *Networking* → *Generate Domain*.
    Do not set `PORT`; Railway provides it.
-5. **Deploy** (Railway deploys automatically after variable changes; otherwise
-   *Deploy* on the service).
-6. **Verify.**
+8. **Verify.**
+   - The deploy log shows `[release] applying database migrations` …
+     `All migrations have been successfully applied.` … `[release] done`.
    - `https://<your-domain>/api/health` → `{"status":"ok","database":"ok","mockMode":true,…}`
    - `https://<your-domain>/` → browser asks for the dashboard user/password →
      project list shows **Tulip Mania** in status *Idea*.
-
-Optional CLI route: `railway login`, `railway link` (pick the project/service),
-`railway up` deploys the current directory with the same `railway.json`.
 
 ## Enabling real research
 
@@ -88,17 +130,25 @@ Optional CLI route: `railway login`, `railway link` (pick the project/service),
    and prints the evidence report (sources by type, verdict counts, example
    disputed and myth claims with their quotes, quality gate, cost).
 
-A run reads about 45 documents with Claude. Rough estimate, **not yet
-measured on a live run**: $10–20 per run with the default model (mostly the
-output tokens of reading), plus ~130 Tavily credits (~$1 at $0.008). The run
-is stopped and marked FAILED if its recorded spend passes
-`RESEARCH_MAX_COST_USD` (checked between phases and before every document
-read). Retrieved documents and per-source readings are
-stored, so a retry or a second version re-reads only what is new.
+A run reads about 45 documents with Claude. First live run (Tulip Mania,
+2026-10-04): 265 candidate sources → 44 selected → 41 documents read → 79
+claims; synthesis alone took about 15 minutes. Cost per clean run is still an
+estimate ($10–20 with the default model, mostly the output tokens of reading,
+plus ~130 Tavily credits): that first run included failed attempts, so its
+total on the project's Cost card is higher than a clean run. The run is stopped
+and marked FAILED if its recorded spend passes `RESEARCH_MAX_COST_USD`
+(checked between steps and before every document read).
 
-The job runs in the embedded worker. A redeploy during a run returns the job
-to the queue; the next container resumes it from the stored documents and
-readings.
+**Retries do not repeat paid work.** Each completed step (plan, searches,
+triage, retrieval, synthesis, review) is saved with the job, and per-source
+readings are cached with the stored documents. An automatic retry, or the
+dashboard's *Retry* on a failed job, resumes after the last completed step;
+the Activity panel marks reused steps "reused from an earlier attempt". Use
+*Retry* on the most recent failed job: it holds the saved progress.
+
+The job runs in the embedded worker. A deploy, restart or variable change
+during a run returns the job to the queue; the next container resumes it, but
+the step that was running starts over.
 
 ## Environment variables
 
@@ -191,6 +241,9 @@ deploy and media must survive that.
 | Research job fails with `Research quality gate failed: …` | The dossier was saved as DRAFT; open it (Research dossier → Quality gate tab) to see which checks failed. Rewind and run again, possibly with a research brief. |
 | `/api/health` shows `"realStages":[]` although keys are set | Both `AI_PROVIDER=anthropic` and `RESEARCH_PROVIDER=tavily` are needed for the real research stage. |
 | Pre-deploy fails with `P1001: Can't reach database server` | `DATABASE_URL` missing or not referencing the Postgres service. |
+| Railway created services `@docengine/api`, `@docengine/research`, `@docengine/web` | The repository was added through "+ New → GitHub Repository" (monorepo auto-import). Discard those staged changes and use *Empty Service* → *Connect Repo* (step 3). |
+| Deployment shows SUCCESS but the log repeats `relation "jobs" does not exist` | The pre-deploy command `sh scripts/release.sh` is not set, so migrations never ran. Set it and redeploy. |
+| Research job fails with `invalid byte sequence for encoding "UTF8": 0x00` | Fixed in `cc69dd9` (extracted text is cleaned); deploy a newer commit and press Retry on the failed job. |
 | `/api/health` returns 503 `database: "error"` | Database down or credentials rotated; check the Postgres service. |
 | Browser keeps asking for a password | Wrong `DASHBOARD_USER`/`DASHBOARD_PASSWORD`. |
 | Jobs stay QUEUED | `WORKER_ENABLED=false` on the only service, or no worker service running. |

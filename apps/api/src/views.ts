@@ -25,7 +25,10 @@ export function findProject(db: Database, idOrSlug: string): Promise<Project | n
     : db.project.findUnique({ where: { slug: idOrSlug } });
 }
 
-export function toJobView(j: Job): JobView {
+/** Job columns the API reads; `checkpoint` (a running job's saved progress, up to ~1 MB) is never sent or needed. */
+export const JOB_VIEW_OMIT = { checkpoint: true } as const;
+
+export function toJobView(j: Omit<Job, 'checkpoint'>): JobView {
   return {
     id: j.id,
     type: j.type,
@@ -142,7 +145,7 @@ export async function loadProjectDetail(
 
   const [languageVersions, jobs, approvals, events, costs, phaseJobsComplete, rt, latestDossier] = await Promise.all([
     db.languageVersion.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'asc' } }),
-    db.job.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
+    db.job.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50, omit: JOB_VIEW_OMIT }),
     db.approval.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
     db.projectEvent.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
     costSummary(db, project),

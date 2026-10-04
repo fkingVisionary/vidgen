@@ -430,8 +430,29 @@ Claude   Tavily      Claude    Tavily      Claude   Claude        code          
 Cost and safety: every provider call goes through the ledger; the run stops
 (non-retryable) once its recorded spend passes `RESEARCH_MAX_COST_USD`,
 checked between phases and before every uncached read. Progress messages
-appear in the project activity log. A retry or a new version re-fetches only
-failed URLs and re-reads only new documents.
+appear in the project activity log.
+
+**Saved progress.** Each completed paid step (plan, discovered candidates,
+triage selection, retrieval, synthesis, review) is written to
+`jobs.checkpoint`. A retry (automatic, or a manual Retry, which copies the
+failed job's checkpoint to the new job) replays the saved steps in order and
+runs only what is missing; a step is reused only if every step before it was,
+and saved model outputs are re-validated against their schemas. Readings need
+no entry: they are cached per stored document. The checkpoint is cleared when
+a dossier passes the gate. A new version (rewind and research again) starts a
+fresh plan but still re-fetches only failed URLs and re-reads only new
+documents.
+
+**Text hygiene.** NUL and other control characters (common in text extracted
+from PDFs; PostgreSQL rejects NUL) are removed at the provider boundary and
+again before anything is stored or shown to a model. A document the database
+still refuses fails only that source.
+
+**Schema fallback.** Structured outputs compile the JSON schema into a
+grammar, and the API refuses grammars over an unpublished size limit (the
+synthesis schema hit it on the first live run). The Anthropic provider then
+repeats the request with the schema in the system prompt and validates the
+answer against the same zod schema.
 
 ## 12. Decisions
 
@@ -460,3 +481,6 @@ failed URLs and re-reads only new documents.
 | D21 | Costs from usage × configured prices, labelled ESTIMATED | Neither Anthropic nor Tavily returns dollars per call; inventing "actual" costs is not allowed | — |
 | D22 | Open-access copy for unretrievable scholarly works, strict same-work matching | Without it JSTOR/publisher refusals push the dossier toward popular sources; a wrong "copy" would misattribute words, so matching is conservative and the reader is told to confirm | Use the abstract/snippet (not allowed for key claims) |
 | D23 | Sources, retrieved texts and readings are shared across dossier versions | A retry or v2 re-fetches only failures and re-reads only new documents | Re-research from scratch each version |
+| D24 | Retries resume from saved progress (`jobs.checkpoint`) | The first live run re-paid the plan, 48 searches and triage on each automatic retry after a deterministic failure; resuming makes a retry cost only the step that failed | Fewer automatic retries (still wastes the first repeat) |
+| D25 | Schema-in-instructions fallback when structured outputs reject a schema as too complex | The compile limit is unpublished; a fallback with the same validation avoids guessing a schema shape that fits | Redesigning the synthesis schema blind; splitting synthesis into several calls (more input tokens) |
+| D26 | Railway settings live on the service, not in `railway.json` | Railway deprecated Config as Code; new services cannot read it, and its GitHub import splits pnpm monorepos into per-package services | Railway IaC (`.railway/railway.ts`), applied with the Railway CLI — possible later |

@@ -136,6 +136,10 @@ there; nothing proceeds without a human decision.
 
 ## Deploying
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Short version: Railway project
-from this repo + PostgreSQL; set `DATABASE_URL=${{Postgres.DATABASE_URL}}`,
-`NODE_ENV=production`, `DASHBOARD_PASSWORD`; generate a domain.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Short version: a Railway
+project with **two** services, PostgreSQL and **one** *Empty Service*
+connected to this repository (not "+ New → GitHub Repository", which splits
+the monorepo into one broken service per package). On the app service set the
+pre-deploy command `sh scripts/release.sh`, healthcheck `/api/health`,
+`DATABASE_URL=${{Postgres.DATABASE_URL}}` and `DASHBOARD_PASSWORD`; generate a
+domain. Railway no longer reads `railway.json` for new services.

@@ -25,12 +25,12 @@ async function main() {
     const project = await c.db.project.findUnique({ where: { slug } });
     if (!project) throw new Error(`No project with slug "${slug}"`);
 
-    const active = await c.db.job.findFirst({ where: { projectId: project.id, type: 'RESEARCH', status: { in: ['QUEUED', 'RUNNING'] } } });
+    const active = await c.db.job.findFirst({ where: { projectId: project.id, type: 'RESEARCH', status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } });
     const job = active ?? (await c.projects.enqueueJob(project.id, { type: 'RESEARCH' }, 'research-cli'));
     logger.info({ jobId: job.id, project: slug }, active ? 'resuming existing research job' : 'research job queued');
 
     for (;;) {
-      const current = await c.db.job.findUniqueOrThrow({ where: { id: job.id } });
+      const current = await c.db.job.findUniqueOrThrow({ where: { id: job.id }, select: { status: true, error: true } });
       if (current.status === 'SUCCEEDED' || current.status === 'FAILED' || current.status === 'CANCELLED') {
         logger.info({ status: current.status, error: current.error }, 'research job finished');
         break;
