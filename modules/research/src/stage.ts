@@ -26,7 +26,8 @@ import {
 } from './prompts.ts';
 import { computeQualityReport } from './quality.ts';
 import { PlanOutput, ReadOutput, ReviewOutput, SynthesisOutput, TriageOutput } from './schemas.ts';
-import { normalizeForMatch, sha256, textSimilarity, verifyQuote } from './text.ts';
+import { SAME_WORK_THRESHOLD, openAccessLookup, sameWorkScore, titleTokens, type OpenAccessLookup } from './open-access.ts';
+import { normalizeForMatch, relevantExcerpt, sha256, textSimilarity, topicKeywords, verifyQuote } from './text.ts';
 import { domainOf, normalizeUrl } from './urls.ts';
 import { countBy, errorMessage, mapLimit } from './util.ts';
 
@@ -81,6 +82,17 @@ interface Retrieved {
   sha: string;
   duplicateOfId: string | null;
   sourceType: SourceType;
+  /** Told to the reader, e.g. that this is an open-access copy of another source. */
+  note: string | null;
+}
+
+/** A selected source during retrieval. */
+interface Row {
+  sourceId: string;
+  cand: Candidate;
+  doc: { id: string; text: string; sha256: string } | null;
+  error: string | null;
+  note: string | null;
 }
 
 interface Stats {
@@ -94,6 +106,8 @@ interface Stats {
   retrievedNew: number;
   retrievedFromCache: number;
   retrievalFailed: number;
+  openAccessLookups: number;
+  openAccessRecovered: number;
   duplicates: number;
   read: number;
   readFromCache: number;
@@ -117,6 +131,8 @@ class ResearchRun {
     retrievedNew: 0,
     retrievedFromCache: 0,
     retrievalFailed: 0,
+    openAccessLookups: 0,
+    openAccessRecovered: 0,
     duplicates: 0,
     read: 0,
     readFromCache: 0,
@@ -128,6 +144,8 @@ class ResearchRun {
   };
   private readonly focusAreas: { id: string; text: string }[];
   private readonly brief: string[];
+  /** Topic words used to pick the relevant passages of very long documents. */
+  private readonly keywords: string[];
 
   constructor(
     private readonly ctx: StageContext,
@@ -137,6 +155,7 @@ class ResearchRun {
     const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
     this.brief = [...list(meta.researchBrief), ...list(meta.editorialBrief)];
     this.focusAreas = [...DEFAULT_FOCUS_AREAS, ...list(meta.researchBrief)].map((text, i) => ({ id: `F${i + 1}`, text }));
+    this.keywords = topicKeywords(ctx.project.title, ctx.project.topic);
   }
 
   async run(): Promise<Record<string, unknown>> {
@@ -365,74 +384,15 @@ class ResearchRun {
 
   // ── 4. Retrieve ────────────────────────────────────────────────────────────
   private async retrieve(selected: Candidate[]): Promise<Retrieved[]> {
-    const { db, project } = this.ctx;
-    const { research } = this.ctx.providers;
-    const rows = new Map<string, { sourceId: string; cand: Candidate; doc: { id: string; text: string; sha256: string } | null }>();
-
+    const { db } = this.ctx;
+    const rows = new Map<string, Row>();
     for (const cand of selected) {
-      const existing = await db.source.findUnique({
-        where: { projectId_normalizedUrl: { projectId: project.id, normalizedUrl: cand.normalizedUrl } },
-        include: { document: { select: { id: true, text: true, sha256: true } } },
-      });
-      const discovered = [
-        ...(Array.isArray(existing?.discoveredBy) ? (existing.discoveredBy as unknown[]) : []),
-        { jobId: this.ctx.job.id, questions: [...cand.questionIds], queries: [...cand.queries] },
-      ] as Prisma.InputJsonValue;
-      const data = { searchSnippet: cand.snippet.slice(0, 2_000), searchScore: cand.score, discoveredBy: discovered };
-      const source = existing
-        ? await db.source.update({ where: { id: existing.id }, data })
-        : await db.source.create({
-            data: {
-              projectId: project.id,
-              url: cand.url,
-              normalizedUrl: cand.normalizedUrl,
-              domain: cand.domain,
-              title: cand.title,
-              sourceType: cand.hint,
-              publishedDate: cand.publishedDate,
-              citation: `${cand.title}. ${cand.url}`,
-              ...data,
-            },
-          });
-      rows.set(cand.normalizedUrl, { sourceId: source.id, cand, doc: existing?.document ?? null });
+      rows.set(cand.normalizedUrl, await this.upsertSource(cand, { questions: [...cand.questionIds], queries: [...cand.queries] }));
     }
-
     const toFetch = [...rows.values()].filter((r) => !r.doc);
     this.stats.retrievedFromCache = rows.size - toFetch.length;
-    for (let i = 0; i < toFetch.length; i += research.maxBatchSize) {
-      this.ctx.signal.throwIfAborted();
-      const batch = toFetch.slice(i, i + research.maxBatchSize);
-      let res;
-      try {
-        res = await this.ctx.callProvider('research', 'fetchDocuments', () => research.fetchDocuments(batch.map((b) => b.cand.url), { depth: 'advanced' }), {
-          request: { urls: batch.map((b) => b.cand.url) },
-          summarize: (r) => ({ documents: r.documents.length, failed: r.failed }),
-        });
-      } catch (err) {
-        if (err instanceof ProviderError && err.retryable) throw err;
-        for (const b of batch) await this.markFailed(b.sourceId, errorMessage(err));
-        continue;
-      }
-      const byUrl = new Map(batch.map((b) => [b.cand.url, b]));
-      for (const d of res.documents) {
-        const b = byUrl.get(d.url);
-        if (!b) continue;
-        if (d.text.trim().length < this.cfg.minDocumentChars) {
-          await this.markFailed(b.sourceId, `retrieved only ${d.text.trim().length} characters (paywall, stub or blocked page)`);
-          continue;
-        }
-        const doc = await db.sourceDocument.create({
-          data: { sourceId: b.sourceId, provider: research.info.name, contentFormat: d.contentType, text: d.text, chars: d.text.length, sha256: sha256(d.text) },
-        });
-        await db.source.update({ where: { id: b.sourceId }, data: { retrievalStatus: 'RETRIEVED', retrievalError: null, accessedAt: new Date() } });
-        b.doc = { id: doc.id, text: doc.text, sha256: doc.sha256 };
-        this.stats.retrievedNew++;
-      }
-      for (const f of res.failed) {
-        const b = byUrl.get(f.url);
-        if (b && !b.doc) await this.markFailed(b.sourceId, f.error);
-      }
-    }
+    await this.fetchInto(toFetch);
+    await this.openAccessFallback(rows);
 
     // Order: strongest type hint first, so the canonical copy of a duplicate is the better source.
     const ok = [...rows.values()].filter((r) => r.doc).sort((a, b) => SOURCE_TIER[a.cand.hint] - SOURCE_TIER[b.cand.hint] || b.cand.score - a.cand.score);
@@ -449,6 +409,7 @@ class ResearchRun {
       sha: r.doc!.sha256,
       duplicateOfId: null,
       sourceType: r.cand.hint,
+      note: r.note,
     }));
 
     // Duplicates: identical content, or near-identical text (mirrors, syndicated copies).
@@ -468,15 +429,217 @@ class ResearchRun {
 
     const unique = retrieved.filter((r) => !r.duplicateOfId).length;
     await this.ctx.progress(
-      `Retrieval: ${unique} unique documents (${this.stats.retrievedNew} fetched, ${this.stats.retrievedFromCache} cached, ${this.stats.retrievalFailed} failed, ${this.stats.duplicates} duplicates)`,
+      `Retrieval: ${unique} unique documents (${this.stats.retrievedNew} fetched, ${this.stats.retrievedFromCache} cached, ${this.stats.retrievalFailed} failed, ${this.stats.duplicates} duplicates; ` +
+        `open-access copies found for ${this.stats.openAccessRecovered} of ${this.stats.openAccessLookups} unretrievable scholarly works)`,
     );
     if (unique < 5) throw new NonRetryableError(`Only ${unique} source documents could be retrieved; not enough to research from`);
     return retrieved;
   }
 
-  private async markFailed(sourceId: string, error: string) {
+  /** Create or refresh the project's source row for a candidate; an already retrieved document is reused. */
+  private async upsertSource(cand: Candidate, discovery: Record<string, unknown>): Promise<Row> {
+    const { db, project } = this.ctx;
+    const existing = await db.source.findUnique({
+      where: { projectId_normalizedUrl: { projectId: project.id, normalizedUrl: cand.normalizedUrl } },
+      include: { document: { select: { id: true, text: true, sha256: true } } },
+    });
+    const discovered = [
+      ...(Array.isArray(existing?.discoveredBy) ? (existing.discoveredBy as unknown[]) : []),
+      { jobId: this.ctx.job.id, ...discovery },
+    ] as Prisma.InputJsonValue;
+    const data = { searchSnippet: cand.snippet.slice(0, 2_000), searchScore: cand.score, discoveredBy: discovered };
+    const source = existing
+      ? await db.source.update({ where: { id: existing.id }, data })
+      : await db.source.create({
+          data: {
+            projectId: project.id,
+            url: cand.url,
+            normalizedUrl: cand.normalizedUrl,
+            domain: cand.domain,
+            title: cand.title,
+            sourceType: cand.hint,
+            publishedDate: cand.publishedDate,
+            citation: `${cand.title}. ${cand.url}`,
+            ...data,
+          },
+        });
+    return { sourceId: source.id, cand, doc: existing?.document ?? null, error: null, note: null };
+  }
+
+  /** Retrieve full text for rows without a document, in provider-sized batches. */
+  private async fetchInto(toFetch: Row[]) {
+    const { db } = this.ctx;
+    const { research } = this.ctx.providers;
+    for (let i = 0; i < toFetch.length; i += research.maxBatchSize) {
+      this.ctx.signal.throwIfAborted();
+      const batch = toFetch.slice(i, i + research.maxBatchSize);
+      let res;
+      try {
+        res = await this.ctx.callProvider('research', 'fetchDocuments', () => research.fetchDocuments(batch.map((b) => b.cand.url), { depth: 'advanced' }), {
+          request: { urls: batch.map((b) => b.cand.url) },
+          summarize: (r) => ({ documents: r.documents.length, failed: r.failed }),
+        });
+      } catch (err) {
+        if (err instanceof ProviderError && err.retryable) throw err;
+        for (const b of batch) await this.markFailed(b, errorMessage(err));
+        continue;
+      }
+      const byUrl = new Map(batch.map((b) => [b.cand.url, b]));
+      for (const d of res.documents) {
+        const b = byUrl.get(d.url);
+        if (!b) continue;
+        if (d.text.trim().length < this.cfg.minDocumentChars) {
+          await this.markFailed(b, `retrieved only ${d.text.trim().length} characters (paywall, stub or blocked page)`);
+          continue;
+        }
+        const doc = await db.sourceDocument.create({
+          data: { sourceId: b.sourceId, provider: research.info.name, contentFormat: d.contentType, text: d.text, chars: d.text.length, sha256: sha256(d.text) },
+        });
+        await db.source.update({ where: { id: b.sourceId }, data: { retrievalStatus: 'RETRIEVED', retrievalError: null, accessedAt: new Date() } });
+        b.doc = { id: doc.id, text: doc.text, sha256: doc.sha256 };
+        this.stats.retrievedNew++;
+      }
+      for (const f of res.failed) {
+        const b = byUrl.get(f.url);
+        if (b && !b.doc) await this.markFailed(b, f.error);
+      }
+    }
+  }
+
+  /**
+   * Scholarly publisher pages (JSTOR, journal sites) usually refuse automated
+   * retrieval, which would leave the dossier leaning on popular retellings.
+   * For each high-tier work that failed, search once for an open-access copy
+   * (author manuscript, working paper, university repository) and accept the
+   * first copy that is retrievable and whose title matches (open-access.ts).
+   * The copy is a source in its own right: the reader is told what it stands
+   * in for, and the original keeps its FAILED status with a pointer to it.
+   */
+  private async openAccessFallback(rows: Map<string, Row>) {
+    const { db, project } = this.ctx;
+    const { research } = this.ctx.providers;
+
+    // One lookup per work: the same article is often selected under two URLs.
+    const byWork = new Map<string, { lookup: OpenAccessLookup; originals: Row[] }>();
+    for (const r of rows.values()) {
+      if (r.doc || SOURCE_TIER[r.cand.hint] !== 1) continue;
+      const lookup = openAccessLookup(r.cand.title);
+      if (!lookup) continue;
+      const key = titleTokens(lookup.main).join(' ');
+      const work = byWork.get(key);
+      if (work) work.originals.push(r);
+      else byWork.set(key, { lookup, originals: [r] });
+    }
+    const works = [...byWork.values()].slice(0, this.cfg.maxOpenAccessLookups);
+    if (works.length === 0) return;
+
+    const searches = await mapLimit(
+      works,
+      this.cfg.searchConcurrency,
+      (w) =>
+        this.ctx.callProvider(
+          'research',
+          'search',
+          () => research.search({ query: w.lookup.query, maxResults: 5, depth: 'basic', excludeDomains: [...new Set([...EXCLUDED_DOMAINS, ...w.originals.map((o) => o.cand.domain)])] }),
+          { request: { query: w.lookup.query, openAccessFor: w.originals.map((o) => o.cand.url) }, summarize: (x) => ({ results: x.results.length }) },
+        ),
+      this.ctx.signal,
+    );
+
+    // Up to three title-matching copies per work, best match first.
+    const options = works.map((w, i) => {
+      const res = searches[i]!;
+      this.stats.searches++;
+      this.stats.openAccessLookups++;
+      if (!res.ok) {
+        if (res.error instanceof ProviderError && res.error.retryable) throw res.error;
+        this.stats.searchFailures++;
+        this.ctx.logger.warn({ query: w.lookup.query, err: errorMessage(res.error) }, 'open-access lookup failed');
+        return [];
+      }
+      const originalDomains = new Set(w.originals.map((o) => o.cand.domain));
+      return res.value.results
+        .map((hit) => ({ hit, normalizedUrl: normalizeUrl(hit.url), domain: domainOf(hit.url), match: sameWorkScore(w.lookup, hit.title, hit.snippet) }))
+        .filter((x): x is typeof x & { normalizedUrl: string; domain: string } =>
+          Boolean(x.normalizedUrl && x.domain && !isExcludedDomain(x.domain) && !originalDomains.has(x.domain) && !rows.has(x.normalizedUrl) && x.match >= SAME_WORK_THRESHOLD),
+        )
+        .sort((a, b) => b.match - a.match || (b.hit.score ?? 0) - (a.hit.score ?? 0))
+        .slice(0, 3);
+    });
+
+    // Copies retrieved in an earlier run are reused; otherwise every option is fetched and the best retrievable one wins.
+    const known = await db.source.findMany({
+      where: { projectId: project.id, normalizedUrl: { in: options.flat().map((o) => o.normalizedUrl) }, document: { isNot: null } },
+      select: { normalizedUrl: true },
+    });
+    const knownUrls = new Set(known.map((k) => k.normalizedUrl));
+    const toFetch = [...new Set(options.filter((opts) => !opts.some((o) => knownUrls.has(o.normalizedUrl))).flat().map((o) => o.hit.url))];
+    const fetched = new Map<string, { contentType: string; text: string }>();
+    for (let i = 0; i < toFetch.length; i += research.maxBatchSize) {
+      this.ctx.signal.throwIfAborted();
+      const urls = toFetch.slice(i, i + research.maxBatchSize);
+      try {
+        const res = await this.ctx.callProvider('research', 'fetchDocuments', () => research.fetchDocuments(urls, { depth: 'advanced' }), {
+          request: { urls, purpose: 'open-access copies' },
+          summarize: (r) => ({ documents: r.documents.length, failed: r.failed }),
+        });
+        for (const d of res.documents) if (d.text.trim().length >= this.cfg.minDocumentChars) fetched.set(d.url, d);
+      } catch (err) {
+        if (err instanceof ProviderError && err.retryable) throw err;
+        this.ctx.logger.warn({ urls, err: errorMessage(err) }, 'retrieving open-access copies failed');
+      }
+    }
+
+    for (const [i, w] of works.entries()) {
+      const pick = options[i]!.find((o) => !rows.has(o.normalizedUrl) && (knownUrls.has(o.normalizedUrl) || fetched.has(o.hit.url)));
+      if (!pick) continue;
+      const first = w.originals[0]!;
+      const cand: Candidate = {
+        id: `${first.cand.id}-OA`,
+        url: pick.hit.url,
+        normalizedUrl: pick.normalizedUrl,
+        domain: pick.domain,
+        title: pick.hit.title,
+        snippet: pick.hit.snippet,
+        score: pick.hit.score ?? 0,
+        publishedDate: pick.hit.publishedDate ?? null,
+        hint: sourceTypeHint(pick.domain), // the reader decides the real type after reading
+        questionIds: new Set(w.originals.flatMap((o) => [...o.cand.questionIds])),
+        queries: new Set([w.lookup.query]),
+      };
+      const copy = await this.upsertSource(cand, {
+        openAccessFor: w.originals.map((o) => o.sourceId),
+        sameWorkScore: pick.match,
+        questions: [...cand.questionIds],
+        queries: [w.lookup.query],
+      });
+      if (copy.doc) {
+        this.stats.retrievedFromCache++;
+      } else {
+        const d = fetched.get(pick.hit.url)!;
+        const doc = await db.sourceDocument.create({
+          data: { sourceId: copy.sourceId, provider: research.info.name, contentFormat: d.contentType, text: d.text, chars: d.text.length, sha256: sha256(d.text) },
+        });
+        await db.source.update({ where: { id: copy.sourceId }, data: { retrievalStatus: 'RETRIEVED', retrievalError: null, accessedAt: new Date() } });
+        copy.doc = { id: doc.id, text: doc.text, sha256: doc.sha256 };
+        this.stats.retrievedNew++;
+      }
+      copy.note = `Found as an open-access copy of "${first.cand.title}" (${first.cand.url}), which could not be retrieved. Check that this document is that work; if it is not, say so in reliabilityNotes and judge it on its own merits.`;
+      rows.set(cand.normalizedUrl, copy);
+      this.stats.openAccessRecovered++;
+      for (const o of w.originals) {
+        await db.source.update({
+          where: { id: o.sourceId },
+          data: { retrievalError: `${o.error ?? 'not retrieved'} — open-access copy retrieved instead: ${pick.hit.url}`.slice(0, 1_000) },
+        });
+      }
+    }
+  }
+
+  private async markFailed(row: Row, error: string) {
     this.stats.retrievalFailed++;
-    await this.ctx.db.source.update({ where: { id: sourceId }, data: { retrievalStatus: 'FAILED', retrievalError: error.slice(0, 1_000) } });
+    row.error = error;
+    await this.ctx.db.source.update({ where: { id: row.sourceId }, data: { retrievalStatus: 'FAILED', retrievalError: error.slice(0, 1_000) } });
   }
 
   // ── 5. Read ────────────────────────────────────────────────────────────────
@@ -497,7 +660,8 @@ class ResearchRun {
           output = ReadOutput.parse((cached.analysis as { output: unknown }).output);
           this.stats.readFromCache++;
         } else {
-          const truncated = r.text.length > this.cfg.maxDocumentChars;
+          const excerpt = relevantExcerpt(r.text, this.keywords, this.cfg.maxDocumentChars);
+          const truncated = excerpt.truncated;
           if (truncated) this.stats.truncatedDocuments++;
           const res = await this.ctx.callProvider(
             'ai',
@@ -509,12 +673,12 @@ class ResearchRun {
                 schemaName: 'SourceEvidence',
                 system,
                 cacheSystemPrompt: true,
-                messages: [{ role: 'user', content: readUserPrompt({ key: r.key, url: r.url, title: r.title, domain: r.domain, hint: r.hint, text: r.text.slice(0, this.cfg.maxDocumentChars), truncated }) }],
+                messages: [{ role: 'user', content: readUserPrompt({ key: r.key, url: r.url, title: r.title, domain: r.domain, hint: r.hint, note: r.note, text: excerpt.text, truncated }) }],
                 effort: this.cfg.effort.read,
                 maxTokens: 24_000,
                 signal: this.ctx.signal,
               }),
-            { request: { task: 'research.read', source: r.url, chars: Math.min(r.text.length, this.cfg.maxDocumentChars), truncated }, summarize: (x) => ({ evidence: x.object.evidence.length, relevance: x.object.assessment.relevance }) },
+            { request: { task: 'research.read', source: r.url, documentChars: r.text.length, sentChars: excerpt.text.length, truncated }, summarize: (x) => ({ evidence: x.object.evidence.length, relevance: x.object.assessment.relevance }) },
           );
           this.noteModel(res.meta.model);
           output = res.object;

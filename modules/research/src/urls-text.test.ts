@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sourceTypeHint } from './domains.ts';
-import { normalizeForMatch, textSimilarity, verifyQuote } from './text.ts';
+import { normalizeForMatch, relevantExcerpt, textSimilarity, topicKeywords, verifyQuote } from './text.ts';
 import { isValidSourceUrl, matchesDomain, normalizeUrl } from './urls.ts';
 
 describe('normalizeUrl', () => {
@@ -86,5 +86,56 @@ describe('textSimilarity', () => {
     expect(textSimilarity(base, base)).toBe(1);
     expect(textSimilarity(base, normalizeForMatch(`${base} footer added by the mirror site`))).toBeGreaterThan(0.9);
     expect(textSimilarity(base, normalizeForMatch('completely different content about Roman coinage and its debasement over centuries of empire'))).toBeLessThan(0.05);
+  });
+});
+
+describe('topicKeywords', () => {
+  it('keeps distinctive words, drops stopwords, short words and accents', () => {
+    expect(topicKeywords('Tulip Mania', 'The Dutch tulip bubble of 1636–37 and its later story')).toEqual(['tulip', 'mania', 'dutch', 'bubble', 'later']);
+    expect(topicKeywords('Tulipomanie in Haarlem — économie')).toEqual(['tulipomanie', 'haarlem', 'economie']);
+  });
+});
+
+describe('relevantExcerpt', () => {
+  const filler = (n: number, word = 'weather') => Array.from({ length: n }, (_, i) => `Paragraph ${i} about the ${word} and the harvest in the provinces, nothing else of note here.`).join('\n\n');
+  // A "book": front matter, 200 KB of unrelated chapters, the relevant chapter deep inside, more unrelated text.
+  const front = 'MEMOIRS OF EXTRAORDINARY POPULAR DELUSIONS. By Charles Mackay. London, 1841.';
+  const chapter = Array.from({ length: 12 }, (_, i) => `In ${1630 + (i % 8)} the tulip trade in Haarlem grew; a Semper Augustus bulb was said to fetch thousands of florins as the mania spread (${i}).`).join('\n\n');
+  const book = [front, filler(1500), chapter, filler(800, 'alchemists')].join('\n\n');
+
+  it('returns short documents unchanged', () => {
+    expect(relevantExcerpt('short text', ['tulip'], 1000)).toEqual({ text: 'short text', truncated: false });
+  });
+
+  it('finds the relevant chapter deep inside a long document and keeps the opening', () => {
+    expect(book.indexOf('Semper Augustus')).toBeGreaterThan(100_000);
+    const r = relevantExcerpt(book, topicKeywords('Tulip Mania', 'The Dutch tulip bubble'), 20_000);
+    expect(r.truncated).toBe(true);
+    expect(r.text.length).toBeLessThanOrEqual(20_000);
+    expect(r.text.startsWith(front)).toBe(true);
+    expect(r.text).toContain('a Semper Augustus bulb was said to fetch thousands of florins');
+    expect(r.text).toContain('[…]');
+    // A plain head-truncation would have missed the chapter entirely.
+    expect(book.slice(0, 20_000)).not.toContain('Semper Augustus');
+  });
+
+  it('never alters the text: quotes from the excerpt verify against the full document', () => {
+    const r = relevantExcerpt(book, ['tulip', 'mania'], 20_000);
+    const quote = r.text.split('\n\n').find((p) => p.includes('Semper Augustus'))!;
+    expect(verifyQuote(normalizeForMatch(book), quote)).toEqual({ verified: true, method: 'exact' });
+    for (const piece of r.text.split('\n\n[…]\n\n')) expect(book).toContain(piece);
+  });
+
+  it('falls back to the opening when no keyword occurs', () => {
+    const r = relevantExcerpt(book, ['zeppelin'], 5_000);
+    expect(r).toEqual({ text: book.slice(0, 5_000), truncated: true });
+  });
+
+  it('splits a single enormous paragraph without losing or reordering text', () => {
+    const blob = `${'lorem ipsum '.repeat(5_000)}the tulip mania ${'dolor sit '.repeat(5_000)}`;
+    const r = relevantExcerpt(blob, ['tulip'], 10_000);
+    expect(r.text.length).toBeLessThanOrEqual(10_000);
+    expect(r.text).toContain('the tulip mania');
+    for (const piece of r.text.split('\n\n[…]\n\n')) expect(normalizeForMatch(blob)).toContain(normalizeForMatch(piece));
   });
 });

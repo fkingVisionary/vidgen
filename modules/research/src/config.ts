@@ -16,10 +16,12 @@ export interface ResearchConfig {
   /** Diversity: at most this many retrieved sources from one domain. */
   maxPerDomain: number;
   readConcurrency: number;
-  /** Characters of each document given to the model (longer documents are truncated, and recorded as such). */
+  /** Characters of each document given to the model (longer documents are cut to their most topic-relevant passages, and recorded as such). */
   maxDocumentChars: number;
   /** Retrieved pages shorter than this are treated as failed retrievals (paywalls, stubs). */
   minDocumentChars: number;
+  /** High-tier sources that failed retrieval for which an open-access copy is searched (one search each). */
+  maxOpenAccessLookups: number;
   /** Abort the run if its recorded provider cost exceeds this (USD, estimated). */
   maxCostUsd: number;
   effort: { plan: ReasoningEffort; triage: ReasoningEffort; read: ReasoningEffort; synthesize: ReasoningEffort; review: ReasoningEffort };
@@ -48,6 +50,7 @@ export const DEFAULT_RESEARCH_CONFIG: ResearchConfig = {
   readConcurrency: 4,
   maxDocumentChars: 100_000,
   minDocumentChars: 600,
+  maxOpenAccessLookups: 10,
   maxCostUsd: 40,
   effort: { plan: 'high', triage: 'medium', read: 'medium', synthesize: 'high', review: 'high' },
   gate: {

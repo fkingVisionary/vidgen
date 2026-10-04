@@ -41,13 +41,25 @@ describe('research stage (fake providers, real database)', () => {
     expect((await db.project.findUniqueOrThrow({ where: { id: projectId } })).status).toBe('RESEARCH_REVIEW');
 
     // Discovery: multiple focused searches, deduplicated; social media excluded.
-    expect(s.research.searches).toBe(8);
+    expect(s.research.searches).toBe(9); // 8 topic searches + 1 open-access lookup
     const sources = await db.source.findMany({ where: { projectId }, include: { document: true } });
-    expect(sources).toHaveLength(15);
+    expect(sources).toHaveLength(16);
     expect(sources.some((x) => x.domain === 'instagram.com')).toBe(false);
     expect(sources.find((x) => x.domain === 'broken-site.org')).toMatchObject({ retrievalStatus: 'FAILED', retrievalError: 'Failed to fetch url' });
-    expect(sources.find((x) => x.domain === 'paywalled-journal.org')).toMatchObject({ retrievalStatus: 'FAILED' });
-    expect(sources.find((x) => x.domain === 'paywalled-journal.org')!.retrievalError).toMatch(/paywall, stub or blocked/);
+
+    // A scholarly source that could not be retrieved is replaced by an open-access copy of the same work (title must match).
+    expect(s.research.queries.at(-1)).toBe('"Paywalled article (test)" pdf');
+    const paywalled = sources.find((x) => x.domain === 'paywalled-journal.org')!;
+    expect(paywalled.retrievalStatus).toBe('FAILED');
+    expect(paywalled.retrievalError).toMatch(/paywall, stub or blocked page\) — open-access copy retrieved instead: https:\/\/repository\.test-university\.edu\//);
+    const oaCopy = sources.find((x) => x.domain === 'repository.test-university.edu')!;
+    expect(oaCopy).toMatchObject({ retrievalStatus: 'RETRIEVED', sourceType: 'ACADEMIC', author: 'Test Historian E' });
+    expect(oaCopy.discoveredBy).toEqual([expect.objectContaining({ openAccessFor: [paywalled.id], sameWorkScore: 1 })]);
+    // The best-matching copy failed to download, so the next one was used; the unrelated page was never fetched.
+    expect(s.research.fetched).toContain('https://www.researchgate.net/publication/test-paywalled-article');
+    expect(s.research.fetched).not.toContain('https://garden-tips.example.com/growing-tulips.pdf');
+    expect(sources.some((x) => x.domain === 'researchgate.net' || x.domain === 'garden-tips.example.com')).toBe(false);
+    expect(s.ai.readPrompts.find((p) => p.includes(oaCopy.url!))).toMatch(/Note: Found as an open-access copy of "Paywalled article \(test\)" \(https:\/\/paywalled-journal\.org\/abstract\)/);
     const mirror = sources.find((x) => x.domain === 'mirror-site.com')!;
     const jstor = sources.find((x) => x.domain === 'jstor.org')!;
     expect(mirror.duplicateOfId).toBe(jstor.id);
@@ -78,6 +90,7 @@ describe('research stage (fake providers, real database)', () => {
     expect(myth.citations.filter((c) => c.stance === 'SUPPORTS').map((c) => c.source.domain).sort()).toEqual(['archive.org', 'tulip-facts-blog.com']);
     expect(myth.citations.filter((c) => c.stance === 'CONTRADICTS').map((c) => c.source.domain).sort()).toEqual(['economist.com', 'jstor.org']);
     expect(byKey.get('C005')).toMatchObject({ verdict: 'DISPUTED', needsVerification: true });
+    expect(byKey.get('C006')!.citations.map((c) => c.source.domain).sort()).toEqual(['press.uchicago.edu', 'repository.test-university.edu']);
     expect(byKey.get('C007')).toMatchObject({ needsVerification: true }); // review fix applied
     // Every stored citation quote was verified against retrieved full text; the fabricated quote never made it.
     const citations = dossier.claims.flatMap((c) => c.citations);
@@ -88,14 +101,16 @@ describe('research stage (fake providers, real database)', () => {
     const content = dossier.content as { questions: unknown[]; timeline: unknown[]; myths: unknown[] };
     expect(content.questions).toHaveLength(4);
     expect(content.timeline).toHaveLength(3);
-    expect(dossier.stats).toMatchObject({ searches: 8, duplicates: 1, retrievalFailed: 2, evidenceVerified: 22, evidenceRejected: 1, promptVersion: 'research-v1' });
+    expect(dossier.stats).toMatchObject({
+      searches: 9, duplicates: 1, retrievalFailed: 2, openAccessLookups: 1, openAccessRecovered: 1, evidenceVerified: 23, evidenceRejected: 1, promptVersion: 'research-v1',
+    });
 
     // Ledger: every provider call recorded with an estimated cost and its basis.
     const calls = await db.providerCall.findMany({ where: { jobId: job.id } });
     const ops = calls.map((c) => `${c.provider}:${c.operation}`);
-    expect(ops.filter((o) => o === 'fake-search:search')).toHaveLength(8);
-    expect(ops.filter((o) => o === 'fake-search:fetchDocuments')).toHaveLength(3); // 15 sources, batches of 5
-    expect(ops.filter((o) => o === 'fake-ai:generateObject')).toHaveLength(4 + 12); // plan, triage, synthesis, review + 12 reads
+    expect(ops.filter((o) => o === 'fake-search:search')).toHaveLength(9);
+    expect(ops.filter((o) => o === 'fake-search:fetchDocuments')).toHaveLength(3 + 1); // 15 selected sources in batches of 5, then the open-access copy
+    expect(ops.filter((o) => o === 'fake-ai:generateObject')).toHaveLength(4 + 13); // plan, triage, synthesis, review + 13 reads
     expect(calls.every((c) => c.status === 'SUCCEEDED' && c.costBasis === 'ESTIMATED' && c.estimatedCostUsd !== null)).toBe(true);
 
     // Progress is visible on the activity log.
@@ -106,7 +121,7 @@ describe('research stage (fake providers, real database)', () => {
     // The plain-text evidence report reads straight from the database.
     const text = await buildDossierReport(db, dossier.id);
     expect(text).toMatch(/Research dossier v1 — status IN_REVIEW — quality gate PASSED/);
-    expect(text).toMatch(/Considered: 15 · retrieved: 13 · failed: 2 · duplicates: 1 · cited: 12/);
+    expect(text).toMatch(/Considered: 16 · retrieved: 14 · failed: 2 · duplicates: 1 · cited: 13/);
     expect(text).toMatch(/MYTH\s+2/);
     expect(text).toMatch(/\[C003\] Tulip mania ruined the Dutch economy\.\n\s+commonly claimed: Mackay/);
     expect(text).toMatch(/fake-ai .*calls .*estimated/);
@@ -126,7 +141,7 @@ describe('research stage (fake providers, real database)', () => {
   it('links the human decision to the dossier, and a re-run creates v2 reusing retrieved and read sources', async () => {
     const s = setup();
     const { projectId } = await runResearch(s);
-    expect(s.ai.calls['research.read']).toBe(12);
+    expect(s.ai.calls['research.read']).toBe(13);
 
     // The reviewer rejects v1.
     await s.projects.recordApproval(projectId, { gate: 'RESEARCH', decision: 'REJECTED', notes: 'Need more on prices' }, 'reviewer');
@@ -134,15 +149,15 @@ describe('research stage (fake providers, real database)', () => {
     expect(v1.status).toBe('REJECTED');
     expect((await db.approval.findFirstOrThrow({ where: { projectId } })).dossierId).toBe(v1.id);
 
-    // Re-run: retrieved documents are not fetched or read again (only the two earlier failures are retried).
+    // Re-run: retrieved documents (the open-access copy included) are not fetched or read again; only the two earlier failures are retried.
     const fetchedBefore = s.research.fetched.length;
     await runResearch(s, projectId);
     expect(s.research.fetched.slice(fetchedBefore).sort()).toEqual(['https://broken-site.org/tulips', 'https://paywalled-journal.org/abstract']);
-    expect(s.ai.calls['research.read']).toBe(12);
+    expect(s.ai.calls['research.read']).toBe(13);
     const v2 = await db.researchDossier.findFirstOrThrow({ where: { projectId, version: 2 } });
     expect(v2).toMatchObject({ status: 'IN_REVIEW', qualityPassed: true });
-    expect(v2.stats).toMatchObject({ readFromCache: 12, retrievedFromCache: 13 });
-    expect(await db.source.count({ where: { projectId } })).toBe(15); // sources are shared across versions, not duplicated
+    expect(v2.stats).toMatchObject({ readFromCache: 13, retrievedFromCache: 14, openAccessRecovered: 1 });
+    expect(await db.source.count({ where: { projectId } })).toBe(16); // sources are shared across versions, not duplicated
 
     await s.projects.recordApproval(projectId, { gate: 'RESEARCH', decision: 'APPROVED' }, 'reviewer');
     expect((await db.researchDossier.findUniqueOrThrow({ where: { id: v2.id } })).status).toBe('APPROVED');

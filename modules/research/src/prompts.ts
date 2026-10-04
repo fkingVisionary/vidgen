@@ -83,12 +83,12 @@ Focus areas:
 ${focusAreas.map((f) => `${f.id}: ${f.text}`).join('\n')}`;
 }
 
-export function readUserPrompt(p: { key: string; url: string; title: string; domain: string; hint: string; text: string; truncated: boolean }): string {
+export function readUserPrompt(p: { key: string; url: string; title: string; domain: string; hint: string; note?: string | null; text: string; truncated: boolean }): string {
   return `Source ${p.key}
 URL: ${p.url}
 Title (from search): ${p.title}
 Domain: ${p.domain} (domain-based type hint: ${p.hint})
-${p.truncated ? 'Note: the document was truncated for length; only the text below is available.\n' : ''}
+${p.note ? `Note: ${p.note}\n` : ''}${p.truncated ? 'Note: this is a long document; only its most topic-relevant passages are included, separated by […].\n' : ''}
 <document>
 ${p.text}
 </document>`;

@@ -36,10 +36,14 @@ export const REFERENCE_DOMAINS = [
   'wikipedia.org', 'britannica.com', 'worldhistory.org', 'encyclopedia.com', 'investopedia.com', 'oxfordreference.com',
 ] as const;
 
-/** Never useful as historical evidence. */
+/**
+ * Never useful as historical evidence: social media, and document-sharing
+ * sites (user uploads of unknown provenance, usually truncated previews).
+ */
 export const EXCLUDED_DOMAINS = [
   'instagram.com', 'facebook.com', 'tiktok.com', 'pinterest.com', 'x.com', 'twitter.com', 'reddit.com', 'quora.com',
   'youtube.com', 'linkedin.com', 'threads.net', 'snapchat.com',
+  'scribd.com', 'studocu.com', 'coursehero.com', 'pdfcoffee.com', 'dokumen.pub',
 ] as const;
 
 /** Domains search should favour (Tavily "prefer" mode: others still appear). */

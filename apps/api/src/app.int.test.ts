@@ -160,8 +160,11 @@ describe('research dossier API', () => {
     expect(myth.citations.map((x) => x.stance).sort()).toEqual(['CONTRADICTS', 'CONTRADICTS', 'SUPPORTS', 'SUPPORTS']);
     expect(myth.citations.every((x) => x.quoteVerified && x.basis === 'FULL_TEXT' && x.quote)).toBe(true);
     // All considered sources, with their outcome.
-    expect(d.sources).toHaveLength(15);
+    expect(d.sources).toHaveLength(16);
     expect(d.sources.filter((x) => x.retrievalStatus === 'FAILED')).toHaveLength(2);
+    // An unretrievable scholarly page points to the open-access copy used in its place.
+    expect(d.sources.find((x) => x.domain === 'paywalled-journal.org')!.retrievalError).toMatch(/open-access copy retrieved instead: https:\/\/repository\.test-university\.edu\//);
+    expect(d.sources.find((x) => x.domain === 'repository.test-university.edu')).toMatchObject({ retrievalStatus: 'RETRIEVED', sourceType: 'ACADEMIC', citationCount: 1 });
     expect(d.sources.filter((x) => x.duplicateOfId)).toHaveLength(1);
     expect(d.sources.find((x) => x.domain === 'jstor.org')).toMatchObject({ sourceType: 'ACADEMIC', citationCount: expect.any(Number) });
     expect(d.cost.calls).toBeGreaterThan(20);

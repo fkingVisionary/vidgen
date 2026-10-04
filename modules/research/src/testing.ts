@@ -28,6 +28,8 @@ interface CorpusEntry {
   copyOf?: string;
   fail?: string;
   stub?: boolean;
+  /** Only returned by an open-access lookup (a quoted-title "pdf" search) for this entry's title. */
+  openAccessFor?: string;
 }
 
 export const FAKE_CORPUS: CorpusEntry[] = [
@@ -81,6 +83,16 @@ export const FAKE_CORPUS: CorpusEntry[] = [
   { url: 'https://broken-site.org/tulips', title: 'Broken page (test)', type: 'GENERAL_WEB', author: null, facts: [], fail: 'Failed to fetch url' },
   { url: 'https://paywalled-journal.org/abstract', title: 'Paywalled article (test)', type: 'ACADEMIC', author: null, facts: [], stub: true },
   { url: 'https://www.instagram.com/p/test-tulips', title: 'Tulip post (test)', type: 'GENERAL_WEB', author: null, facts: [] },
+  // Open-access lookup results for the paywalled article: a matching copy that cannot be downloaded,
+  // an author manuscript (same title) and an unrelated page (must be rejected).
+  { url: 'https://www.researchgate.net/publication/test-paywalled-article', title: '(PDF) Paywalled article (test)', type: 'ACADEMIC', author: null, facts: [],
+    fail: 'Failed to fetch url', openAccessFor: 'https://paywalled-journal.org/abstract' },
+  { url: 'https://repository.test-university.edu/paywalled-article-manuscript.pdf', title: 'Paywalled article (test) [author manuscript]', type: 'ACADEMIC', author: 'Test Historian E', facts: [
+    'Notarial deeds name well-off artisans, merchants and a few patricians as the buyers of bulbs.',
+  ], openAccessFor: 'https://paywalled-journal.org/abstract' },
+  { url: 'https://garden-tips.example.com/growing-tulips.pdf', title: 'Growing tulips in your garden (test)', type: 'GENERAL_WEB', author: null, facts: [
+    'Plant tulip bulbs in autumn at a depth of three times their height.',
+  ], openAccessFor: 'https://paywalled-journal.org/abstract' },
 ];
 
 /** Long, unique filler so documents pass the minimum length and do not look like near-duplicates of each other. */
@@ -100,13 +112,20 @@ export class FakeResearchProvider implements ResearchProvider {
   readonly info: ProviderInfo = { kind: 'RESEARCH', name: 'fake-search', mock: false, rates: [{ provider: 'fake-search', unit: 'CREDITS', usdPerUnit: 0.01 }] };
   readonly maxBatchSize = 5;
   searches = 0;
+  queries: string[] = [];
   fetched: string[] = [];
 
-  async search(_q: ResearchQuery): Promise<SearchResponse> {
+  /** Topic searches return the whole corpus; a quoted-title "pdf" search returns that title's open-access candidates. */
+  async search(q: ResearchQuery): Promise<SearchResponse> {
     this.searches++;
+    this.queries.push(q.query);
+    const quoted = /^"(.+)" pdf$/.exec(q.query)?.[1];
+    const entries = quoted
+      ? FAKE_CORPUS.filter((e) => e.openAccessFor && FAKE_CORPUS.find((x) => x.url === e.openAccessFor)?.title === quoted)
+      : FAKE_CORPUS.filter((e) => !e.openAccessFor);
     return {
-      results: FAKE_CORPUS.map((e, i) => ({ title: e.title, url: e.url, snippet: e.facts[0] ?? e.title, score: 0.9 - i * 0.01 })),
-      meta: { provider: 'fake-search', model: 'search:advanced', mock: false, usage: [{ unit: 'CREDITS', quantity: 2 }] },
+      results: entries.map((e, i) => ({ title: e.title, url: e.url, snippet: e.facts[0] ?? e.title, score: 0.9 - i * 0.01 })),
+      meta: { provider: 'fake-search', model: `search:${q.depth ?? 'basic'}`, mock: false, usage: [{ unit: 'CREDITS', quantity: q.depth === 'advanced' ? 2 : 1 }] },
     };
   }
 
@@ -163,6 +182,8 @@ export class FakeResearchAI implements AIProvider {
     ],
   };
   calls: Record<string, number> = {};
+  /** User prompts of research.read calls, for asserting what the reader was told. */
+  readPrompts: string[] = [];
   /** Insert one fabricated quote in this source's reading, to prove quote verification rejects it. */
   fabricateFor = 'https://www.economist.com/test-tulip-myth';
 
@@ -186,15 +207,18 @@ export class FakeResearchAI implements AIProvider {
           })),
         } satisfies PlanOutput;
       case 'research.triage': {
+        // Like the model, triage judges the likely type from title and snippet, not only the domain.
         const lines = user.split('\n').filter((l) => /^C\d+ \|/.test(l));
         return {
           selected: lines.map((l) => {
-            const [id, , hint] = l.split(' | ');
-            return { candidateId: id!, likelySourceType: hint as SourceType, priority: 'ESSENTIAL', reason: 'test' };
+            const [id, , hint, , , url] = l.split(' | ');
+            const type = FAKE_CORPUS.find((e) => e.url === url)?.type ?? (hint as SourceType);
+            return { candidateId: id!, likelySourceType: type, priority: 'ESSENTIAL', reason: 'test' };
           }),
         } satisfies TriageOutput;
       }
       case 'research.read': {
+        this.readPrompts.push(user);
         const url = /^URL: (.*)$/m.exec(user)![1]!;
         const e = FAKE_CORPUS.find((x) => x.url === url)!;
         const evidence = e.facts.map((fact) => ({
