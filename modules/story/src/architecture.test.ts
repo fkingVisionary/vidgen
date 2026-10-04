@@ -39,6 +39,7 @@ function seq(u: SelectedUnit, over: Partial<ArchitectSequence> = {}): ArchitectS
     reveal: 'A reveal.',
     endingBeat: 'And then…',
     claimKeys: u.claimKeys,
+    contextClaims: [],
     caveats: [],
     estimatedDurationSec: 120,
     ...over,
@@ -109,6 +110,86 @@ describe('building the architecture', () => {
     ]);
     const r = computeArchitectureReport({ content: built.content, evidence, units: high, findings: built.findings, issues: [], normalizations: [], target });
     expect(r.checks.find((c) => c.id === 'editor_priorities')).toMatchObject({ status: 'FAIL' });
+  });
+});
+
+describe('story evidence is the selected units\' own claims', () => {
+  // The seven units above rest on C001–C009, C017, C018 and C020; C010–C016 and C019 belong to no selected unit.
+  const failed = (b: ReturnType<typeof buildArchitecture>) => report(b).checks.filter((c) => c.status === 'FAIL').map((c) => c.id);
+
+  it('fails story evidence and key events taken from outside the selection', () => {
+    const s = units.map(withCaveats);
+    s[0] = { ...s[0]!, claimKeys: [...s[0]!.claimKeys, 'C016'] };
+    s[1] = { ...s[1]!, keyEvents: [...s[1]!.keyEvents, { event: 'A beat from elsewhere', claimKeys: ['C013'] }] };
+    const built = buildArchitecture(output(s), evidence, units);
+    expect(built.findings.map((f) => `${f.sequence}:${f.kind}`)).toEqual(['1:CORE_OUTSIDE_SELECTION', '2:EVENT_OUTSIDE_SELECTION', '2:CORE_OUTSIDE_SELECTION']);
+    expect(built.content.sequences[0]!.claimKeys).toContain('C016'); // kept, so the gate sees what was proposed
+    expect(failed(built)).toEqual(['core_evidence']);
+  });
+
+  it('accepts other dossier claims only as labelled background, with their own sources and caveats', () => {
+    const s = units.map(withCaveats);
+    s[0] = {
+      ...s[0]!,
+      contextClaims: [
+        { claimKey: 'C016', purpose: 'Who the traders were' },
+        { claimKey: 'C019', purpose: 'The debate the film leaves open' },
+        { claimKey: 'C001', purpose: 'already a unit claim' },
+      ],
+      caveats: [...s[0]!.caveats, { claimKey: 'C019', framing: 'As a debate between economists.' }],
+    };
+    const built = buildArchitecture(output(s), evidence, units);
+    expect(built.findings).toEqual([]);
+    const sq = built.content.sequences[0]!;
+    expect(sq.claimKeys).toEqual(['C001', 'C020']);
+    expect(sq.contextClaims).toEqual([
+      { claimKey: 'C016', purpose: 'Who the traders were' },
+      { claimKey: 'C019', purpose: 'The debate the film leaves open' },
+    ]);
+    expect(built.notes).toContain('Sequence 1: C001 is a claim of the selected units; counted as story evidence, not context');
+    expect(sq.sourceIds.sort()).toEqual(['src-A', 'src-B']);
+    expect(sq.contextSourceIds).toEqual(['src-F']); // C016's source B is already a story source; C019 adds F
+    expect(sq.historicalStatus).toBe('CONTESTED'); // a disputed context claim still counts
+    expect(report(built).checks.find((c) => c.id === 'context_claims')).toMatchObject({ status: 'PASS' }); // 2 background vs 2 story claims
+
+    // Background must not outweigh the story evidence.
+    s[0] = { ...s[0], contextClaims: [...s[0].contextClaims, { claimKey: 'C013', purpose: 'How it was reported' }] };
+    const heavier = buildArchitecture(output(s), evidence, units);
+    expect(report(heavier).checks.find((c) => c.id === 'context_claims')).toMatchObject({ status: 'WARN', detail: '1: Sequence 1: 3 context claims against 2 story claims' });
+  });
+
+  it('requires a purpose and a caveat for background claims', () => {
+    const s = units.map(withCaveats);
+    s[0] = { ...s[0]!, contextClaims: [{ claimKey: 'C019', purpose: ' ' }] };
+    const built = buildArchitecture(output(s), evidence, units);
+    expect(built.findings.map((f) => f.kind)).toEqual(['CONTEXT_WITHOUT_PURPOSE', 'MISSING_CAVEAT']);
+    expect(failed(built)).toEqual(['context_claims', 'uncertainty_framed']);
+  });
+
+  it('lets no person, figure or date in from outside the selection', () => {
+    const s = units.map(withCaveats);
+    s[0] = { ...s[0]!, reveal: 'In 1841 Charles Mackay told it differently.', contextClaims: [{ claimKey: 'C012', purpose: 'How the story was retold' }] };
+    s[1] = { ...s[1]!, characters: [...s[1]!.characters, 'Charles Mackay'] };
+    const built = buildArchitecture(output(s), evidence, units);
+    expect(built.findings.map((f) => `${f.sequence}:${f.kind}`)).toEqual(['1:UNSUPPORTED_FIGURE', '1:PERSON_OUTSIDE_SELECTION', '2:UNGROUNDED_PERSON']);
+    expect(built.findings[0]!.detail).toBe("uses the figure 1841, which is not in the selected units' evidence");
+    expect(failed(built)).toEqual(['grounded_people', 'supported_figures']);
+  });
+
+  it('still links a figure or person found in another selected unit\'s claims', () => {
+    const s = units.map(withCaveats);
+    s[0] = { ...s[0]!, reveal: 'A total of 90,000 guilders, Jan Testbroek\'s estate.' }; // both in unit S03's claims
+    const built = buildArchitecture(output(s), evidence, units);
+    expect(built.findings).toEqual([]);
+    expect(built.content.sequences[0]!.claimKeys).toEqual(['C001', 'C003', 'C020']);
+  });
+
+  it('fails a sequence that tells no selected unit', () => {
+    const s = units.map(withCaveats);
+    s.push({ ...withCaveats(units[0]!), title: 'A new story', candidateKeys: [] });
+    const built = buildArchitecture(output(s), evidence, units);
+    expect(built.findings.map((f) => f.kind)).toEqual(['NO_UNIT']);
+    expect(failed(built)).toContain('selected_units');
   });
 });
 

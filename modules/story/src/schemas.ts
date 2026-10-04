@@ -91,13 +91,18 @@ export const ArchitectSequence = z.object({
   candidateKeys: z.array(z.string()).describe('selected story units this sequence tells, e.g. ["S03"]'),
   openingHook: z.string(),
   narrativeQuestion: z.string().describe('the question that keeps the viewer watching through this sequence'),
-  keyEvents: z.array(z.object({ event: z.string(), claimKeys: ClaimKeys })),
+  keyEvents: z
+    .array(z.object({ event: z.string(), claimKeys: ClaimKeys.describe('core claims only: claims of the selected units') }))
+    .describe('the story beats, each from the selected units\' own claims'),
   characters: z.array(z.string()).describe('people, groups or roles as named in the story units'),
   conflict: z.string(),
   escalation: z.string(),
   reveal: z.string(),
   endingBeat: z.string().describe('the beat that pulls the viewer into the next sequence (or closes the film)'),
-  claimKeys: ClaimKeys.describe('every claim the sequence relies on'),
+  claimKeys: ClaimKeys.describe('core evidence: every claim of the selected units this sequence relies on (no other claims)'),
+  contextClaims: z
+    .array(z.object({ claimKey: z.string(), purpose: z.string().describe('the background it provides, e.g. "explains how the contracts worked"') }))
+    .describe('other dossier claims used only as background; empty if none. They must not add a story, person, event, figure or beat'),
   caveats: z.array(z.object({ claimKey: z.string(), framing: z.string().describe('how the narration must present this claim') })),
   estimatedDurationSec: z.number().describe('narration time this sequence needs, in seconds'),
 });

@@ -1,7 +1,7 @@
 import { STORY_LIMITS, type RuntimeTarget } from '@docengine/core';
 
 /** Bump when a prompt changes meaningfully (recorded in pack/architecture stats; invalidates saved progress). */
-export const PROMPT_VERSION = 'story-2026-10-04.1';
+export const PROMPT_VERSION = 'story-2026-10-04.2';
 
 const minutes = (sec: number) => Math.round(sec / 60);
 
@@ -154,10 +154,11 @@ What makes it work:
 - The editor's priorities: HIGH-priority units must be central; normal ones should be used if they fit; low ones only where they help. A selected unit you leave out goes in unusedCandidates with the reason.
 
 EVIDENCE RULES — the automated gate fails the architecture if one is broken:
-1. Build only from the selected units and the claims shown. Every key event lists the claims that support it; every sequence lists all claims it relies on (claimKeys).
-2. People: names exactly as in the units or the evidence. Never invent people, dialogue, motives, emotions or events.
-3. Figures: exactly as in the evidence; no rounding, conversion or new calculations.
-4. Every claim marked DISPUTED, UNVERIFIED or MYTH that a sequence uses needs a caveat in that sequence saying how the narration must present it (as a dispute and between whom, as unconfirmed, as legend versus record). Never present such a claim as established.
+1. Story evidence is the selected units' own claims, and nothing else. Every sequence tells at least one selected unit; claimKeys lists every claim of the selected units it relies on; every key event cites only those claims.
+2. Other claims of the approved dossier are background only. Cite one only in contextClaims, with its purpose (the setting or explanation it gives). A context claim must not introduce a new story, person, event, figure, date or narrative beat: everything that happens on screen, everyone named and every number comes from the selected units.
+3. People: names exactly as in the selected units or their evidence. Never invent people, dialogue, motives, emotions or events.
+4. Figures and dates: exactly as in the selected units' evidence; no rounding, conversion or new calculations.
+5. Every claim marked DISPUTED, UNVERIFIED or MYTH that a sequence uses — as story evidence or as context — needs a caveat in that sequence saying how the narration must present it (as a dispute and between whom, as unconfirmed, as legend versus record). Never present such a claim as established.
 
 Runtime: about ${minutes(target.targetSec)} minutes in total (acceptable ${minutes(target.minSec)}–${minutes(target.maxSec)}). estimatedDurationSec is the narration time each sequence needs — roughly 30 seconds per key event told well, plus the hook and the ending beat — and the sum must fit the runtime.`;
 }
@@ -166,6 +167,7 @@ export function reviewSystemPrompt(target: RuntimeTarget): string {
   return `You are the fact-checking story editor of a premium historical documentary series. Review a documentary architecture against the evidence shown and the automated findings before it goes to the human editor, then fix what can be fixed.
 
 Look for:
+- story material that does not come from the selected units' own claims: a key event, person, figure, date or narrative beat taken from another dossier claim (other claims may only be labelled context claims giving background, never a new story, person, event, figure or beat);
 - statements not supported by the cited claims (events, people, figures, motives, outcomes);
 - DISPUTED, UNVERIFIED or MYTH material presented as established, or missing its caveat;
 - invented people, dialogue, motives, emotions or events;
@@ -175,5 +177,5 @@ Look for:
 - a HIGH-priority unit missing.
 
 Report every issue with a severity: CRITICAL (would mislead viewers or breaks the evidence rules), MAJOR (weakens the documentary or needs the editor's decision), MINOR (polish).
-If any CRITICAL or MAJOR issue — including every automated finding — can be fixed from the evidence shown, return the full corrected architecture in revised, keeping everything else unchanged, and mark those issues fixedInRevision. Never fix a problem by inventing material: if the evidence cannot support a passage, cut or reframe it. If nothing needs changing, revised is null.`;
+If any CRITICAL or MAJOR issue — including every automated finding — can be fixed from the evidence shown, return the full corrected architecture in revised, keeping everything else unchanged, and mark those issues fixedInRevision. Never fix a problem by inventing material: if the selected units' evidence cannot support a passage, cut it, reframe it, or turn an outside claim into a labelled context claim that only gives background. If nothing needs changing, revised is null.`;
 }

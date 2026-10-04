@@ -14,7 +14,7 @@ import type { Prisma } from '@docengine/database';
 import { NonRetryableError, type StageContext, type StageHandler } from '@docengine/pipeline';
 import { ProviderError } from '@docengine/providers';
 import { z } from 'zod';
-import { blockingCount, buildArchitecture, describeFinding, totalDurationSec, type BuiltArchitecture, type SelectedUnit } from './architecture.ts';
+import { blockingCount, buildArchitecture, coreClaimsOf, describeFinding, totalDurationSec, type BuiltArchitecture, type SelectedUnit } from './architecture.ts';
 import { StepCheckpoint } from './checkpoint.ts';
 import { DEFAULT_STORY_CONFIG, type StoryConfig } from './config.ts';
 import { EvidenceBase } from './evidence.ts';
@@ -183,8 +183,9 @@ class ArchitectureRun {
 
   private async architect(units: readonly SelectedUnit[], evidence: EvidenceBase, target: RuntimeTarget, editorNotes: string | null, rework: Rework | null): Promise<ArchitectOutput> {
     const { ctx, cfg } = this;
-    const claimKeys = orderedKeys(units.flatMap((u) => u.claimKeys), evidence);
-    const caveats = caveatClaims(claimKeys, evidence).map((k) => `${k} (${evidence.claim(k)!.verdict})`);
+    const claimKeys = coreClaimsOf(units, evidence);
+    const background = [...evidence.claims.keys()].filter((k) => !claimKeys.includes(k));
+    const caveats = caveatClaims([...evidence.claims.keys()], evidence).map((k) => `${k} (${evidence.claim(k)!.verdict})`);
     const parts = [
       `Documentary: ${ctx.project.title} — ${ctx.project.topic}`,
       `Target runtime: about ${fmtMinutes(target.targetSec)} (acceptable ${fmtMinutes(target.minSec)}–${fmtMinutes(target.maxSec)})`,
@@ -194,9 +195,21 @@ class ArchitectureRun {
       parts.push('', `Previous architecture v${rework.version} (${rework.status}). The editor's decisions on it:\n${rework.decisions.map((d) => `- ${d}`).join('\n') || '- none recorded'}\nIts outline:\n${rework.outline}`);
     }
     parts.push('', '# Selected story units (the editor\'s order: priority, then rank)', units.map(renderUnit).join('\n\n'));
-    parts.push('', '# Evidence for the selected units', evidence.renderClaims(claimKeys, { quotes: 2, quoteChars: 320 }));
-    if (caveats.length) parts.push('', `Claims that need a caveat in every sequence that uses them: ${caveats.join(', ')}`);
-    parts.push('', '# Dossier context (chronology, people, prices, myths, the later legend)', evidence.renderSections());
+    parts.push(
+      '',
+      `# Story evidence: the selected units' claims (${claimKeys.length})`,
+      'Only these claims may be story evidence: claimKeys, key events, people, figures and dates.',
+      evidence.renderClaims(claimKeys, { quotes: 2, quoteChars: 320 }),
+    );
+    if (background.length) {
+      parts.push(
+        '',
+        `# Other claims of the approved dossier: background only (${background.length})`,
+        'Cite one only as a contextClaim with its purpose, for setting or explanation. Never use them for key events, people, figures, dates or narrative beats, and never build a story on them.',
+        evidence.renderClaimList(background),
+      );
+    }
+    if (caveats.length) parts.push('', `Claims that need a caveat in every sequence that uses them (as story evidence or context): ${caveats.join(', ')}`);
 
     const r = await ctx.callProvider(
       'ai',
@@ -212,7 +225,7 @@ class ArchitectureRun {
           maxTokens: cfg.maxTokens.architect,
           signal: ctx.signal,
         }),
-      { request: { task: 'story.architect', units: units.length, claims: claimKeys.length }, summarize: (x) => ({ sequences: x.object.sequences.length }) },
+      { request: { task: 'story.architect', units: units.length, claims: claimKeys.length, backgroundClaims: background.length }, summarize: (x) => ({ sequences: x.object.sequences.length }) },
     );
     this.noteModel(r.meta.model);
     return r.object;
@@ -239,25 +252,32 @@ class ArchitectureRun {
         reveal: s.reveal,
         endingBeat: s.endingBeat,
         claimKeys: s.claimKeys,
+        contextClaims: s.contextClaims,
         caveats: s.caveats,
         estimatedDurationSec: s.estimatedDurationSec,
       })),
       unusedCandidates: c.unusedCandidates,
     };
-    const claimKeys = orderedKeys([...units.flatMap((u) => u.claimKeys), ...c.sequences.flatMap((s) => s.claimKeys)], evidence);
+    const core = coreClaimsOf(units, evidence);
+    const others = orderedKeys(
+      c.sequences.flatMap((s) => [...s.claimKeys, ...s.keyEvents.flatMap((e) => e.claimKeys), ...s.contextClaims.map((x) => x.claimKey)]),
+      evidence,
+    ).filter((k) => !core.includes(k));
     const content = [
       `Documentary: ${ctx.project.title} — ${ctx.project.topic}`,
       `Target runtime: ${fmtMinutes(target.minSec)}–${fmtMinutes(target.maxSec)}; current estimate ${fmtMinutes(totalDurationSec(c))}`,
       '',
       `Selected units: ${units.map((u) => `${u.key} [${u.priority}] ${u.title}`).join('; ')}`,
+      `Story evidence allowed (the selected units' claims): ${core.join(', ')}`,
       '',
       `Automated findings (fix every one the evidence allows):\n${draft.findings.map((f) => `- ${describeFinding(f)}`).join('\n') || '- none'}`,
       '',
       '# Architecture',
       JSON.stringify(asOutput, null, 1),
       '',
-      '# Evidence for the claims used',
-      evidence.renderClaims(claimKeys, { quotes: 2, quoteChars: 320 }),
+      '# Evidence: the selected units\' claims',
+      evidence.renderClaims(core, { quotes: 2, quoteChars: 320 }),
+      ...(others.length ? ['', '# Other dossier claims the architecture uses (background only, never story evidence)', evidence.renderClaims(others, { quotes: 1, quoteChars: 240 })] : []),
     ].join('\n');
     try {
       const r = await ctx.callProvider(

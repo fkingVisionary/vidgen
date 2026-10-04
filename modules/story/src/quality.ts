@@ -11,7 +11,18 @@ import {
   type RuntimeTarget,
   type StoryArchitectureContent,
 } from '@docengine/core';
-import { NO_REASON, describeFinding, sequenceTexts, totalDurationSec, type ArchitectureFinding, type SelectedUnit } from './architecture.ts';
+import {
+  NO_REASON,
+  coreClaimsOf,
+  describeFinding,
+  outsidePeople,
+  peopleMentioned,
+  sequenceTexts,
+  storyTexts,
+  totalDurationSec,
+  type ArchitectureFinding,
+  type SelectedUnit,
+} from './architecture.ts';
 import type { EvidenceBase } from './evidence.ts';
 import { candidateTexts, isDuplicate, type PackCandidate, type RemovedCandidate } from './mining.ts';
 import { caveatClaims, checkFigures, checkPerson } from './rules.ts';
@@ -160,6 +171,9 @@ export function computeArchitectureReport(args: {
   const checks: QualityCheck[] = [];
   // Everything is re-checked on the content itself; only a dropped (invented) person no longer shows there.
   const invented = args.findings.filter((f) => f.kind === 'UNGROUNDED_PERSON').map(describeFinding);
+  const core = coreClaimsOf(args.units, evidence);
+  const isCore = new Set(core);
+  const contextKeys = (sq: (typeof seqs)[number]) => sq.contextClaims.map((c) => c.claimKey);
 
   const q = content.centralQuestion;
   checks.push(check('central_question', 'Central question', !q ? 'FAIL' : q.includes('?') ? 'PASS' : 'WARN', q || 'Missing'));
@@ -174,32 +188,49 @@ export function computeArchitectureReport(args: {
   checks.push(check('sequences', 'Sequences', seqs.length < 3 ? 'FAIL' : seqs.length > 12 ? 'WARN' : 'PASS', `${seqs.length} sequences`, seqs.length, 3));
 
   const noEvidence = seqs.flatMap((s) => [
-    ...(s.claimKeys.length === 0 ? [`Sequence ${s.number}: cites no dossier claim`] : []),
-    ...s.claimKeys.filter((k) => !evidence.has(k)).map((k) => `Sequence ${s.number}: unknown claim ${k}`),
+    ...(s.claimKeys.length === 0 ? [`Sequence ${s.number}: cites no claim`] : []),
+    ...[...s.claimKeys, ...contextKeys(s)].filter((k) => !evidence.has(k)).map((k) => `Sequence ${s.number}: unknown claim ${k}`),
     ...s.keyEvents.filter((e) => e.claimKeys.length === 0).map((e) => `Sequence ${s.number}: the event "${e.event}" cites no claim`),
   ]);
   checks.push(listCheck('evidence', 'Every sequence and key event cites claims', noEvidence, 'Every sequence and key event cites dossier claims'));
 
+  const unitIds = new Set(args.units.map((u) => u.id));
+  const foreign = seqs.filter((s) => s.candidateIds.some((id) => !unitIds.has(id))).map((s) => `Sequence ${s.number}: uses units outside the selection`);
+  const unitless = seqs.filter((s) => s.candidateIds.length === 0).map((s) => `Sequence ${s.number}: tells no selected unit`);
+  checks.push(listCheck('selected_units', 'Built from the selected units', [...foreign, ...unitless], 'Every sequence tells selected story units, and only those'));
+
+  // Story evidence is the selected units' own claims; everything that happens on screen rests on it.
+  const outsideCore = seqs.flatMap((s) => [
+    ...s.claimKeys.filter((k) => !isCore.has(k)).map((k) => `Sequence ${s.number}: ${k} used as story evidence`),
+    ...s.keyEvents.flatMap((e) => e.claimKeys.filter((k) => !isCore.has(k)).map((k) => `Sequence ${s.number}: the event "${e.event}" rests on ${k}`)),
+    ...(s.claimKeys.some((k) => isCore.has(k)) ? [] : [`Sequence ${s.number}: no claim of the selected units`]),
+  ]);
+  checks.push(listCheck('core_evidence', 'Story evidence is the selected units\' own claims', outsideCore, 'Every sequence and key event rests only on claims of the selected units'));
+
+  const badContext = seqs.flatMap((s) =>
+    s.contextClaims.flatMap((c) => [
+      ...(isCore.has(c.claimKey) ? [`Sequence ${s.number}: ${c.claimKey} is a unit claim listed as context`] : []),
+      ...(!c.purpose ? [`Sequence ${s.number}: context claim ${c.claimKey} has no stated purpose`] : []),
+    ]),
+  );
+  const heavy = seqs.filter((s) => s.contextClaims.length > s.claimKeys.length).map((s) => `Sequence ${s.number}: ${s.contextClaims.length} context claims against ${s.claimKeys.length} story claims`);
+  checks.push(
+    badContext.length
+      ? listCheck('context_claims', 'Other dossier claims are labelled background', badContext, '')
+      : listCheck('context_claims', 'Other dossier claims are labelled background', heavy, 'Every other dossier claim used is a labelled context claim with its purpose, and background never outweighs the story evidence', 'WARN'),
+  );
+
   const untraceable = seqs.flatMap((s) => {
     const allowed = new Set(evidence.sourcesFor(s.claimKeys));
-    if (s.claimKeys.length > 0 && allowed.size === 0) return [`Sequence ${s.number}: no retrieved source backs its claims`];
-    return s.sourceIds.some((id) => !allowed.has(id)) ? [`Sequence ${s.number}: a listed source is not cited by its claims`] : [];
+    const allowedContext = new Set(evidence.sourcesFor(contextKeys(s)));
+    return [
+      ...(s.claimKeys.length > 0 && allowed.size === 0 ? [`Sequence ${s.number}: no retrieved source backs its story evidence`] : []),
+      ...(s.sourceIds.some((id) => !allowed.has(id)) ? [`Sequence ${s.number}: a listed source is not cited by its story evidence`] : []),
+      ...contextKeys(s).filter((k) => evidence.traceableSources(k).length === 0).map((k) => `Sequence ${s.number}: context claim ${k} has no retrieved source`),
+      ...(s.contextSourceIds.some((id) => !allowedContext.has(id)) ? [`Sequence ${s.number}: a listed context source is not cited by its context claims`] : []),
+    ];
   });
-  checks.push(listCheck('traceable_sources', 'Sources trace to the claims used', untraceable, 'Every sequence lists the retrieved sources behind its claims'));
-
-  const unitIds = new Set(args.units.map((u) => u.id));
-  const foreign = seqs.filter((s) => s.candidateIds.some((id) => !unitIds.has(id))).map((s) => `Sequence ${s.number}`);
-  const unitless = seqs.filter((s) => s.candidateIds.length === 0).map((s) => `Sequence ${s.number}`);
-  checks.push(
-    check(
-      'selected_units',
-      'Built from the selected units',
-      foreign.length ? 'FAIL' : unitless.length ? 'WARN' : 'PASS',
-      foreign.length ? `Uses units outside the selection: ${foreign.join(', ')}` : unitless.length ? `No story unit in: ${unitless.join(', ')}` : 'Every sequence tells selected story units',
-      foreign.length + unitless.length,
-      0,
-    ),
-  );
+  checks.push(listCheck('traceable_sources', 'Sources trace to the claims used', untraceable, 'Every sequence lists the retrieved sources behind its story evidence and its context claims'));
   const usedIds = new Set(seqs.flatMap((s) => s.candidateIds));
   const unused = args.units.filter((u) => !usedIds.has(u.id));
   const reasons = new Map(content.unusedCandidates.map((u) => [u.candidateKey, u.reason]));
@@ -215,7 +246,7 @@ export function computeArchitectureReport(args: {
   );
 
   const uncaveated = seqs.flatMap((s) =>
-    caveatClaims(s.claimKeys, evidence)
+    caveatClaims([...s.claimKeys, ...contextKeys(s)], evidence)
       .filter((k) => !s.caveats.some((c) => c.claimKey === k && c.framing))
       .map((k) => `Sequence ${s.number}: ${k} (${evidence.claim(k)!.verdict}) has no caveat`),
   );
@@ -223,13 +254,15 @@ export function computeArchitectureReport(args: {
     listCheck('uncertainty_framed', 'Disputed, unverified and myth material is framed', uncaveated, 'Every disputed, unverified or myth claim used says how the narration must present it'),
   );
 
-  checks.push(listCheck('grounded_people', 'No invented people', invented, 'Every person is in the story units or the evidence'));
+  const outsiders = outsidePeople(evidence, core);
+  const newPeople = seqs.flatMap((s) => peopleMentioned(storyTexts(s), outsiders).map((name) => `Sequence ${s.number}: ${name} is not in the selected units' evidence`));
+  checks.push(listCheck('grounded_people', 'No invented or outside people', [...invented, ...newPeople], 'Every person is in the selected units or their evidence'));
 
   const figures = seqs.flatMap((s) => {
-    const f = checkFigures(sequenceTexts(s), s.claimKeys, evidence);
-    return [...f.unsupported.map((x) => `Sequence ${s.number}: ${x} is not in the dossier`), ...f.links.map((l) => `Sequence ${s.number}: ${l.figure} is not in its claims`)];
+    const f = checkFigures(sequenceTexts(s), s.claimKeys.filter((k) => isCore.has(k)), evidence, { linkFrom: core, strictYears: true });
+    return [...f.unsupported.map((x) => `Sequence ${s.number}: ${x} is not in the selected units' evidence`), ...f.links.map((l) => `Sequence ${s.number}: ${l.figure} is not in its claims`)];
   });
-  checks.push(listCheck('supported_figures', 'Figures come from the evidence', figures, 'Every figure appears in the evidence cited (years: in the dossier)'));
+  checks.push(listCheck('supported_figures', 'Figures come from the selected units\' evidence', figures, 'Every figure and date appears in the evidence of the selected units\' claims'));
 
   const flat = seqs.filter((s) => !s.narrativeQuestion || !s.endingBeat || s.keyEvents.length < 2 || !(s.conflict || s.escalation || s.reveal)).map((s) => `Sequence ${s.number}`);
   checks.push(

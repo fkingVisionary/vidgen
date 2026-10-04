@@ -717,6 +717,8 @@ function Runtime({ sequences, target }: { sequences: StorySequence[]; target: nu
 
 function SequenceCard({ sequence: s, claims, sources }: { sequence: StorySequence; claims: ClaimView[]; sources: Map<string, SourceLike> }) {
   const seqClaims = claims.filter((x) => s.claimKeys.includes(x.key));
+  const contextKeys = s.contextClaims.map((c) => c.claimKey);
+  const contextClaims = claims.filter((x) => contextKeys.includes(x.key));
   return (
     <article data-sequence={s.number} className="rounded-lg border border-stone-200 bg-white p-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -765,34 +767,65 @@ function SequenceCard({ sequence: s, claims, sources }: { sequence: StorySequenc
           </ul>
         </div>
       )}
+      {s.contextClaims.length > 0 && (
+        <div className="mt-3 rounded border border-dashed border-stone-300 bg-stone-50 p-2 text-sm" data-context-claims>
+          <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Background only — other dossier claims, not story evidence</p>
+          <ul className="mt-1 space-y-0.5 text-stone-600">
+            {s.contextClaims.map((x) => (
+              <li key={x.claimKey}>
+                <ClaimRefs keys={[x.claimKey]} claims={claims} link={false} /> {x.purpose}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <details className="mt-2 text-sm">
         <summary className="cursor-pointer text-stone-600">
-          Claims used ({s.claimKeys.length}) and sources ({s.sourceIds.length}) <ClaimRefs keys={s.claimKeys} claims={claims} link={false} />
+          Story evidence: {s.claimKeys.length} claim(s) of the selected units, {s.sourceIds.length} source(s) <ClaimRefs keys={s.claimKeys} claims={claims} link={false} />
         </summary>
-        <ul className="mt-2 space-y-1 text-xs">
-          {s.sourceIds.map((id) => {
-            const src = sources.get(id);
-            return (
-              <li key={id} className="flex flex-wrap items-center gap-1">
-                {src && <SourceTypeBadge type={src.sourceType} />}
-                {src?.url ? (
-                  <a href={src.url} target="_blank" rel="noreferrer" className="hover:underline">
-                    {src.title}
-                  </a>
-                ) : (
-                  <span>{src?.title ?? id}</span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        <SourceList ids={s.sourceIds} sources={sources} />
         <div className="mt-2 space-y-2">
           {seqClaims.map((x) => (
             <ClaimCard key={x.id} claim={x} sources={sources} anchor={false} />
           ))}
         </div>
       </details>
+      {s.contextClaims.length > 0 && (
+        <details className="mt-1 text-sm">
+          <summary className="cursor-pointer text-stone-500">
+            Background claims: {s.contextClaims.length} claim(s), {s.contextSourceIds.length} more source(s)
+          </summary>
+          <SourceList ids={s.contextSourceIds} sources={sources} />
+          <div className="mt-2 space-y-2">
+            {contextClaims.map((x) => (
+              <ClaimCard key={x.id} claim={x} sources={sources} anchor={false} />
+            ))}
+          </div>
+        </details>
+      )}
     </article>
+  );
+}
+
+function SourceList({ ids, sources }: { ids: string[]; sources: Map<string, SourceLike> }) {
+  return (
+    <ul className="mt-2 space-y-1 text-xs">
+      {ids.map((id) => {
+        const src = sources.get(id);
+        return (
+          <li key={id} className="flex flex-wrap items-center gap-1">
+            {src && <SourceTypeBadge type={src.sourceType} />}
+            {src?.url ? (
+              <a href={src.url} target="_blank" rel="noreferrer" className="hover:underline">
+                {src.title}
+              </a>
+            ) : (
+              <span>{src?.title ?? id}</span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

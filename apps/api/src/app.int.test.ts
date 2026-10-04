@@ -238,7 +238,10 @@ describe('story API', () => {
     for (const cand of pack.candidates.slice(2, 4)) await patch(app, cand.id, { selected: true });
     expect((await story(app, p.id)).selection).toMatchObject({ count: 5, problem: null });
 
-    // Generate Story Architecture.
+    // Generate Story Architecture (the fake architect adds one labelled background claim from outside the selection).
+    const selectedClaims = new Set((await story(app, p.id)).pack!.candidates.filter((x) => x.selected && x.status !== 'REJECTED').flatMap((x) => x.claimKeys));
+    const background = ['C001', 'C002', 'C003', 'C005', 'C007', 'C013', 'C014', 'C016', 'C017', 'C020'].find((k) => !selectedClaims.has(k))!;
+    (c.providers.ai as FakeStoryAI).architectOptions = { contextClaims: [{ claimKey: background, purpose: 'Background for the opening' }] };
     expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture`, payload: { notes: 'Lead with the contracts.' } })).statusCode).toBe(202);
     await c.runner.drain();
     view = await story(app, p.id);
@@ -246,7 +249,9 @@ describe('story API', () => {
     const arch = view.architecture!;
     expect(arch).toMatchObject({ version: 1, status: 'IN_REVIEW', qualityPassed: true, packVersion: 1, sequenceCount: 5, targetDurationSec: 750, notes: 'Lead with the contracts.' });
     expect(arch.content!.sequences.every((s) => s.sourceIds.length > 0 && s.claimKeys.length > 0)).toBe(true);
-    expect(arch.evidence.claims.length).toBeGreaterThan(0);
+    expect(arch.content!.sequences[0]!.contextClaims).toEqual([{ claimKey: background, purpose: 'Background for the opening' }]);
+    expect(arch.content!.sequences.flatMap((s) => s.claimKeys).every((k) => selectedClaims.has(k))).toBe(true);
+    expect(arch.evidence.claims.map((x) => x.key)).toContain(background);
     expect(arch.content!.sequences.map((s) => s.candidateKeys[0])).toEqual(['S01', 'S03', 'S04', 'S06', 'S07']); // S02 rejected, S05 deselected
     expect(fifth!.key).toBe('S05');
     expect((await patch(app, first!.id, { priority: 'LOW' })).json()).toMatchObject({ error: 'CONFLICT', message: expect.stringContaining('STORY_SELECTION') });

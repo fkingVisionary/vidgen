@@ -512,6 +512,21 @@ confidence/10), so a sensational but weakly supported story does not
 automatically beat a fascinating, well-supported one. The dashboard shows the
 components, weights and the formula for every candidate.
 
+**Story evidence vs background (architecture).** A sequence's story evidence
+(`claimKeys`) is the selected units' own claims and nothing else: every key
+event cites only those claims, every sequence tells at least one selected unit,
+and every person, figure and date must come from the selected units' evidence
+(a figure or person found in another selected unit's claim links that claim;
+years count as figures here). Other claims of the approved dossier may appear
+only as `contextClaims` — background with a stated purpose, their own derived
+`contextSourceIds`, caveats when disputed — and cannot add a story, person,
+event, figure, date or beat. The code checks this deterministically for
+claims, events, figures and dates, for listed characters, and for the
+dossier's key figures mentioned in the telling; whether prose smuggles in an
+unnamed event is left to the reviewer and the editor. The architect sees the
+units' claims as story evidence and the rest of the dossier only as a
+one-line-per-claim background list.
+
 **Editorial control.** The AI's selection is a proposal (`ai_selected`); the
 editor's `selected`, `status`, `priority` and notes are what the architect
 gets. HIGH priority must be used (gate check); the architect must explain any
@@ -527,10 +542,14 @@ traceable sources, named people and figures in the cited evidence, historical
 status consistent with the verdicts, myth framing, no duplicates, complete
 scores, story structure, variety, share of well-supported candidates, a 5–10
 proposal. Architecture: central question, premise/spine, 3–12 sequences, every
-sequence and key event cites claims, sources derivable from those claims,
-built from the selection, HIGH priority used, every disputed/unverified/myth
-claim used has a caveat (how the narration must present it), no invented
-people, figures from the evidence, story rather than a list of facts, runtime
+sequence and key event cites claims, story evidence only from the selected
+units' claims, every sequence tells a selected unit, other claims only as
+labelled background (a warning if background outweighs story evidence),
+sources derivable from the claims (story and background separately), HIGH
+priority used, every disputed/unverified/myth claim used (story or background)
+has a caveat (how the narration must present it), no invented or outside
+people, figures and dates from the selected units' evidence, story rather than
+a list of facts, runtime
 within the project's range (±20% warns, beyond fails), sequence durations
 consistent with their structure, no unresolved critical review issue. A failed
 gate saves the artifact as DRAFT for inspection and fails the job without
@@ -579,3 +598,4 @@ architecture 2 (architect, reviewer).
 | D29 | Evidence rules remove a candidate rather than letting it through with a warning; a top-up pass replaces removals | An invented person or figure must never reach the editor's shortlist; the removal reasons are shown and fed to the top-up prompt | Flag and keep |
 | D30 | Candidate ↔ claim links are rows (`story_candidate_claims`); architecture sequences keep claim keys in JSON with sources derived and re-checked by the gate | FK links make candidate evidence impossible to dangle; sequences are a blueprint whose shape will change with the script stage, and the dossier version is fixed per architecture | A join table per sequence |
 | D31 | A reviewer's corrected architecture is kept only if it has no more evidence problems than the draft | A revision can fix framing but can also introduce new unsupported material; the deterministic count decides | Always trust the revision |
+| D32 | Architecture story evidence = the selected units' own claims; other dossier claims only as labelled background (`contextClaims` with a purpose), never adding a story, person, event, figure, date or beat | The editor's selection must define the film; background can explain but not extend it. Kept checkable: separate keys and sources, deterministic gate checks | Any approved-dossier claim as evidence (the first version) |

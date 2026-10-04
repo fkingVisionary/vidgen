@@ -193,8 +193,8 @@ async function loadArchitecture(db: Database, a: StoryArchitecture & { pack: { v
       ? evidenceFor(
           db,
           a.dossierId,
-          sequences.flatMap((s) => s.claimKeys),
-          sequences.flatMap((s) => s.sourceIds),
+          sequences.flatMap((s) => [...s.claimKeys, ...s.contextClaims.map((c) => c.claimKey)]),
+          sequences.flatMap((s) => [...s.sourceIds, ...s.contextSourceIds]),
         )
       : Promise.resolve({ claims: [], sources: [] }),
   ]);

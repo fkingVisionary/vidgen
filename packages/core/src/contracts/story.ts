@@ -104,19 +104,28 @@ export const StorySequence = z.object({
   openingHook: z.string(),
   /** The question that keeps the viewer watching through the sequence. */
   narrativeQuestion: z.string(),
+  /** Story beats; each cites core claims only. */
   keyEvents: z.array(z.object({ event: z.string().min(1), claimKeys: ClaimKeys })),
   characters: z.array(z.string()),
   conflict: z.string(),
   escalation: z.string(),
   reveal: z.string(),
   endingBeat: z.string(),
-  /** Every claim the sequence relies on. */
+  /** Core evidence: claims of the selected story candidates, and only those. */
   claimKeys: ClaimKeys,
-  /** Retrieved sources cited by those claims (derived from the dossier). */
+  /** Retrieved sources cited by the core claims (derived from the dossier). */
   sourceIds: z.array(z.string()),
-  /** How each disputed, unverified or myth claim must be told on screen. */
+  /**
+   * Other claims of the approved dossier, used only as background (setting,
+   * explanation), each with what it is used for. They may not introduce a new
+   * story, person, event, figure or narrative beat.
+   */
+  contextClaims: z.array(z.object({ claimKey: z.string(), purpose: z.string() })).default([]),
+  /** Retrieved sources cited by the context claims (derived from the dossier). */
+  contextSourceIds: z.array(z.string()).default([]),
+  /** How each disputed, unverified or myth claim used (core or context) must be told on screen. */
   caveats: z.array(z.object({ claimKey: z.string(), framing: z.string().min(1) })),
-  /** Computed from the verdicts of the sequence's claims. */
+  /** Computed from the verdicts of all the claims the sequence uses. */
   historicalStatus: z.enum(HISTORICAL_STATUSES),
   historicalConfidence: z.number().int().min(0).max(10),
   estimatedDurationSec: z.number().int().min(0),

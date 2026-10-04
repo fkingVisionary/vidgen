@@ -288,6 +288,52 @@ describe('story architecture (fake AI, real database)', () => {
     expect(failed).toEqual(['grounded_people', 'runtime']);
   });
 
+  const NO_DISPUTES = ['The tavern colleges', 'Striped tulips', 'Proefman in court', 'The courts step back', 'Prices before the fall'];
+
+  it('gives the architect the selected units\' claims as story evidence and other claims as background only', async () => {
+    const s = setup();
+    const { projectId } = await mined(s);
+    await selectTitles(projectId, NO_DISPUTES); // units rest on C002, C005, C007, C008, C014, C017, C018, C020
+    s.ai.architectOptions = { secondsPerSequence: 150, contextClaims: [{ claimKey: 'C001', purpose: 'How contracts for buried bulbs worked' }] };
+    const job = await run(s, projectId, 'STORY_ARCHITECTURE');
+
+    expect(job.status).toBe('SUCCEEDED');
+    const prompt = s.ai.prompts['story.architect']![0]!;
+    const story = prompt.slice(prompt.indexOf("# Story evidence: the selected units' claims (8)"), prompt.indexOf('# Other claims of the approved dossier'));
+    const background = prompt.slice(prompt.indexOf('# Other claims of the approved dossier: background only (12)'));
+    expect(story).toMatch(/^C002 \[/m);
+    expect(story).not.toMatch(/^C001 \[/m);
+    expect(background).toMatch(/^C001 \[ESTABLISHED\] In the winter/m);
+    expect(background).not.toMatch(/^C002 \[/m);
+
+    const first = StoryArchitectureContent.parse((await latestArchitecture(projectId)).content).sequences[0]!;
+    expect(first.contextClaims).toEqual([{ claimKey: 'C001', purpose: 'How contracts for buried bulbs worked' }]);
+    expect(first.claimKeys).not.toContain('C001');
+    expect(first.contextSourceIds.length).toBeGreaterThan(0);
+  });
+
+  it('fails story evidence taken from outside the selection unless the reviewer turns it into labelled background', async () => {
+    const s = setup();
+    const { projectId } = await mined(s);
+    await selectTitles(projectId, NO_DISPUTES);
+    s.ai.architectOptions = { secondsPerSequence: 150, outsideCore: 'C016' };
+    const failedJob = await run(s, projectId, 'STORY_ARCHITECTURE');
+    expect(failedJob.status).toBe('FAILED');
+    expect(failedJob.error).toMatch(/Story evidence is the selected units' own claims \(2: Sequence 1: C016 used as story evidence; Sequence 1: the event "The second turn \(test\)\." rests on C016\)/);
+
+    // Start over from the selection, this time with a reviewer that fixes it.
+    await s.projects.rewind(projectId, { to: 'STORY_SELECTION', reason: 'Try again' }, 'editor');
+    s.ai.reviewMovesOutsideToContext = true;
+    const job = await run(s, projectId, 'STORY_ARCHITECTURE');
+    expect(job.status).toBe('SUCCEEDED');
+    const arch = await latestArchitecture(projectId);
+    expect(arch.stats).toMatchObject({ revisedByReviewer: true, finalFindings: 0 });
+    const first = StoryArchitectureContent.parse(arch.content).sequences[0]!;
+    expect(first.claimKeys).not.toContain('C016');
+    expect(first.keyEvents.flatMap((e) => e.claimKeys)).not.toContain('C016');
+    expect(first.contextClaims).toEqual([{ claimKey: 'C016', purpose: 'Background only: explains the setting (review fix).' }]);
+  });
+
   it('refuses a selection outside 5–10 units', async () => {
     const s = setup();
     const { projectId } = await mined(s);

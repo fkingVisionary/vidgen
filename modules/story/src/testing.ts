@@ -256,6 +256,10 @@ export interface FakeArchitectOptions {
   inventPerson?: string;
   /** Only use this many units (the rest go unused, without a reason). */
   useUnits?: number;
+  /** Labelled background claims for the first sequence. */
+  contextClaims?: { claimKey: string; purpose: string }[];
+  /** Use this claim (outside the selected units) as story evidence in the first sequence: a rule violation. */
+  outsideCore?: string;
 }
 
 export class FakeStoryAI implements AIProvider {
@@ -284,6 +288,8 @@ export class FakeStoryAI implements AIProvider {
   architectOptions: FakeArchitectOptions = {};
   /** The reviewer adds the caveats the automated findings ask for. */
   reviewFixesCaveats = false;
+  /** The reviewer turns story evidence from outside the selected units into labelled context claims. */
+  reviewMovesOutsideToContext = false;
 
   async generateText(): Promise<TextGenerationResult> {
     throw new Error('not used by the story stages');
@@ -379,38 +385,57 @@ export class FakeStoryAI implements AIProvider {
       centralQuestion: 'Why did a flower trade end in court?',
       narrativeSpine: 'From contracts to collapse to legend (test).',
       resolution: 'The courts and the record answer it (test).',
-      sequences: used.map((u) => ({
-        title: `The story of ${u.key}`,
-        purpose: 'Test purpose.',
-        candidateKeys: [u.key],
-        openingHook: 'What happened next?',
-        narrativeQuestion: 'Why did it happen?',
-        keyEvents: [
-          { event: 'The first turn (test).', claimKeys: [u.claims[0]!] },
-          { event: 'The second turn (test).', claimKeys: [u.claims[1] ?? u.claims[0]!] },
-        ],
-        characters: [...u.characters, ...(o.inventPerson ? [o.inventPerson] : [])],
-        conflict: 'A conflict (test).',
-        escalation: 'It escalates (test).',
-        reveal: 'A reveal (test).',
-        endingBeat: 'And then… (test).',
-        claimKeys: u.claims,
-        caveats: o.omitCaveats ? [] : u.claims.filter((k) => caveatKeys.includes(k)).map((k) => ({ claimKey: k, framing: 'Present it as disputed or as legend (test).' })),
-        estimatedDurationSec: o.secondsPerSequence ?? 120,
-      })),
+      sequences: used.map((u, i) => {
+        const outside = i === 0 && o.outsideCore ? [o.outsideCore] : [];
+        const context = i === 0 ? (o.contextClaims ?? []) : [];
+        const cited = [...u.claims, ...outside, ...context.map((c) => c.claimKey)];
+        return {
+          title: `The story of ${u.key}`,
+          purpose: 'Test purpose.',
+          candidateKeys: [u.key],
+          openingHook: 'What happened next?',
+          narrativeQuestion: 'Why did it happen?',
+          keyEvents: [
+            { event: 'The first turn (test).', claimKeys: [u.claims[0]!] },
+            { event: 'The second turn (test).', claimKeys: [u.claims[1] ?? u.claims[0]!, ...outside] },
+          ],
+          characters: [...u.characters, ...(o.inventPerson ? [o.inventPerson] : [])],
+          conflict: 'A conflict (test).',
+          escalation: 'It escalates (test).',
+          reveal: 'A reveal (test).',
+          endingBeat: 'And then… (test).',
+          claimKeys: [...u.claims, ...outside],
+          contextClaims: context,
+          caveats: o.omitCaveats ? [] : cited.filter((k) => caveatKeys.includes(k)).map((k) => ({ claimKey: k, framing: 'Present it as disputed or as legend (test).' })),
+          estimatedDurationSec: o.secondsPerSequence ?? 120,
+        };
+      }),
       unusedCandidates: [],
     };
   }
 
   private review(user: string): ArchitectureReviewOutput {
-    if (!this.reviewFixesCaveats) return { issues: [{ severity: 'MINOR', description: 'Polish the hook (test).', sequenceNumbers: [1], claimKeys: [], fixedInRevision: false }], revised: null };
+    if (!this.reviewFixesCaveats && !this.reviewMovesOutsideToContext) {
+      return { issues: [{ severity: 'MINOR', description: 'Polish the hook (test).', sequenceNumbers: [1], claimKeys: [], fixedInRevision: false }], revised: null };
+    }
     const json = /# Architecture\n([\s\S]*?)\n\n# Evidence/.exec(user)?.[1];
     const draft = JSON.parse(json!) as ArchitectOutput;
-    const missing = [...user.matchAll(/^- Sequence (\d+): uses (C\d+) \(/gm)].map((m) => ({ seq: Number(m[1]), key: m[2]! }));
-    for (const m of missing) draft.sequences[m.seq - 1]!.caveats.push({ claimKey: m.key, framing: 'Present it as disputed or as legend (review fix).' });
-    return {
-      issues: [{ severity: 'CRITICAL', description: 'Disputed or myth claims told without caveats.', sequenceNumbers: missing.map((m) => m.seq), claimKeys: missing.map((m) => m.key), fixedInRevision: true }],
-      revised: draft,
-    };
+    const issues: ArchitectureReviewOutput['issues'] = [];
+    if (this.reviewFixesCaveats) {
+      const missing = [...user.matchAll(/^- Sequence (\d+): uses (C\d+) \(/gm)].map((m) => ({ seq: Number(m[1]), key: m[2]! }));
+      for (const m of missing) draft.sequences[m.seq - 1]!.caveats.push({ claimKey: m.key, framing: 'Present it as disputed or as legend (review fix).' });
+      issues.push({ severity: 'CRITICAL', description: 'Disputed or myth claims told without caveats.', sequenceNumbers: missing.map((m) => m.seq), claimKeys: missing.map((m) => m.key), fixedInRevision: true });
+    }
+    if (this.reviewMovesOutsideToContext) {
+      const outside = [...user.matchAll(/^- Sequence (\d+): uses (C\d+) as story evidence/gm)].map((m) => ({ seq: Number(m[1]), key: m[2]! }));
+      for (const m of outside) {
+        const sq = draft.sequences[m.seq - 1]!;
+        sq.claimKeys = sq.claimKeys.filter((k) => k !== m.key);
+        for (const e of sq.keyEvents) e.claimKeys = e.claimKeys.filter((k) => k !== m.key);
+        sq.contextClaims.push({ claimKey: m.key, purpose: 'Background only: explains the setting (review fix).' });
+      }
+      issues.push({ severity: 'CRITICAL', description: 'Story beats taken from claims outside the selection.', sequenceNumbers: outside.map((m) => m.seq), claimKeys: outside.map((m) => m.key), fixedInRevision: true });
+    }
+    return { issues, revised: draft };
   }
 }

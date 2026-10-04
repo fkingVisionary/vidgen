@@ -233,6 +233,16 @@ export class EvidenceBase {
       .join('\n');
   }
 
+  /** One line per claim (key, verdict, statement): for claims offered as background only. */
+  renderClaimList(keys: readonly string[]): string {
+    return keys
+      .flatMap((k) => {
+        const c = this.claims.get(k);
+        return c ? [`${c.key} [${c.verdict}] ${c.statement}`] : [];
+      })
+      .join('\n');
+  }
+
   /** The dossier's narrative sections (timeline, people, prices, myths, interpretations, the later legend). */
   renderSections(): string {
     const c = this.content;
