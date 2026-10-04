@@ -1,0 +1,22 @@
+# Local development dependencies only. The application itself runs on the host
+# (`pnpm dev`) or in the production Dockerfile. This is NOT used on Railway.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: docengine
+      POSTGRES_PASSWORD: docengine
+      POSTGRES_DB: docengine
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/create-test-db.sql:/docker-entrypoint-initdb.d/create-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docengine"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

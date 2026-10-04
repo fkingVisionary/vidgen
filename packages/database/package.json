@@ -1,0 +1,31 @@
+{
+  "name": "@docengine/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PostgreSQL schema, migrations and Prisma client factory.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:create": "prisma migrate dev --create-only",
+    "migrate:deploy": "prisma migrate deploy",
+    "migrate:status": "prisma migrate status",
+    "seed": "pnpm --filter @docengine/api seed",
+    "studio": "prisma studio",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@docengine/core": "workspace:*",
+    "@prisma/adapter-pg": "catalog:",
+    "@prisma/client": "catalog:",
+    "pg": "catalog:",
+    "prisma": "catalog:"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
+  }
+}

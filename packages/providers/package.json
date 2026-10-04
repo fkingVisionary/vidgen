@@ -1,0 +1,18 @@
+{
+  "name": "@docengine/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vendor-neutral provider interfaces (LLM, research, voice, video, storage, render, publishing), MOCK implementations and the registry that selects them.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@docengine/core": "workspace:*",
+    "zod": "catalog:"
+  }
+}

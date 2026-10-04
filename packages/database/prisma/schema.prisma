@@ -1,0 +1,833 @@
+// Documentary Engine — database schema (V1)
+//
+// Conventions
+//  * Primary keys are UUIDv7 (time-ordered, index friendly).
+//  * Tables and columns are snake_case in Postgres (@@map / @map).
+//  * Money is Decimal(14,6) USD.
+//  * Fields that are queried, filtered or joined on are real columns. Creative
+//    payloads whose shape will still evolve (story beats, shot direction,
+//    infographic specs, timelines) are JSONB, validated in code by the zod
+//    contracts in packages/core/src/contracts.
+//  * Enums mirror packages/core/src/enums.ts. A unit test fails if they drift.
+//
+// Multilingual model
+//  Project ─┬─ LanguageVersion (en = master, es, fr, …)
+//           └─ Script (language-neutral structure) ── Scene ─┬─ SceneNarration (one per language)
+//                                                            └─ Shot (language-neutral visuals, reused)
+//  Research, story, storyboard, shots and most assets are shared by all
+//  languages. Narration, subtitles, timeline, render and publishing are per
+//  LanguageVersion.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum ProjectStatus {
+  IDEA
+  RESEARCHING
+  RESEARCH_REVIEW
+  RESEARCH_COMPLETE
+  STORY_DEVELOPMENT
+  SCRIPT_DRAFT
+  SCRIPT_REVIEW
+  SCRIPT_APPROVED
+  VOICE_GENERATING
+  VOICE_COMPLETE
+  VISUAL_PLANNING
+  STORYBOARD_REVIEW
+  VISUAL_GENERATING
+  VISUAL_REVIEW
+  EDITING
+  RENDERING
+  QA
+  APPROVED
+  PUBLISHED
+  FAILED
+}
+
+enum JobType {
+  RESEARCH
+  STORY
+  SCRIPT
+  VOICE
+  VISUAL_PLAN
+  VISUAL_GENERATION
+  INFOGRAPHIC
+  EDIT
+  RENDER
+  QA
+  PUBLISH
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum ApprovalGate {
+  RESEARCH
+  SCRIPT
+  STORYBOARD
+  VISUAL_ASSETS
+  FINAL_VIDEO
+}
+
+enum ApprovalDecision {
+  APPROVED
+  REJECTED
+  FLAGGED
+}
+
+enum ArtifactStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  SUPERSEDED
+}
+
+enum SourceType {
+  PRIMARY
+  ACADEMIC
+  BOOK
+  ARCHIVE
+  REPUTABLE_SECONDARY
+  GENERAL_REFERENCE
+}
+
+enum ClaimVerdict {
+  ESTABLISHED
+  PROBABLE
+  DISPUTED
+  UNVERIFIED
+  MYTH
+}
+
+enum ConfidenceLevel {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ClaimType {
+  EVENT
+  DATE
+  ECONOMIC_FIGURE
+  PERSON
+  QUOTE
+  INTERPRETATION
+  CONTEXT
+}
+
+enum CitationStance {
+  SUPPORTS
+  CONTRADICTS
+  CONTEXT
+}
+
+enum VisualType {
+  CINEMATIC_RECONSTRUCTION
+  ARCHIVAL_STYLE
+  MAP
+  INFOGRAPHIC
+  DOCUMENT
+  COIN_CLOSEUP
+  ENVIRONMENT
+  CHARACTER
+  MACRO
+  ABSTRACT
+  TEXT
+  CHART
+}
+
+enum ShotType {
+  EXTREME_WIDE
+  WIDE
+  MEDIUM
+  CLOSE_UP
+  EXTREME_CLOSE_UP
+  MACRO
+  OVERHEAD
+  INSERT
+}
+
+enum CameraMotion {
+  STATIC
+  PUSH_IN
+  PULL_OUT
+  PAN
+  TILT
+  TRACKING
+  DOLLY
+  CRANE
+  HANDHELD
+  ORBIT
+}
+
+enum ShotStatus {
+  PLANNED
+  GENERATING
+  GENERATED
+  APPROVED
+  REJECTED
+  FAILED
+}
+
+enum InfographicType {
+  LINE_CHART
+  BAR_CHART
+  TIMELINE
+  MAP
+  FLOW_DIAGRAM
+  NUMBER_COUNTER
+  COMPARISON
+  PRICE_CHANGE
+  ECONOMIC_CYCLE
+}
+
+enum AssetKind {
+  NARRATION_AUDIO
+  IMAGE
+  VIDEO_CLIP
+  INFOGRAPHIC
+  MUSIC
+  SFX
+  AMBIENCE
+  SUBTITLE
+  RENDER
+  DOCUMENT
+  OTHER
+}
+
+enum RenderStatus {
+  QUEUED
+  RENDERING
+  SUCCEEDED
+  FAILED
+}
+
+enum ProviderKind {
+  AI
+  RESEARCH
+  VOICE
+  VIDEO
+  STORAGE
+  RENDER
+  PUBLISHING
+}
+
+enum ProviderCallStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum LanguageVersionStatus {
+  PLANNED
+  IN_PRODUCTION
+  READY
+  PUBLISHED
+  FAILED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Project spine
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A documentary episode. `status` is the master pipeline phase (see packages/core/src/pipeline.ts).
+model Project {
+  id               String         @id @default(uuid(7)) @db.Uuid
+  slug             String         @unique
+  title            String
+  workingTitle     String?        @map("working_title")
+  topic            String
+  description      String?
+  category         String?
+  style            String?
+  targetMinutesMin Int            @default(10) @map("target_minutes_min")
+  targetMinutesMax Int            @default(15) @map("target_minutes_max")
+  /// Language the master story is written and approved in. Its LanguageVersion is the master.
+  masterLanguage   String         @default("en") @map("master_language")
+  status           ProjectStatus  @default(IDEA)
+  /// Set while status = FAILED: the status the project failed in (bounds recovery/rewind).
+  failedFromStatus ProjectStatus? @map("failed_from_status")
+  /// Incremented each time a new phase run starts. Jobs are stamped with it; only jobs of the
+  /// current run count towards completing a phase.
+  phaseSeq         Int            @default(0) @map("phase_seq")
+  statusChangedAt  DateTime       @default(now()) @map("status_changed_at") @db.Timestamptz(3)
+  /// Planning estimate for the whole episode. Actual cost is summed from provider_calls.
+  estimatedCostUsd Decimal?       @map("estimated_cost_usd") @db.Decimal(14, 6)
+  metadata         Json           @default("{}")
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  languageVersions LanguageVersion[]
+  jobs             Job[]
+  approvals        Approval[]
+  events           ProjectEvent[]
+  providerCalls    ProviderCall[]
+  assets           MediaAsset[]
+  sources          Source[]
+  dossiers         ResearchDossier[]
+  stories          StoryArchitecture[]
+  scripts          Script[]
+  storyboards      Storyboard[]
+  infographics     Infographic[]
+  timelines        Timeline[]
+  renders          Render[]
+  qaReports        QaReport[]
+
+  @@index([status])
+  @@map("projects")
+}
+
+/// One localized edition of a project. Owns everything that differs per language:
+/// narration, subtitles, timeline timing, renders, metadata and publishing state.
+model LanguageVersion {
+  id              String                @id @default(uuid(7)) @db.Uuid
+  projectId       String                @map("project_id") @db.Uuid
+  /// Code from SUPPORTED_LANGUAGES (en, es, fr, de, it, pt, ja, ko).
+  language        String
+  status          LanguageVersionStatus @default(PLANNED)
+  /// VoiceSettings contract (provider, voiceId, model, stability, similarity, style, speed).
+  voiceConfig     Json?                 @map("voice_config")
+  /// Localized publishing metadata (title, description, tags, chapters).
+  metadata        Json                  @default("{}")
+  platformVideoId String?               @map("platform_video_id")
+  publishedUrl    String?               @map("published_url")
+  publishedAt     DateTime?             @map("published_at") @db.Timestamptz(3)
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  jobs          Job[]
+  narrations    SceneNarration[]
+  timelines     Timeline[]
+  renders       Render[]
+  assets        MediaAsset[]
+  providerCalls ProviderCall[]
+  approvals     Approval[]
+  qaReports     QaReport[]
+
+  @@unique([projectId, language])
+  @@map("language_versions")
+}
+
+/// A unit of pipeline work. The table doubles as the V1 job queue
+/// (claimed with SELECT … FOR UPDATE SKIP LOCKED).
+model Job {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  projectId         String    @map("project_id") @db.Uuid
+  languageVersionId String?   @map("language_version_id") @db.Uuid
+  type              JobType
+  status            JobStatus @default(QUEUED)
+  /// Project.phaseSeq at enqueue time.
+  phaseSeq          Int       @map("phase_seq")
+  attempts          Int       @default(0)
+  maxAttempts       Int       @default(3) @map("max_attempts")
+  /// Not claimable before this time (retry backoff).
+  runAfter          DateTime  @default(now()) @map("run_after") @db.Timestamptz(3)
+  lockedAt          DateTime? @map("locked_at") @db.Timestamptz(3)
+  lockedBy          String?   @map("locked_by")
+  startedAt         DateTime? @map("started_at") @db.Timestamptz(3)
+  completedAt       DateTime? @map("completed_at") @db.Timestamptz(3)
+  /// True if any provider used by the job was a MOCK.
+  isMock            Boolean   @default(false) @map("is_mock")
+  input             Json      @default("{}")
+  result            Json?
+  error             String?
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion? @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
+  providerCalls   ProviderCall[]
+  events          ProjectEvent[]
+
+  @@index([status, runAfter])
+  @@index([projectId, type, status])
+  @@map("jobs")
+}
+
+/// A recorded human decision at an approval gate. Optional FKs point at the exact artifact version reviewed.
+model Approval {
+  id                String           @id @default(uuid(7)) @db.Uuid
+  projectId         String           @map("project_id") @db.Uuid
+  languageVersionId String?          @map("language_version_id") @db.Uuid
+  gate              ApprovalGate
+  decision          ApprovalDecision
+  notes             String?
+  decidedBy         String?          @map("decided_by")
+  /// Project status when the decision was made.
+  projectStatus     ProjectStatus    @map("project_status")
+  dossierId         String?          @map("dossier_id") @db.Uuid
+  scriptId          String?          @map("script_id") @db.Uuid
+  storyboardId      String?          @map("storyboard_id") @db.Uuid
+  renderId          String?          @map("render_id") @db.Uuid
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion? @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
+  dossier         ResearchDossier? @relation(fields: [dossierId], references: [id], onDelete: SetNull)
+  script          Script?          @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  storyboard      Storyboard?      @relation(fields: [storyboardId], references: [id], onDelete: SetNull)
+  render          Render?          @relation(fields: [renderId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@map("approvals")
+}
+
+/// Append-only audit/activity log: status changes, jobs, approvals.
+model ProjectEvent {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  projectId String   @map("project_id") @db.Uuid
+  jobId     String?  @map("job_id") @db.Uuid
+  /// e.g. STATUS_CHANGED, JOB_QUEUED, JOB_SUCCEEDED, JOB_RETRY_SCHEDULED, JOB_FAILED, APPROVAL_RECORDED
+  type      String
+  message   String
+  data      Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  job     Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@map("project_events")
+}
+
+/// Ledger of every external provider invocation: observability, cost tracking,
+/// and the lifecycle of async generations (provider job id → status → asset).
+/// A failed shot is retried by creating a new call for the same shot.
+model ProviderCall {
+  id                String             @id @default(uuid(7)) @db.Uuid
+  projectId         String?            @map("project_id") @db.Uuid
+  jobId             String?            @map("job_id") @db.Uuid
+  languageVersionId String?            @map("language_version_id") @db.Uuid
+  shotId            String?            @map("shot_id") @db.Uuid
+  kind              ProviderKind
+  provider          String
+  operation         String
+  model             String?
+  isMock            Boolean            @default(false) @map("is_mock")
+  status            ProviderCallStatus @default(PENDING)
+  /// Vendor-side id for async work (e.g. a video generation).
+  providerJobId     String?            @map("provider_job_id")
+  /// Request summary (prompt, parameters). Never contains credentials.
+  request           Json?
+  response          Json?
+  error             String?
+  /// UsageItem[] (tokens, characters, seconds…).
+  usage             Json               @default("[]")
+  estimatedCostUsd  Decimal?           @map("estimated_cost_usd") @db.Decimal(14, 6)
+  actualCostUsd     Decimal?           @map("actual_cost_usd") @db.Decimal(14, 6)
+  outputAssetId     String?            @map("output_asset_id") @db.Uuid
+  startedAt         DateTime           @default(now()) @map("started_at") @db.Timestamptz(3)
+  completedAt       DateTime?          @map("completed_at") @db.Timestamptz(3)
+  durationMs        Int?               @map("duration_ms")
+
+  project         Project?         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  job             Job?             @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  languageVersion LanguageVersion? @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
+  shot            Shot?            @relation(fields: [shotId], references: [id], onDelete: SetNull)
+  outputAsset     MediaAsset?      @relation(fields: [outputAssetId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([jobId])
+  @@index([provider, providerJobId])
+  @@map("provider_calls")
+}
+
+/// Any stored file: narration audio, images, clips, infographic renders, music, SFX,
+/// subtitles (SRT/VTT), final renders. Bytes live in object storage under `storage_key`.
+/// language_version_id = null means language-neutral (reusable across languages).
+model MediaAsset {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  projectId         String    @map("project_id") @db.Uuid
+  languageVersionId String?   @map("language_version_id") @db.Uuid
+  kind              AssetKind
+  storageKey        String    @unique @map("storage_key")
+  mimeType          String    @map("mime_type")
+  sizeBytes         BigInt?   @map("size_bytes")
+  durationMs        Int?      @map("duration_ms")
+  width             Int?
+  height            Int?
+  checksumSha256    String?   @map("checksum_sha256")
+  provider          String?
+  isMock            Boolean   @default(false) @map("is_mock")
+  /// Kind-specific details: subtitle format, licence/attribution for music & SFX, etc.
+  metadata          Json      @default("{}")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project          Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion  LanguageVersion? @relation(fields: [languageVersionId], references: [id], onDelete: Cascade)
+  narration        SceneNarration?
+  selectedForShots Shot[]
+  producedBy       ProviderCall[]
+  infographics     Infographic[]
+  renderOutputs    Render[]
+
+  @@index([projectId, kind])
+  @@map("media_assets")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Research
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Source {
+  id               String     @id @default(uuid(7)) @db.Uuid
+  projectId        String     @map("project_id") @db.Uuid
+  sourceType       SourceType @map("source_type")
+  title            String
+  author           String?
+  publisher        String?
+  /// Free-form because historical dates are messy ("1637", "c. 1841").
+  publishedDate    String?    @map("published_date")
+  url              String?
+  /// Full formatted citation.
+  citation         String
+  reliabilityNotes String?    @map("reliability_notes")
+  notes            String?
+  accessedAt       DateTime?  @map("accessed_at") @db.Timestamptz(3)
+  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  citations ClaimCitation[]
+
+  @@index([projectId])
+  @@map("sources")
+}
+
+/// A versioned research dossier (human approval gate #1 reviews one version).
+model ResearchDossier {
+  id        String         @id @default(uuid(7)) @db.Uuid
+  projectId String         @map("project_id") @db.Uuid
+  version   Int
+  status    ArtifactStatus @default(DRAFT)
+  summary   String?
+  /// Timeline, open questions, myths-vs-evidence overview, dates needing verification.
+  content   Json           @default("{}")
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project   Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  claims    ResearchClaim[]
+  stories   StoryArchitecture[]
+  approvals Approval[]
+
+  @@unique([projectId, version])
+  @@map("research_dossiers")
+}
+
+/// One factual claim and where it stands against the evidence.
+/// `verdict` separates WHAT WE KNOW from WHAT IS COMMONLY CLAIMED.
+model ResearchClaim {
+  id                String          @id @default(uuid(7)) @db.Uuid
+  dossierId         String          @map("dossier_id") @db.Uuid
+  statement         String
+  claimType         ClaimType       @map("claim_type")
+  verdict           ClaimVerdict    @default(UNVERIFIED)
+  confidence        ConfidenceLevel @default(LOW)
+  needsVerification Boolean         @default(true) @map("needs_verification")
+  /// The popular version of the story this claim corrects, if any.
+  popularVersion    String?         @map("popular_version")
+  notes             String?
+  sortOrder         Int             @default(0) @map("sort_order")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  dossier   ResearchDossier @relation(fields: [dossierId], references: [id], onDelete: Cascade)
+  citations ClaimCitation[]
+
+  @@index([dossierId])
+  @@map("research_claims")
+}
+
+/// Claim ↔ source link. A claim can be supported by one source and contradicted by another.
+model ClaimCitation {
+  id       String         @id @default(uuid(7)) @db.Uuid
+  claimId  String         @map("claim_id") @db.Uuid
+  sourceId String         @map("source_id") @db.Uuid
+  stance   CitationStance @default(SUPPORTS)
+  /// Page, folio, timestamp or anchor.
+  locator  String?
+  quote    String?
+  notes    String?
+
+  claim  ResearchClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  source Source        @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([claimId])
+  @@index([sourceId])
+  @@map("claim_citations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Story & script
+// ─────────────────────────────────────────────────────────────────────────────
+
+model StoryArchitecture {
+  id        String         @id @default(uuid(7)) @db.Uuid
+  projectId String         @map("project_id") @db.Uuid
+  /// Research dossier version this story was built on.
+  dossierId String?        @map("dossier_id") @db.Uuid
+  version   Int
+  status    ArtifactStatus @default(DRAFT)
+  /// StoryBeats contract (hook, context, central question, … ending).
+  beats     Json
+  notes     String?
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  dossier ResearchDossier? @relation(fields: [dossierId], references: [id], onDelete: SetNull)
+  scripts Script[]
+
+  @@unique([projectId, version])
+  @@map("story_architectures")
+}
+
+/// Language-neutral script structure (scenes). The words live in SceneNarration, per language.
+model Script {
+  id                   String         @id @default(uuid(7)) @db.Uuid
+  projectId            String         @map("project_id") @db.Uuid
+  storyId              String?        @map("story_id") @db.Uuid
+  version              Int
+  status               ArtifactStatus @default(DRAFT)
+  title                String?
+  estimatedDurationSec Int?           @map("estimated_duration_sec")
+  /// Script QA scores (NARRATIVE_SCORE, AUDIO_FLOW_SCORE, …).
+  scores               Json?
+  notes                String?
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  story       StoryArchitecture? @relation(fields: [storyId], references: [id], onDelete: SetNull)
+  scenes      Scene[]
+  storyboards Storyboard[]
+  approvals   Approval[]
+
+  @@unique([projectId, version])
+  @@map("scripts")
+}
+
+model Scene {
+  id                     String  @id @default(uuid(7)) @db.Uuid
+  scriptId               String  @map("script_id") @db.Uuid
+  /// Stable key shared by every language ("S01").
+  sceneKey               String  @map("scene_key")
+  sortOrder              Int     @map("sort_order")
+  title                  String?
+  emotionalTone          String? @map("emotional_tone")
+  visualIntent           String? @map("visual_intent")
+  infographicOpportunity String? @map("infographic_opportunity")
+  soundDesignOpportunity String? @map("sound_design_opportunity")
+  targetDurationSec      Float?  @map("target_duration_sec")
+
+  script       Script           @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  narrations   SceneNarration[]
+  shots        Shot[]
+  infographics Infographic[]
+
+  @@unique([scriptId, sceneKey])
+  @@index([scriptId, sortOrder])
+  @@map("scenes")
+}
+
+/// The spoken words of one scene in one language, plus its generated audio and timing.
+model SceneNarration {
+  id                   String         @id @default(uuid(7)) @db.Uuid
+  sceneId              String         @map("scene_id") @db.Uuid
+  languageVersionId    String         @map("language_version_id") @db.Uuid
+  status               ArtifactStatus @default(DRAFT)
+  text                 String
+  wordCount            Int            @map("word_count")
+  estimatedDurationSec Float?         @map("estimated_duration_sec")
+  audioAssetId         String?        @unique @map("audio_asset_id") @db.Uuid
+  audioDurationMs      Int?           @map("audio_duration_ms")
+  /// Word/character timestamps from the voice provider (drives subtitles and the edit).
+  alignment            Json?
+  /// Snapshot of the VoiceSettings used to generate the audio.
+  voiceSettings        Json?          @map("voice_settings")
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  scene           Scene           @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion @relation(fields: [languageVersionId], references: [id], onDelete: Cascade)
+  audioAsset      MediaAsset?     @relation(fields: [audioAssetId], references: [id], onDelete: SetNull)
+
+  @@unique([sceneId, languageVersionId])
+  @@map("scene_narrations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Visuals
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Versioned visual plan for one script version (human approval gate #3).
+model Storyboard {
+  id        String         @id @default(uuid(7)) @db.Uuid
+  projectId String         @map("project_id") @db.Uuid
+  scriptId  String         @map("script_id") @db.Uuid
+  version   Int
+  status    ArtifactStatus @default(DRAFT)
+  notes     String?
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  script    Script     @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  shots     Shot[]
+  approvals Approval[]
+  timelines Timeline[]
+
+  @@unique([projectId, version])
+  @@map("storyboards")
+}
+
+/// One planned shot. Language-neutral, so generated visuals are reused by every language.
+/// Generation attempts are ProviderCall rows (shot_id); the chosen output is selected_asset_id.
+model Shot {
+  id               String        @id @default(uuid(7)) @db.Uuid
+  storyboardId     String        @map("storyboard_id") @db.Uuid
+  sceneId          String        @map("scene_id") @db.Uuid
+  sortOrder        Int           @map("sort_order")
+  durationSec      Float         @map("duration_sec")
+  /// The master-language narration this shot covers (anchor for timing).
+  narrationAnchor  String?       @map("narration_anchor")
+  visualType       VisualType    @map("visual_type")
+  shotType         ShotType?     @map("shot_type")
+  cameraMotion     CameraMotion? @map("camera_motion")
+  /// ShotDirection contract: lens, composition, environment, period, characters, props, lighting, colour, action, continuity notes.
+  direction        Json          @default("{}")
+  /// Provider-neutral generation prompt (not tied to one vendor's name).
+  generationPrompt String?       @map("generation_prompt")
+  negativePrompt   String?       @map("negative_prompt")
+  status           ShotStatus    @default(PLANNED)
+  selectedAssetId  String?       @map("selected_asset_id") @db.Uuid
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  storyboard    Storyboard     @relation(fields: [storyboardId], references: [id], onDelete: Cascade)
+  scene         Scene          @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  selectedAsset MediaAsset?    @relation(fields: [selectedAssetId], references: [id], onDelete: SetNull)
+  generations   ProviderCall[]
+
+  @@index([storyboardId, sortOrder])
+  @@map("shots")
+}
+
+/// A deterministic data graphic. The AI proposes `spec` (InfographicSpec contract);
+/// the renderer draws it. Never an AI-generated image.
+model Infographic {
+  id              String          @id @default(uuid(7)) @db.Uuid
+  projectId       String          @map("project_id") @db.Uuid
+  sceneId         String?         @map("scene_id") @db.Uuid
+  infographicType InfographicType @map("infographic_type")
+  title           String
+  spec            Json
+  status          ArtifactStatus  @default(DRAFT)
+  /// Rendered output (master language).
+  assetId         String?         @map("asset_id") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene   Scene?      @relation(fields: [sceneId], references: [id], onDelete: SetNull)
+  asset   MediaAsset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  @@map("infographics")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Edit, render, QA
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Edit decision list for one language. Narration timing is the backbone, so
+/// timelines are per language while the shots they reference are shared.
+model Timeline {
+  id                String         @id @default(uuid(7)) @db.Uuid
+  projectId         String         @map("project_id") @db.Uuid
+  languageVersionId String         @map("language_version_id") @db.Uuid
+  storyboardId      String?        @map("storyboard_id") @db.Uuid
+  version           Int
+  status            ArtifactStatus @default(DRAFT)
+  durationMs        Int?           @map("duration_ms")
+  /// Tracks: video, narration, music, ambience, SFX, graphics, subtitles. Contract defined in the editing milestone.
+  tracks            Json           @default("{}")
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project         Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion @relation(fields: [languageVersionId], references: [id], onDelete: Cascade)
+  storyboard      Storyboard?     @relation(fields: [storyboardId], references: [id], onDelete: SetNull)
+  renders         Render[]
+
+  @@unique([languageVersionId, version])
+  @@map("timelines")
+}
+
+model Render {
+  id                String       @id @default(uuid(7)) @db.Uuid
+  projectId         String       @map("project_id") @db.Uuid
+  languageVersionId String       @map("language_version_id") @db.Uuid
+  timelineId        String?      @map("timeline_id") @db.Uuid
+  status            RenderStatus @default(QUEUED)
+  provider          String
+  isMock            Boolean      @default(false) @map("is_mock")
+  /// Resolution, fps, codec, loudness target…
+  settings          Json         @default("{}")
+  outputAssetId     String?      @map("output_asset_id") @db.Uuid
+  durationMs        Int?         @map("duration_ms")
+  error             String?
+  startedAt         DateTime?    @map("started_at") @db.Timestamptz(3)
+  completedAt       DateTime?    @map("completed_at") @db.Timestamptz(3)
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project         Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion @relation(fields: [languageVersionId], references: [id], onDelete: Cascade)
+  timeline        Timeline?       @relation(fields: [timelineId], references: [id], onDelete: SetNull)
+  outputAsset     MediaAsset?     @relation(fields: [outputAssetId], references: [id], onDelete: SetNull)
+  qaReports       QaReport[]
+  approvals       Approval[]
+
+  @@index([projectId])
+  @@map("renders")
+}
+
+/// Automated QA output. Informs, never replaces, the human final approval.
+model QaReport {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  projectId         String   @map("project_id") @db.Uuid
+  languageVersionId String?  @map("language_version_id") @db.Uuid
+  renderId          String?  @map("render_id") @db.Uuid
+  overallScore      Int?     @map("overall_score")
+  hasBlockingErrors Boolean  @default(false) @map("has_blocking_errors")
+  /// QaFindings contract: overallScore, categoryScores, warnings, blockingErrors.
+  findings          Json
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion? @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
+  render          Render?          @relation(fields: [renderId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@map("qa_reports")
+}

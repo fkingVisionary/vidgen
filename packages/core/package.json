@@ -1,0 +1,16 @@
+{
+  "name": "@docengine/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Domain model shared by API, workers and dashboard: enums, status machine, pipeline, contracts. Browser-safe, no I/O.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  }
+}

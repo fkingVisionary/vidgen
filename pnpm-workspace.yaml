@@ -1,0 +1,20 @@
+packages:
+  - apps/*
+  - packages/*
+  - modules/*
+
+# Versions shared by several packages are declared once here and referenced
+# as "catalog:". @prisma/client MUST match the prisma CLI that generated the
+# client, and apps/api must declare the runtime packages its bundle imports.
+catalog:
+  '@prisma/adapter-pg': 7.10.0
+  '@prisma/client': 7.10.0
+  prisma: 7.10.0
+  pg: 8.23.1
+  zod: 4.6.5
+
+# pnpm 10 blocks dependency install scripts unless allow-listed.
+onlyBuiltDependencies:
+  - '@prisma/engines'
+  - esbuild
+  - prisma

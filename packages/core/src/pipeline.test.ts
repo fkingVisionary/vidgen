@@ -1,0 +1,198 @@
+import { describe, expect, it } from 'vitest';
+import { JOB_TYPES, PROJECT_STATUSES, type ProjectStatus } from './enums.ts';
+import {
+  STATUS_DEFINITIONS,
+  assertTransition,
+  canTransition,
+  forwardStatus,
+  getAvailableActions,
+  getTransitionKind,
+  jobPhase,
+  resolveApproval,
+  resolveEnqueue,
+  startsNewPhaseRun,
+  statusIndex,
+} from './pipeline.ts';
+
+const HAPPY_PATH: ProjectStatus[] = PROJECT_STATUSES.filter((s) => s !== 'FAILED');
+
+describe('pipeline definition', () => {
+  it('follows the canonical status order on the happy path, from IDEA to PUBLISHED', () => {
+    const walked: ProjectStatus[] = ['IDEA'];
+    let current: ProjectStatus | null = 'IDEA';
+    while ((current = forwardStatus(current)) !== null) walked.push(current);
+    expect(walked).toEqual(HAPPY_PATH);
+  });
+
+  it('assigns every job type to exactly one status', () => {
+    for (const type of JOB_TYPES) {
+      const owners = PROJECT_STATUSES.filter((s) => STATUS_DEFINITIONS[s].jobs.includes(type));
+      expect(owners, type).toHaveLength(1);
+      expect(jobPhase(type)).toBe(owners[0]);
+    }
+  });
+
+  it('gives every non-FAILED status a dashboard stage', () => {
+    for (const s of HAPPY_PATH) expect(STATUS_DEFINITIONS[s].stage, s).not.toBeNull();
+  });
+
+  it('has exactly the five human review points, each with approve and reject targets', () => {
+    const gated = PROJECT_STATUSES.filter((s) => STATUS_DEFINITIONS[s].gate);
+    expect(gated).toEqual(['RESEARCH_REVIEW', 'SCRIPT_REVIEW', 'STORYBOARD_REVIEW', 'VISUAL_REVIEW', 'QA']);
+    for (const s of gated) {
+      const gate = STATUS_DEFINITIONS[s].gate!;
+      // Rejection always goes back, approval always goes forward.
+      expect(statusIndex(gate.onReject)).toBeLessThan(statusIndex(s));
+      expect(statusIndex(gate.onApprove)).toBeGreaterThan(statusIndex(s));
+    }
+  });
+
+  it('requires storyboard approval before any visual generation (cost control)', () => {
+    expect(jobPhase('VISUAL_GENERATION')).toBe('VISUAL_GENERATING');
+    expect(getTransitionKind('VISUAL_PLANNING', 'VISUAL_GENERATING')).toBeNull();
+    expect(getTransitionKind('STORYBOARD_REVIEW', 'VISUAL_GENERATING')).toBe('APPROVE');
+  });
+});
+
+describe('getTransitionKind', () => {
+  it.each([
+    ['IDEA', 'RESEARCHING', 'START'],
+    ['RESEARCHING', 'RESEARCH_REVIEW', 'COMPLETE'],
+    ['RESEARCH_REVIEW', 'RESEARCH_COMPLETE', 'APPROVE'],
+    ['RESEARCH_REVIEW', 'RESEARCHING', 'REJECT'],
+    ['SCRIPT_REVIEW', 'SCRIPT_DRAFT', 'REJECT'],
+    ['QA', 'APPROVED', 'APPROVE'],
+    ['QA', 'EDITING', 'REJECT'],
+    ['APPROVED', 'PUBLISHED', 'COMPLETE'],
+    ['VOICE_GENERATING', 'FAILED', 'FAIL'],
+    ['VISUAL_REVIEW', 'SCRIPT_DRAFT', 'REWIND'],
+    ['APPROVED', 'IDEA', 'REWIND'],
+  ] as const)('%s → %s is %s', (from, to, kind) => {
+    expect(getTransitionKind(from, to)).toBe(kind);
+  });
+
+  it.each([
+    ['RESEARCHING', 'RESEARCH_COMPLETE'], // cannot skip research review
+    ['SCRIPT_DRAFT', 'SCRIPT_APPROVED'], // cannot skip script review
+    ['SCRIPT_REVIEW', 'VOICE_GENERATING'], // cannot skip a milestone
+    ['EDITING', 'APPROVED'], // cannot skip render + QA
+    ['IDEA', 'PUBLISHED'],
+    ['RESEARCH_REVIEW', 'FAILED'], // nothing runs in a review status, so nothing can fail there
+    ['IDEA', 'IDEA'],
+  ] as const)('%s → %s is illegal', (from, to) => {
+    expect(getTransitionKind(from, to)).toBeNull();
+    expect(() => assertTransition(from, to)).toThrow(/Illegal project status transition/);
+  });
+
+  it('treats PUBLISHED as terminal', () => {
+    for (const to of PROJECT_STATUSES) expect(canTransition('PUBLISHED', to)).toBe(false);
+  });
+
+  it('only lets a FAILED project recover to where it failed, or rewind before that', () => {
+    const ctx = { failedFrom: 'VOICE_GENERATING' as const };
+    expect(getTransitionKind('FAILED', 'VOICE_GENERATING', ctx)).toBe('RECOVER');
+    expect(getTransitionKind('FAILED', 'SCRIPT_DRAFT', ctx)).toBe('REWIND');
+    expect(getTransitionKind('FAILED', 'VISUAL_PLANNING', ctx)).toBeNull(); // would skip ahead
+    expect(getTransitionKind('FAILED', 'APPROVED', ctx)).toBeNull();
+    expect(getTransitionKind('FAILED', 'VOICE_GENERATING')).toBeNull(); // unknown origin → refuse
+  });
+
+  it('allows every status with jobs to fail, and no status without jobs', () => {
+    for (const s of PROJECT_STATUSES) {
+      if (s === 'FAILED') continue;
+      expect(canTransition(s, 'FAILED'), s).toBe(STATUS_DEFINITIONS[s].jobs.length > 0);
+    }
+  });
+
+  it('only rewinds backwards', () => {
+    for (const from of HAPPY_PATH) {
+      for (const to of HAPPY_PATH) {
+        if (getTransitionKind(from, to) === 'REWIND') {
+          expect(statusIndex(to)).toBeLessThan(statusIndex(from));
+        }
+      }
+    }
+  });
+
+  it('keeps the phase run across FAIL/RECOVER so succeeded work is not discarded', () => {
+    expect(startsNewPhaseRun('FAIL')).toBe(false);
+    expect(startsNewPhaseRun('RECOVER')).toBe(false);
+    expect(startsNewPhaseRun('REWIND')).toBe(true);
+    expect(startsNewPhaseRun('REJECT')).toBe(true);
+  });
+});
+
+describe('resolveEnqueue', () => {
+  it('runs a job in its own phase', () => {
+    expect(resolveEnqueue('RESEARCHING', 'RESEARCH')).toEqual({ ok: true, enterStatus: null });
+    expect(resolveEnqueue('VISUAL_GENERATING', 'INFOGRAPHIC')).toEqual({ ok: true, enterStatus: null });
+  });
+
+  it('starts the next phase from a milestone', () => {
+    expect(resolveEnqueue('IDEA', 'RESEARCH')).toEqual({ ok: true, enterStatus: 'RESEARCHING' });
+    expect(resolveEnqueue('SCRIPT_APPROVED', 'VOICE')).toEqual({ ok: true, enterStatus: 'VOICE_GENERATING' });
+  });
+
+  it('refuses jobs outside the current phase', () => {
+    expect(resolveEnqueue('IDEA', 'SCRIPT').ok).toBe(false);
+    expect(resolveEnqueue('SCRIPT_REVIEW', 'VOICE').ok).toBe(false);
+    expect(resolveEnqueue('STORYBOARD_REVIEW', 'VISUAL_GENERATION').ok).toBe(false);
+    expect(resolveEnqueue('FAILED', 'RESEARCH').ok).toBe(false);
+  });
+});
+
+describe('resolveApproval', () => {
+  it('approves and rejects at the matching gate', () => {
+    expect(resolveApproval('SCRIPT_REVIEW', 'SCRIPT', 'APPROVED', { phaseJobsComplete: true })).toEqual({
+      ok: true,
+      nextStatus: 'SCRIPT_APPROVED',
+    });
+    expect(resolveApproval('SCRIPT_REVIEW', 'SCRIPT', 'REJECTED', { phaseJobsComplete: true })).toEqual({
+      ok: true,
+      nextStatus: 'SCRIPT_DRAFT',
+    });
+  });
+
+  it('records a FLAG without moving the project', () => {
+    expect(resolveApproval('RESEARCH_REVIEW', 'RESEARCH', 'FLAGGED', { phaseJobsComplete: true })).toEqual({
+      ok: true,
+      nextStatus: null,
+    });
+  });
+
+  it('refuses the wrong gate or a non-gate status', () => {
+    expect(resolveApproval('SCRIPT_REVIEW', 'RESEARCH', 'APPROVED', { phaseJobsComplete: true }).ok).toBe(false);
+    expect(resolveApproval('SCRIPT_DRAFT', 'SCRIPT', 'APPROVED', { phaseJobsComplete: true }).ok).toBe(false);
+  });
+
+  it('refuses final approval until the automated QA job has succeeded', () => {
+    expect(resolveApproval('QA', 'FINAL_VIDEO', 'APPROVED', { phaseJobsComplete: false }).ok).toBe(false);
+    expect(resolveApproval('QA', 'FINAL_VIDEO', 'APPROVED', { phaseJobsComplete: true })).toEqual({
+      ok: true,
+      nextStatus: 'APPROVED',
+    });
+    // Rejecting does not need QA to have run.
+    expect(resolveApproval('QA', 'FINAL_VIDEO', 'REJECTED', { phaseJobsComplete: false }).ok).toBe(true);
+  });
+});
+
+describe('getAvailableActions', () => {
+  it('offers the next phase from a milestone', () => {
+    expect(getAvailableActions('IDEA')).toMatchObject({ runnableJobs: ['RESEARCH'], startsPhase: 'RESEARCHING', gate: null });
+  });
+
+  it('offers both parallel jobs while generating visuals', () => {
+    expect(getAvailableActions('VISUAL_GENERATING').runnableJobs).toEqual(['VISUAL_GENERATION', 'INFOGRAPHIC']);
+  });
+
+  it('offers only the gate in a review status', () => {
+    const a = getAvailableActions('STORYBOARD_REVIEW');
+    expect(a.runnableJobs).toEqual([]);
+    expect(a.gate?.gate).toBe('STORYBOARD');
+    expect(a.rewindTargets).toContain('SCRIPT_DRAFT');
+  });
+
+  it('offers nothing to run for a FAILED project', () => {
+    expect(getAvailableActions('FAILED', { failedFrom: 'EDITING' })).toMatchObject({ runnableJobs: [], startsPhase: null });
+  });
+});

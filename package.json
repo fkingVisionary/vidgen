@@ -1,0 +1,36 @@
+{
+  "name": "documentary-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI-assisted historical & economic documentary production system (V1 scaffold)",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @docengine/api --filter @docengine/web dev",
+    "dev:api": "pnpm --filter @docengine/api dev",
+    "dev:web": "pnpm --filter @docengine/web dev",
+    "build": "pnpm db:generate && pnpm --filter @docengine/web build && pnpm --filter @docengine/api build",
+    "start": "node apps/api/dist/server.js",
+    "start:worker": "node apps/api/dist/worker.js",
+    "release": "sh scripts/release.sh",
+    "typecheck": "tsc -p tsconfig.json && pnpm -r --parallel typecheck",
+    "test": "vitest run --project unit",
+    "test:int": "vitest run --project integration",
+    "test:all": "vitest run",
+    "db:generate": "pnpm --filter @docengine/database generate",
+    "db:migrate": "pnpm --filter @docengine/database migrate:dev",
+    "db:deploy": "pnpm --filter @docengine/database migrate:deploy",
+    "db:seed": "pnpm --filter @docengine/database seed",
+    "db:studio": "pnpm --filter @docengine/database studio"
+  },
+  "devDependencies": {
+    "@docengine/database": "workspace:*",
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  }
+}

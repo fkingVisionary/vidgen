@@ -1,0 +1,54 @@
+import { ApprovalInput, CreateProjectInput, EnqueueJobInput, RewindInput } from '@docengine/core';
+import { NotFoundError } from '@docengine/pipeline';
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { actorOf } from '../auth.ts';
+import type { AppContainer } from '../container.ts';
+import { findProject, listProjects, loadProjectDetail, toJobView } from '../views.ts';
+
+const Params = z.object({ id: z.string().trim().min(1).max(100) });
+
+export async function projectRoutes(app: FastifyInstance, c: AppContainer): Promise<void> {
+  const requireProject = async (raw: unknown) => {
+    const { id } = Params.parse(raw);
+    const project = await findProject(c.db, id);
+    if (!project) throw new NotFoundError('Project', id);
+    return project;
+  };
+  const detail = async (id: string) => {
+    const d = await loadProjectDetail(c.db, c.projects, id);
+    if (!d) throw new NotFoundError('Project', id);
+    return d;
+  };
+
+  app.get('/api/projects', async () => listProjects(c.db));
+
+  app.post('/api/projects', async (req, reply) => {
+    const input = CreateProjectInput.parse(req.body ?? {});
+    const project = await c.projects.createProject(input, actorOf(req));
+    return reply.code(201).send(await detail(project.id));
+  });
+
+  app.get('/api/projects/:id', async (req) => detail(Params.parse(req.params).id));
+
+  /** Enqueue a pipeline job (may START the next phase, e.g. IDEA → RESEARCHING). */
+  app.post('/api/projects/:id/jobs', async (req, reply) => {
+    const project = await requireProject(req.params);
+    const job = await c.projects.enqueueJob(project.id, EnqueueJobInput.parse(req.body ?? {}), actorOf(req));
+    return reply.code(202).send(toJobView(job));
+  });
+
+  /** Record a human decision at the current approval gate. */
+  app.post('/api/projects/:id/approvals', async (req, reply) => {
+    const project = await requireProject(req.params);
+    await c.projects.recordApproval(project.id, ApprovalInput.parse(req.body ?? {}), actorOf(req));
+    return reply.code(201).send(await detail(project.id));
+  });
+
+  /** Move the project back to an earlier status (e.g. re-open the script). */
+  app.post('/api/projects/:id/rewind', async (req) => {
+    const project = await requireProject(req.params);
+    await c.projects.rewind(project.id, RewindInput.parse(req.body ?? {}), actorOf(req));
+    return detail(project.id);
+  });
+}
