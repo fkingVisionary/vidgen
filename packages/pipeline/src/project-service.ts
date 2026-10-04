@@ -129,7 +129,8 @@ export class ProjectService {
         if (!resolution.ok) throw new ConflictError(resolution.reason);
         if (resolution.enterStatus) project = await this.transition(tx, project, resolution.enterStatus, actor, `Retrying ${old.type}`);
       }
-      return this.insertJob(tx, project, old.type, old.languageVersionId, old.input as Prisma.InputJsonValue, actor, old.id);
+      // The retry inherits the failed job's saved progress, so it resumes instead of repeating paid work.
+      return this.insertJob(tx, project, old.type, old.languageVersionId, old.input as Prisma.InputJsonValue, actor, old.id, old.checkpoint);
     });
     await this.onJobQueued?.(job);
     return job;
@@ -286,6 +287,7 @@ export class ProjectService {
     input: Prisma.InputJsonValue,
     actor: Actor,
     retryOf?: string,
+    checkpoint?: Prisma.JsonValue | null,
   ): Promise<Job> {
     const active = await tx.job.findFirst({
       where: {
@@ -307,6 +309,7 @@ export class ProjectService {
         phaseSeq: project.phaseSeq,
         maxAttempts: this.jobMaxAttempts,
         input,
+        ...(checkpoint != null ? { checkpoint: checkpoint as Prisma.InputJsonValue } : {}),
       },
     });
     await this.event(tx, project.id, EVENT.JOB_QUEUED, `${type} job queued`, { actor, ...(retryOf ? { retryOf } : {}) }, job.id);

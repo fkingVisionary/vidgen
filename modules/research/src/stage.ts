@@ -24,10 +24,11 @@ import {
   triageSystemPrompt,
   triageUserPrompt,
 } from './prompts.ts';
+import { emptyCheckpoint, readCheckpoint, type PlanQuestion, type ResearchCheckpoint, type SavedCandidate, type SavedRetrieved } from './checkpoint.ts';
 import { computeQualityReport } from './quality.ts';
 import { PlanOutput, ReadOutput, ReviewOutput, SynthesisOutput, TriageOutput } from './schemas.ts';
 import { SAME_WORK_THRESHOLD, openAccessLookup, sameWorkScore, titleTokens, type OpenAccessLookup } from './open-access.ts';
-import { normalizeForMatch, relevantExcerpt, sha256, textSimilarity, topicKeywords, verifyQuote } from './text.ts';
+import { cleanJson, cleanText, normalizeForMatch, relevantExcerpt, sha256, textSimilarity, topicKeywords, verifyQuote } from './text.ts';
 import { domainOf, normalizeUrl } from './urls.ts';
 import { countBy, errorMessage, mapLimit } from './util.ts';
 
@@ -49,14 +50,6 @@ export function createResearchStage(overrides: Partial<ResearchConfig> = {}): St
 
 /** The run's recorded spend passed RESEARCH_MAX_COST_USD. Not retried: raising the ceiling is a human decision. */
 class CostCeilingError extends NonRetryableError {}
-
-interface PlanQuestion {
-  id: string;
-  category: string;
-  question: string;
-  rationale: string;
-  queries: string[];
-}
 
 interface Candidate {
   id: string; // C12
@@ -89,6 +82,19 @@ interface Retrieved {
   note: string | null;
 }
 
+function toSavedCandidate(c: Candidate): SavedCandidate {
+  return { ...c, questionIds: [...c.questionIds], queries: [...c.queries] };
+}
+
+function fromSavedCandidate(c: SavedCandidate): Candidate {
+  return { ...c, questionIds: new Set(c.questionIds), queries: new Set(c.queries) };
+}
+
+function toSavedRetrieved(r: Retrieved): SavedRetrieved {
+  const { text: _text, normalized: _normalized, sha: _sha, ...rest } = r;
+  return rest;
+}
+
 /** A selected source during retrieval. */
 interface Row {
   sourceId: string;
@@ -119,8 +125,16 @@ interface Stats {
   evidenceVerified: number;
   evidenceRejected: number;
   models: string[];
+  /** Steps reused from an earlier attempt's saved progress (no new provider calls). */
+  resumedSteps: string[];
   durationMs?: number;
 }
+
+/** Saved steps, in order. A step is only reused if every step before it was reused too. */
+const STEPS = ['plan', 'candidates', 'selection', 'retrieved', 'synthesis', 'review'] as const;
+type Step = (typeof STEPS)[number];
+/** Steps whose run statistics are saved with them (later steps recount; reading comes from cache). */
+const STATS_STEPS: readonly Step[] = ['plan', 'candidates', 'selection', 'retrieved'];
 
 class ResearchRun {
   private readonly stats: Stats = {
@@ -144,7 +158,11 @@ class ResearchRun {
     evidenceVerified: 0,
     evidenceRejected: 0,
     models: [],
+    resumedSteps: [],
   };
+  private cp: ResearchCheckpoint = emptyCheckpoint();
+  /** True while saved steps are being replayed; the first step that runs afresh ends it. */
+  private resuming = true;
   private readonly focusAreas: { id: string; text: string }[];
   private readonly brief: string[];
   /** Topic words used to pick the relevant passages of very long documents. */
@@ -163,17 +181,18 @@ class ResearchRun {
 
   async run(): Promise<Record<string, unknown>> {
     const started = Date.now();
-    const plan = await this.plan();
+    await this.loadCheckpoint();
+    const plan = (await this.restorePlan()) ?? (await this.plan());
     await this.checkpoint();
-    const candidates = await this.discover(plan);
+    const candidates = (await this.restoreCandidates()) ?? (await this.discover(plan));
     await this.checkpoint();
-    const selected = await this.triage(plan, candidates);
+    const selected = (await this.restoreSelection(candidates)) ?? (await this.triage(plan, candidates));
     await this.checkpoint();
-    const retrieved = await this.retrieve(selected);
+    const retrieved = (await this.restoreRetrieval()) ?? (await this.retrieve(selected));
     await this.checkpoint();
     const evidence = await this.read(retrieved);
     await this.checkpoint();
-    const synthesis = await this.synthesize(plan, retrieved, evidence);
+    const synthesis = (await this.restoreSynthesis()) ?? (await this.synthesize(plan, retrieved, evidence));
     await this.checkpoint();
 
     const sources = new Map<string, DraftSource>(
@@ -181,7 +200,7 @@ class ResearchRun {
     );
     const { draft, notes } = buildDraft(synthesis, evidence, plan);
     notes.push(...normalizeDraft(draft, sources));
-    const issues = await this.review(draft, sources, evidence);
+    const issues = this.applyReview(draft, (await this.restoreReview()) ?? (await this.requestReview(draft, sources, evidence)));
     notes.push(...normalizeDraft(draft, sources)); // re-apply the rules after automatic review fixes
 
     const report = computeQualityReport({
@@ -194,6 +213,7 @@ class ResearchRun {
     });
     this.stats.durationMs = Date.now() - started;
     const dossier = await this.persist(draft, report);
+    if (report.passed) await this.clearCheckpoint(); // a failed gate keeps it: a retry re-evaluates without paying again
 
     const verdicts = Object.fromEntries(CLAIM_VERDICTS.map((v) => [v, draft.claims.filter((c) => c.verdict === v).length]));
     const citedIds = new Set(draft.claims.flatMap((c) => c.citations.map((x) => x.sourceId)));
@@ -218,6 +238,110 @@ class ResearchRun {
     };
   }
 
+  // ── Saved progress (jobs.checkpoint) ───────────────────────────────────────
+  private async loadCheckpoint() {
+    const row = await this.ctx.db.job.findUnique({ where: { id: this.ctx.job.id }, select: { checkpoint: true } });
+    const { checkpoint, ignored } = readCheckpoint(row?.checkpoint);
+    this.cp = checkpoint;
+    if (ignored) this.ctx.logger.warn({ jobId: this.ctx.job.id }, 'saved research progress is from another version; starting over');
+  }
+
+  /** Save a completed step. Later steps are dropped: they were derived from the previous value. */
+  private async save<K extends Step>(step: K, value: NonNullable<ResearchCheckpoint[K]>) {
+    const next: ResearchCheckpoint = { version: this.cp.version, promptVersion: this.cp.promptVersion };
+    const index = STEPS.indexOf(step);
+    for (const earlier of STEPS.slice(0, index)) if (this.cp[earlier] !== undefined) (next as unknown as Record<string, unknown>)[earlier] = this.cp[earlier];
+    next[step] = value;
+    const statsAfter = { ...this.cp.stats };
+    for (const later of STEPS.slice(index)) delete statsAfter[later];
+    if (STATS_STEPS.includes(step)) statsAfter[step] = { ...this.stats };
+    next.stats = statsAfter;
+    this.cp = next;
+    this.resuming = false;
+    await this.ctx.db.job.update({ where: { id: this.ctx.job.id }, data: { checkpoint: next as unknown as Prisma.InputJsonValue } });
+  }
+
+  private async clearCheckpoint() {
+    await this.ctx.db.$executeRaw`UPDATE jobs SET checkpoint = NULL WHERE id = ${this.ctx.job.id}::uuid`;
+  }
+
+  /** A saved step, if every earlier step was reused; null ends the replay (this and later steps run afresh). */
+  private peek<K extends Step>(step: K): NonNullable<ResearchCheckpoint[K]> | null {
+    const value = this.cp[step];
+    if (!this.resuming || value === undefined || value === null) return this.stopResuming();
+    return value as NonNullable<ResearchCheckpoint[K]>;
+  }
+
+  private stopResuming(): null {
+    this.resuming = false;
+    return null;
+  }
+
+  /** Mark a validated saved step as reused, restoring the statistics saved with it. */
+  private accept(step: Step) {
+    const saved = this.cp.stats?.[step];
+    if (saved) Object.assign(this.stats, saved, { promptVersion: PROMPT_VERSION, resumedSteps: this.stats.resumedSteps });
+    this.stats.resumedSteps.push(step);
+  }
+
+  private async restorePlan(): Promise<PlanQuestion[] | null> {
+    const plan = this.peek('plan');
+    if (!plan) return null;
+    this.accept('plan');
+    await this.ctx.progress(`Research plan: ${plan.length} questions (reused from an earlier attempt; no new model call)`);
+    return plan;
+  }
+
+  private async restoreCandidates(): Promise<Candidate[] | null> {
+    const saved = this.peek('candidates');
+    if (!saved) return null;
+    this.accept('candidates');
+    await this.ctx.progress(`Discovery: ${saved.length} candidate sources (reused from an earlier attempt; no new searches)`);
+    return saved.map(fromSavedCandidate);
+  }
+
+  private async restoreSelection(candidates: Candidate[]): Promise<Candidate[] | null> {
+    const saved = this.peek('selection');
+    if (!saved) return null;
+    const byId = new Map(candidates.map((c) => [c.id, c]));
+    if (saved.some((x) => !byId.has(x.id))) return this.stopResuming();
+    this.accept('selection');
+    const chosen = saved.map((x) => Object.assign(byId.get(x.id)!, { hint: x.hint }));
+    await this.ctx.progress(`Triage: ${chosen.length} sources selected (reused from an earlier attempt; no new model call)`);
+    return chosen;
+  }
+
+  private async restoreRetrieval(): Promise<Retrieved[] | null> {
+    const saved = this.peek('retrieved');
+    if (!saved) return null;
+    const docs = await this.ctx.db.sourceDocument.findMany({ where: { id: { in: saved.map((r) => r.documentId) } }, select: { id: true, text: true, sha256: true } });
+    const byId = new Map(docs.map((d) => [d.id, d]));
+    // A stored document disappeared: retrieve again (documents that still exist are reused there).
+    if (saved.some((r) => !byId.has(r.documentId))) return this.stopResuming();
+    this.accept('retrieved');
+    const retrieved = saved.map((r) => {
+      const d = byId.get(r.documentId)!;
+      return { ...r, text: d.text, normalized: normalizeForMatch(d.text), sha: d.sha256 };
+    });
+    await this.ctx.progress(`Retrieval: ${retrieved.filter((r) => !r.duplicateOfId).length} unique documents (reused from an earlier attempt; nothing fetched)`);
+    return retrieved;
+  }
+
+  private async restoreSynthesis(): Promise<SynthesisOutput | null> {
+    const parsed = SynthesisOutput.safeParse(this.peek('synthesis'));
+    if (!parsed.success) return this.stopResuming();
+    this.accept('synthesis');
+    await this.ctx.progress(`Synthesis: ${parsed.data.claims.length} claims (reused from an earlier attempt; no new model call)`);
+    return parsed.data;
+  }
+
+  private async restoreReview(): Promise<ReviewOutput | null> {
+    const parsed = ReviewOutput.safeParse(this.peek('review'));
+    if (!parsed.success) return this.stopResuming();
+    this.accept('review');
+    return parsed.data;
+  }
+
   // ── 1. Plan ────────────────────────────────────────────────────────────────
   private async plan(): Promise<PlanQuestion[]> {
     const { ai } = this.ctx.providers;
@@ -240,7 +364,7 @@ class ResearchRun {
     );
     this.noteModel(r.meta.model);
 
-    const questions = r.object.questions
+    const questions = cleanJson(r.object).questions
       .slice(0, this.cfg.maxQuestions)
       .map((q, i) => ({
         id: `Q${i + 1}`,
@@ -252,6 +376,7 @@ class ResearchRun {
       .filter((q) => q.question && q.queries.length > 0);
     if (questions.length < 3) throw new NonRetryableError(`Research plan too thin (${questions.length} usable questions)`);
     this.stats.questions = questions.length;
+    await this.save('plan', questions);
     await this.ctx.progress(`Research plan: ${questions.length} questions, ${questions.reduce((n, q) => n + q.queries.length, 0)} search queries`, {
       questions: questions.map((q) => `${q.id} ${q.question}`),
     });
@@ -322,6 +447,7 @@ class ResearchRun {
     }
     const candidates = [...byUrl.values()];
     this.stats.candidates = candidates.length;
+    await this.save('candidates', candidates.map(toSavedCandidate));
     await this.ctx.progress(
       `Discovery: ${this.stats.searches} searches (${this.stats.searchFailures} failed) → ${candidates.length} unique candidate sources`,
       { byTypeHint: countBy(candidates, (c) => c.hint), excludedResults: this.stats.excludedResults },
@@ -357,7 +483,7 @@ class ResearchRun {
 
     const byId = new Map(candidates.map((c) => [c.id, c]));
     const rank = { ESSENTIAL: 0, USEFUL: 1, BACKUP: 2 } as const;
-    const picks = r.object.selected
+    const picks = cleanJson(r.object).selected
       .filter((s) => byId.has(s.candidateId))
       .sort((a, b) => rank[a.priority] - rank[b.priority] || byId.get(b.candidateId)!.score - byId.get(a.candidateId)!.score);
 
@@ -379,6 +505,7 @@ class ResearchRun {
       for (const c of extra.slice(0, 2 - covered)) take(c);
     }
     this.stats.selected = chosen.length;
+    await this.save('selection', chosen.map((c) => ({ id: c.id, hint: c.hint })));
     await this.ctx.progress(`Triage: ${chosen.length} of ${candidates.length} candidates selected for full-text retrieval`, {
       byType: countBy(chosen, (c) => c.hint),
     });
@@ -436,6 +563,7 @@ class ResearchRun {
         `open-access copies found for ${this.stats.openAccessRecovered} of ${this.stats.openAccessLookups} unretrievable scholarly works)`,
     );
     if (unique < 5) throw new NonRetryableError(`Only ${unique} source documents could be retrieved; not enough to research from`);
+    await this.save('retrieved', retrieved.map(toSavedRetrieved));
     return retrieved;
   }
 
@@ -450,7 +578,7 @@ class ResearchRun {
       ...(Array.isArray(existing?.discoveredBy) ? (existing.discoveredBy as unknown[]) : []),
       { jobId: this.ctx.job.id, ...discovery },
     ] as Prisma.InputJsonValue;
-    const data = { searchSnippet: cand.snippet.slice(0, 2_000), searchScore: cand.score, discoveredBy: discovered };
+    const data = { searchSnippet: cleanText(cand.snippet).slice(0, 2_000), searchScore: cand.score, discoveredBy: cleanJson(discovered) };
     const source = existing
       ? await db.source.update({ where: { id: existing.id }, data })
       : await db.source.create({
@@ -459,10 +587,10 @@ class ResearchRun {
             url: cand.url,
             normalizedUrl: cand.normalizedUrl,
             domain: cand.domain,
-            title: cand.title,
+            title: cleanText(cand.title),
             sourceType: cand.hint,
             publishedDate: cand.publishedDate,
-            citation: `${cand.title}. ${cand.url}`,
+            citation: cleanText(`${cand.title}. ${cand.url}`),
             ...data,
           },
         });
@@ -471,7 +599,6 @@ class ResearchRun {
 
   /** Retrieve full text for rows without a document, in provider-sized batches. */
   private async fetchInto(toFetch: Row[]) {
-    const { db } = this.ctx;
     const { research } = this.ctx.providers;
     for (let i = 0; i < toFetch.length; i += research.maxBatchSize) {
       this.ctx.signal.throwIfAborted();
@@ -491,15 +618,17 @@ class ResearchRun {
       for (const d of res.documents) {
         const b = byUrl.get(d.url);
         if (!b) continue;
-        if (d.text.trim().length < this.cfg.minDocumentChars) {
-          await this.markFailed(b, `retrieved only ${d.text.trim().length} characters (paywall, stub or blocked page)`);
+        const text = cleanText(d.text);
+        if (text.trim().length < this.cfg.minDocumentChars) {
+          await this.markFailed(b, `retrieved only ${text.trim().length} characters (paywall, stub or blocked page)`);
           continue;
         }
-        const doc = await db.sourceDocument.create({
-          data: { sourceId: b.sourceId, provider: research.info.name, contentFormat: d.contentType, text: d.text, chars: d.text.length, sha256: sha256(d.text) },
-        });
-        await db.source.update({ where: { id: b.sourceId }, data: { retrievalStatus: 'RETRIEVED', retrievalError: null, accessedAt: new Date() } });
-        b.doc = { id: doc.id, text: doc.text, sha256: doc.sha256 };
+        const doc = await this.storeDocument(b.sourceId, d.contentType, text);
+        if (!doc.ok) {
+          await this.markFailed(b, `retrieved text could not be stored: ${doc.error}`);
+          continue;
+        }
+        b.doc = doc.doc;
         this.stats.retrievedNew++;
       }
       for (const f of res.failed) {
@@ -586,7 +715,10 @@ class ResearchRun {
           request: { urls, purpose: 'open-access copies' },
           summarize: (r) => ({ documents: r.documents.length, failed: r.failed }),
         });
-        for (const d of res.documents) if (d.text.trim().length >= this.cfg.minDocumentChars) fetched.set(d.url, d);
+        for (const d of res.documents) {
+          const text = cleanText(d.text);
+          if (text.trim().length >= this.cfg.minDocumentChars) fetched.set(d.url, { contentType: d.contentType, text });
+        }
       } catch (err) {
         if (err instanceof ProviderError && err.retryable) throw err;
         this.ctx.logger.warn({ urls, err: errorMessage(err) }, 'retrieving open-access copies failed');
@@ -620,11 +752,12 @@ class ResearchRun {
         this.stats.retrievedFromCache++;
       } else {
         const d = fetched.get(pick.hit.url)!;
-        const doc = await db.sourceDocument.create({
-          data: { sourceId: copy.sourceId, provider: research.info.name, contentFormat: d.contentType, text: d.text, chars: d.text.length, sha256: sha256(d.text) },
-        });
-        await db.source.update({ where: { id: copy.sourceId }, data: { retrievalStatus: 'RETRIEVED', retrievalError: null, accessedAt: new Date() } });
-        copy.doc = { id: doc.id, text: doc.text, sha256: doc.sha256 };
+        const doc = await this.storeDocument(copy.sourceId, d.contentType, d.text);
+        if (!doc.ok) {
+          await this.markFailed(copy, `retrieved text could not be stored: ${doc.error}`);
+          continue;
+        }
+        copy.doc = doc.doc;
         this.stats.retrievedNew++;
       }
       copy.note = `Found as an open-access copy of "${first.cand.title}" (${first.cand.url}), which could not be retrieved. Check that this document is that work; if it is not, say so in reliabilityNotes and judge it on its own merits.`;
@@ -636,6 +769,25 @@ class ResearchRun {
           data: { retrievalError: `${o.error ?? 'not retrieved'} — open-access copy retrieved instead: ${pick.hit.url}`.slice(0, 1_000) },
         });
       }
+    }
+  }
+
+  /**
+   * Store a retrieved document. One document the database refuses (an
+   * encoding problem the cleaning missed, an oversized page) fails only that
+   * source, not the whole run, whose earlier paid steps would otherwise be lost.
+   */
+  private async storeDocument(sourceId: string, contentFormat: string, text: string): Promise<{ ok: true; doc: { id: string; text: string; sha256: string } } | { ok: false; error: string }> {
+    const { db } = this.ctx;
+    try {
+      const doc = await db.sourceDocument.create({
+        data: { sourceId, provider: this.ctx.providers.research.info.name, contentFormat, text, chars: text.length, sha256: sha256(text) },
+      });
+      await db.source.update({ where: { id: sourceId }, data: { retrievalStatus: 'RETRIEVED', retrievalError: null, accessedAt: new Date() } });
+      return { ok: true, doc: { id: doc.id, text: doc.text, sha256: doc.sha256 } };
+    } catch (err) {
+      this.ctx.logger.warn({ sourceId, err: errorMessage(err) }, 'could not store retrieved document');
+      return { ok: false, error: errorMessage(err).split('\n').filter(Boolean).pop()?.slice(0, 300) ?? 'database error' };
     }
   }
 
@@ -685,7 +837,7 @@ class ResearchRun {
             { request: { task: 'research.read', source: r.url, documentChars: r.text.length, sentChars: excerpt.text.length, truncated }, summarize: (x) => ({ evidence: x.object.evidence.length, relevance: x.object.assessment.relevance }) },
           );
           this.noteModel(res.meta.model);
-          output = res.object;
+          output = cleanJson(res.object);
         }
 
         const checked = output.evidence.map((e) => ({ ...e, check: verifyQuote(r.normalized, e.quote) }));
@@ -821,12 +973,14 @@ class ResearchRun {
       { request: { task: 'research.synthesize', sources: usedSources.length, evidence: evidence.size }, summarize: (x) => ({ claims: x.object.claims.length }) },
     );
     this.noteModel(r.meta.model);
-    await this.ctx.progress(`Synthesis: ${r.object.claims.length} claims drafted from ${evidence.size} evidence items`);
-    return r.object;
+    const synthesis = cleanJson(r.object);
+    await this.save('synthesis', synthesis);
+    await this.ctx.progress(`Synthesis: ${synthesis.claims.length} claims drafted from ${evidence.size} evidence items`);
+    return synthesis;
   }
 
   // ── 7. Coherence review (automatic fixes are re-checked by the rules) ─────
-  private async review(draft: DossierDraft, sources: ReadonlyMap<string, DraftSource>, evidence: Map<string, EvidenceRecord>): Promise<CoherenceIssue[]> {
+  private async requestReview(draft: DossierDraft, sources: ReadonlyMap<string, DraftSource>, evidence: Map<string, EvidenceRecord>): Promise<ReviewOutput | { unavailable: string }> {
     const typeOf = (id: string) => sources.get(id)?.sourceType ?? '?';
     const claimsText = draft.claims
       .map((c) => {
@@ -857,12 +1011,20 @@ class ResearchRun {
         { request: { task: 'research.review', claims: draft.claims.length }, summarize: (x) => ({ issues: x.object.issues.length }) },
       );
       this.noteModel(r.meta.model);
-      output = r.object;
+      output = cleanJson(r.object);
     } catch (err) {
       if (err instanceof ProviderError && err.retryable) throw err;
-      return [{ severity: 'MAJOR', description: `Automated coherence review unavailable: ${errorMessage(err)}`, claimKeys: [], resolution: 'Left for human review' }];
+      return { unavailable: errorMessage(err) };
     }
+    await this.save('review', output);
+    return output;
+  }
 
+  /** Apply the review's constrained fixes to the draft; every issue is reported with what was done. */
+  private applyReview(draft: DossierDraft, output: ReviewOutput | { unavailable: string }): CoherenceIssue[] {
+    if ('unavailable' in output) {
+      return [{ severity: 'MAJOR', description: `Automated coherence review unavailable: ${output.unavailable}`, claimKeys: [], resolution: 'Left for human review' }];
+    }
     return output.issues.map((issue) => {
       const targets = draft.claims.filter((c) => issue.claimKeys.includes(c.key));
       const f = issue.fix;

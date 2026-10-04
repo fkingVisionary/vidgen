@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sourceTypeHint } from './domains.ts';
-import { normalizeForMatch, relevantExcerpt, textSimilarity, topicKeywords, verifyQuote } from './text.ts';
+import { cleanJson, cleanText, normalizeForMatch, relevantExcerpt, textSimilarity, topicKeywords, verifyQuote } from './text.ts';
 import { isValidSourceUrl, matchesDomain, normalizeUrl } from './urls.ts';
 
 describe('normalizeUrl', () => {
@@ -137,5 +137,14 @@ describe('relevantExcerpt', () => {
     expect(r.text.length).toBeLessThanOrEqual(10_000);
     expect(r.text).toContain('the tulip mania');
     for (const piece of r.text.split('\n\n[…]\n\n')) expect(normalizeForMatch(blob)).toContain(normalizeForMatch(piece));
+  });
+});
+
+describe('cleanText / cleanJson', () => {
+  it('removes NUL and other control characters but keeps tabs, newlines and all printable text', () => {
+    expect(cleanText('Tulip\u0000 prices\u0007 rose\tin\r\n1636 — “Semper Augustus” ✓')).toBe('Tulip prices rose\tin\r\n1636 — “Semper Augustus” ✓');
+  });
+  it('cleans every string in a nested value and leaves other values alone', () => {
+    expect(cleanJson({ a: 'x\u0000y', b: [1, 'p\u0000', null, { c: '\u0001z' }], d: true })).toEqual({ a: 'xy', b: [1, 'p', null, { c: 'z' }], d: true });
   });
 });

@@ -374,6 +374,9 @@ model Job {
   isMock            Boolean   @default(false) @map("is_mock")
   input             Json      @default("{}")
   result            Json?
+  /// Saved progress of a long job (e.g. research phase outputs). An automatic
+  /// or manual retry resumes from it instead of repeating paid provider calls.
+  checkpoint        Json?
   error             String?
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)

@@ -85,9 +85,9 @@ export class TavilyResearchProvider implements ResearchProvider {
     const results: SearchResult[] = (data.results ?? [])
       .filter((r) => typeof r.url === 'string' && r.url.length > 0)
       .map((r) => ({
-        title: r.title?.trim() || r.url,
+        title: stripControlChars(r.title ?? '').trim() || r.url,
         url: r.url,
-        snippet: r.content ?? '',
+        snippet: stripControlChars(r.content ?? ''),
         ...(typeof r.score === 'number' ? { score: r.score } : {}),
         ...(r.published_date ? { publishedDate: r.published_date } : {}),
       }));
@@ -110,8 +110,9 @@ export class TavilyResearchProvider implements ResearchProvider {
     const asRequested = (u: string) => requested.get(canonicalForMatching(u)) ?? u;
 
     const documents = (data.results ?? [])
-      .filter((r) => typeof r.raw_content === 'string' && r.raw_content.trim().length > 0)
-      .map((r) => ({ url: asRequested(r.url), contentType: 'text/markdown', text: r.raw_content as string }));
+      .map((r) => ({ url: r.url, text: typeof r.raw_content === 'string' ? stripControlChars(r.raw_content) : '' }))
+      .filter((r) => r.text.trim().length > 0)
+      .map((r) => ({ url: asRequested(r.url), contentType: 'text/markdown', text: r.text }));
     const failed = (data.failed_results ?? []).map((f) => ({ url: asRequested(f.url), error: f.error ?? 'extraction failed' }));
     // Empty extractions and URLs Tavily silently dropped count as failures, so every URL is accounted for.
     const returned = new Set([...documents.map((d) => d.url), ...failed.map((f) => f.url)]);
@@ -193,6 +194,15 @@ export class TavilyResearchProvider implements ResearchProvider {
 }
 
 /** Loose URL identity used only to reconcile provider output with requested URLs. */
+/**
+ * Extracted PDFs can contain NUL and other control characters. They mean
+ * nothing to a reader and PostgreSQL refuses NUL, so they are removed here,
+ * at the boundary; tab, newline and carriage return are kept.
+ */
+function stripControlChars(s: string): string {
+  return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+}
+
 function canonicalForMatching(u: string): string {
   try {
     const url = new URL(u);

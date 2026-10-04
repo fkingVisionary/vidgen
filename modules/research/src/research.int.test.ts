@@ -68,6 +68,10 @@ describe('research stage (fake providers, real database)', () => {
     expect(sources.find((x) => x.domain === 'dbnl.org')).toMatchObject({ sourceType: 'PRIMARY', reliability: 'HIGH' });
     expect(sources.find((x) => x.domain === 'archive.org')).toMatchObject({ sourceType: 'BOOK', author: 'Charles Mackay' });
     expect(jstor.document?.text).toMatch(/never settled in full/);
+    // Extracted text with NUL characters (as some PDFs produce) is cleaned and stored; PostgreSQL rejects NUL.
+    const nber = sources.find((x) => x.domain === 'nber.org')!;
+    expect(nber).toMatchObject({ retrievalStatus: 'RETRIEVED' });
+    expect(nber.document!.text).not.toContain('\u0000');
     expect(jstor.document?.analysisVersion).toMatch(/^research-v1:/);
 
     // Dossier v1 and its gate.
@@ -118,6 +122,8 @@ describe('research stage (fake providers, real database)', () => {
     const progress = await db.projectEvent.findMany({ where: { projectId, type: 'JOB_PROGRESS' }, orderBy: { createdAt: 'asc' } });
     expect(progress.map((p) => p.message.split(':')[0])).toEqual(['Research plan', 'Discovery', 'Triage', 'Retrieval', 'Reading', 'Synthesis', 'Research dossier v1 saved']);
     expect(job.result).toMatchObject({ dossierId: dossier.id, version: 1, qualityPassed: true, claims: 14 });
+    expect(job.checkpoint).toBeNull(); // saved progress is cleared once the dossier is saved
+    expect(dossier.stats).toMatchObject({ resumedSteps: [] });
 
     // The plain-text evidence report reads straight from the database.
     const text = await buildDossierReport(db, dossier.id);
@@ -137,6 +143,45 @@ describe('research stage (fake providers, real database)', () => {
     expect(await db.project.findUniqueOrThrow({ where: { id: projectId } })).toMatchObject({ status: 'FAILED', failedFromStatus: 'RESEARCHING' });
     const dossier = await db.researchDossier.findFirstOrThrow({ where: { projectId } });
     expect(dossier).toMatchObject({ status: 'DRAFT', qualityPassed: false });
+
+    // A manual Retry is a new job that inherits the saved progress: nothing paid for is repeated.
+    const searches = s.research.searches;
+    const fetched = s.research.fetched.length;
+    const retry = await s.projects.retryJob(job.id, 'test');
+    expect(retry.id).not.toBe(job.id);
+    await s.runner.drain();
+    expect(await db.job.findUniqueOrThrow({ where: { id: retry.id } })).toMatchObject({ status: 'FAILED' }); // same evidence, same gate
+    expect(s.research.searches).toBe(searches);
+    expect(s.research.fetched.length).toBe(fetched);
+    expect(s.ai.calls).toMatchObject({ 'research.plan': 1, 'research.triage': 1, 'research.read': 13, 'research.synthesize': 1, 'research.review': 1 });
+    const v2 = await db.researchDossier.findFirstOrThrow({ where: { projectId, version: 2 } });
+    expect(v2.stats).toMatchObject({ resumedSteps: ['plan', 'candidates', 'selection', 'retrieved', 'synthesis', 'review'], readFromCache: 13, searches: 9 });
+  });
+
+  it('a retry after a failed model call resumes from saved progress instead of repeating searches and model calls', async () => {
+    const s = setup();
+    s.ai.failNextTask = 'research.review'; // transient failure late in the run, after the expensive steps
+    const { projectId, job } = await runResearch(s);
+    expect(job).toMatchObject({ status: 'SUCCEEDED', attempts: 2, checkpoint: null });
+    expect(s.research.searches).toBe(9); // not 18
+    expect(s.research.fetched).toHaveLength(17); // 15 selected + 2 open-access candidates, each fetched once
+    expect(s.ai.calls).toMatchObject({ 'research.plan': 1, 'research.triage': 1, 'research.read': 13, 'research.synthesize': 1, 'research.review': 2 });
+    const dossier = await db.researchDossier.findFirstOrThrow({ where: { projectId } });
+    expect(dossier).toMatchObject({ version: 1, status: 'IN_REVIEW', qualityPassed: true });
+    expect(dossier.stats).toMatchObject({ resumedSteps: ['plan', 'candidates', 'selection', 'retrieved', 'synthesis'], searches: 9, readFromCache: 13 });
+    const progress = (await db.projectEvent.findMany({ where: { projectId, type: 'JOB_PROGRESS' }, orderBy: { createdAt: 'asc' } })).map((p) => p.message);
+    expect(progress.filter((m) => m.includes('reused from an earlier attempt')).map((m) => m.split(':')[0])).toEqual(['Research plan', 'Discovery', 'Triage', 'Retrieval', 'Synthesis']);
+  });
+
+  it('a retry after a failure during retrieval reuses the plan, searches and triage, and documents already stored', async () => {
+    const s = setup();
+    s.research.failNextFetch = true; // transient outage on the first extraction batch
+    const { job } = await runResearch(s);
+    expect(job).toMatchObject({ status: 'SUCCEEDED', attempts: 2 });
+    expect(s.research.searches).toBe(9); // 8 topic searches (attempt 1) + 1 open-access lookup (attempt 2)
+    expect(s.ai.calls).toMatchObject({ 'research.plan': 1, 'research.triage': 1, 'research.synthesize': 1 });
+    const dossier = await db.researchDossier.findFirstOrThrow({ where: { jobId: job.id } });
+    expect(dossier.stats).toMatchObject({ resumedSteps: ['plan', 'candidates', 'selection'] });
   });
 
   it('stops mid-reading when the run passes its cost ceiling, without retrying or saving a dossier', async () => {

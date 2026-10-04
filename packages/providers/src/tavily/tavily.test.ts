@@ -106,6 +106,20 @@ describe('TavilyResearchProvider', () => {
     expect(r.meta).toMatchObject({ model: 'extract:advanced', usage: [{ unit: 'CREDITS', quantity: 0 }] });
   });
 
+  it('removes NUL and other control characters from extracted text, titles and snippets (PostgreSQL rejects NUL)', async () => {
+    const f = fakeFetch((path) =>
+      path === '/extract'
+        ? { json: { results: [{ url: 'https://a.org/x.pdf', raw_content: 'Tulip\u0000 prices\u0007 rose\tin\r\n1636' }, { url: 'https://b.org/', raw_content: '\u0000\u0000' }], usage: { credits: 1 } } }
+        : { json: { results: [{ title: 'PDF\u0000 title', url: 'https://a.org/x.pdf', content: 'snip\u0000pet' }], usage: { credits: 1 } } },
+    );
+    const t = new TavilyResearchProvider({ apiKey: 'k', usdPerCredit: 0.008, fetch: f.fn });
+    const r = await t.fetchDocuments(['https://a.org/x.pdf', 'https://b.org/']);
+    expect(r.documents).toEqual([{ url: 'https://a.org/x.pdf', contentType: 'text/markdown', text: 'Tulip prices rose\tin\r\n1636' }]);
+    expect(r.failed).toEqual([{ url: 'https://b.org/', error: 'empty content' }]); // nothing left after cleaning
+    const s = await t.search({ query: 'q' });
+    expect(s.results[0]).toMatchObject({ title: 'PDF title', snippet: 'snippet' });
+  });
+
   it('rejects oversized extract batches before calling the API', async () => {
     const f = fakeFetch(() => ({ json: {} }));
     const t = new TavilyResearchProvider({ apiKey: 'k', usdPerCredit: 0.008, fetch: f.fn });

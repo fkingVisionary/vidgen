@@ -137,3 +137,23 @@ export function relevantExcerpt(text: string, keywords: string[], maxChars: numb
   }
   return { text: out, truncated: true };
 }
+
+// NUL and other C0 control characters (tab, newline and carriage return excepted), plus DEL.
+// PostgreSQL rejects NUL in text and jsonb ("invalid byte sequence for encoding UTF8: 0x00");
+// they occur in text extracted from PDFs and carry no meaning for reading.
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+
+/** Text safe to store and to show a model: control characters removed, nothing else changed. */
+export function cleanText(s: string): string {
+  return s.replace(CONTROL_CHARS, '');
+}
+
+/** cleanText applied to every string inside a JSON-like value (model outputs, before they are stored). */
+export function cleanJson<T>(value: T): T {
+  if (typeof value === 'string') return cleanText(value) as T;
+  if (Array.isArray(value)) return value.map((v) => cleanJson(v)) as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cleanJson(v)])) as T;
+  }
+  return value;
+}

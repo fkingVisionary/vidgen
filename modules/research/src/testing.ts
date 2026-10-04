@@ -5,6 +5,7 @@
  * research content and must never be presented as such.
  */
 import type { SourceType } from '@docengine/core';
+import { ProviderError } from '@docengine/providers';
 import type {
   AIProvider,
   FetchResponse,
@@ -30,6 +31,8 @@ interface CorpusEntry {
   stub?: boolean;
   /** Only returned by an open-access lookup (a quoted-title "pdf" search) for this entry's title. */
   openAccessFor?: string;
+  /** Extracted text contains NUL characters, as text extracted from some PDFs does. */
+  nul?: boolean;
 }
 
 export const FAKE_CORPUS: CorpusEntry[] = [
@@ -67,7 +70,7 @@ export const FAKE_CORPUS: CorpusEntry[] = [
     'A sailor ate a precious bulb thinking it was an onion and was jailed for it.',
   ] },
   { url: 'https://mirror-site.com/tulip-contracts-copy', title: 'Tulip contracts (mirror)', type: 'GENERAL_WEB', author: null, facts: [], copyOf: 'https://www.jstor.org/stable/test-tulip-contracts' },
-  { url: 'https://www.nber.org/papers/test-garber', title: 'Famous first bubbles (test)', type: 'ACADEMIC', author: 'Test Economist C', facts: [
+  { url: 'https://www.nber.org/papers/test-garber', title: 'Famous first bubbles (test)', type: 'ACADEMIC', author: 'Test Economist C', nul: true, facts: [
     'High prices for rare bulbs were consistent with the economics of new flower varieties.',
     'Prices of common bulbs rose by many times in January 1637 before falling sharply.',
   ] },
@@ -99,7 +102,7 @@ export const FAKE_CORPUS: CorpusEntry[] = [
 function documentText(e: CorpusEntry): string {
   const src = e.copyOf ? FAKE_CORPUS.find((x) => x.url === e.copyOf)! : e;
   if (e.stub) return 'Abstract only. Log in to read the full article.';
-  const filler = Array.from({ length: 40 }, (_, i) => `Paragraph ${i} of ${src.title} discusses archival detail number ${i * 7 + src.url.length}.`).join(' ');
+  const filler = Array.from({ length: 40 }, (_, i) => `Paragraph ${i} of ${src.title} discusses archival detail number ${i * 7 + src.url.length}.`).join(e.nul ? '\u0000 ' : ' ');
   return `# ${src.title}\n\n${src.facts.join('\n\n')}\n\n${filler}`;
 }
 
@@ -114,6 +117,8 @@ export class FakeResearchProvider implements ResearchProvider {
   searches = 0;
   queries: string[] = [];
   fetched: string[] = [];
+  /** Fail the next fetchDocuments call with a transient (retryable) error. */
+  failNextFetch = false;
 
   /** Topic searches return the whole corpus; a quoted-title "pdf" search returns that title's open-access candidates. */
   async search(q: ResearchQuery): Promise<SearchResponse> {
@@ -130,6 +135,10 @@ export class FakeResearchProvider implements ResearchProvider {
   }
 
   async fetchDocuments(urls: string[]): Promise<FetchResponse> {
+    if (this.failNextFetch) {
+      this.failNextFetch = false;
+      throw new ProviderError('fake-search', 'temporary outage (test)', true);
+    }
     this.fetched.push(...urls);
     const documents: FetchResponse['documents'] = [];
     const failed: FetchResponse['failed'] = [];
@@ -182,6 +191,8 @@ export class FakeResearchAI implements AIProvider {
     ],
   };
   calls: Record<string, number> = {};
+  /** Fail the next call for this task with a transient error (the job is retried). */
+  failNextTask: string | null = null;
   /** User prompts of research.read calls, for asserting what the reader was told. */
   readPrompts: string[] = [];
   /** Insert one fabricated quote in this source's reading, to prove quote verification rejects it. */
@@ -193,6 +204,10 @@ export class FakeResearchAI implements AIProvider {
 
   async generateObject<T>(req: ObjectGenerationRequest<T>): Promise<ObjectGenerationResult<T>> {
     this.calls[req.task] = (this.calls[req.task] ?? 0) + 1;
+    if (this.failNextTask === req.task) {
+      this.failNextTask = null;
+      throw new ProviderError('fake-ai', 'overloaded (test)', true);
+    }
     const user = req.messages.map((m) => m.content).join('\n');
     const object = this.respond(req.task, user);
     return { object: req.schema.parse(object), meta: { provider: 'fake-ai', model: 'fake-model', mock: false, usage: usage(user.length / 4, 2_000) } };
