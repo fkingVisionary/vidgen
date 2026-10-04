@@ -104,6 +104,52 @@ describe('AnthropicAIProvider', () => {
     expect(format.schema.properties).toHaveProperty('verdict');
   });
 
+  it('falls back to schema-in-instructions when the API rejects the schema as too complex, with the same validation', async () => {
+    const tooComplex = new Anthropic.BadRequestError(
+      400,
+      { type: 'error', error: { type: 'invalid_request_error', message: 'The compiled grammar is too large, which would cause performance issues.' } },
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools."}}',
+      new Headers(),
+    );
+    const replies: (Msg | Error)[] = [tooComplex, message({ text: 'Here it is:\n```json\n{"verdict":"MYTH","note":"Mackay, 1841"}\n```' })];
+    const calls: Record<string, unknown>[] = [];
+    const client: AnthropicClientLike = {
+      beta: {
+        messages: {
+          stream(params) {
+            calls.push(params as Record<string, unknown>);
+            const next = replies.shift()!;
+            return { finalMessage: async () => (next instanceof Error ? Promise.reject(next) : next) };
+          },
+        },
+      },
+    };
+    const schema = z.object({ verdict: z.enum(['MYTH', 'ESTABLISHED']), note: z.string() });
+    const ai = new AnthropicAIProvider({ model: 'claude-opus-5-5', client });
+    const r = await ai.generateObject({ task: 'research.synthesize', schemaName: 'V', schema, system: 'You are an editor.', messages: [{ role: 'user', content: 'go' }], effort: 'high' });
+    expect(r.object).toEqual({ verdict: 'MYTH', note: 'Mackay, 1841' });
+    expect(calls).toHaveLength(2);
+    expect((calls[0]!.output_config as { format?: unknown }).format).toBeDefined();
+    expect(calls[1]!.output_config).toEqual({ effort: 'high' }); // no format: unconstrained, same effort
+    const system = (calls[1]!.system as { text: string }[])[0]!.text;
+    expect(system).toMatch(/^You are an editor\.\n\nOutput format: reply with one JSON object/);
+    expect(system).toContain('"verdict"');
+    expect(r.meta.costNote).toMatch(/JSON schema given as instructions/);
+
+    // The fallback output is held to the same schema.
+    const replies2: (Msg | Error)[] = [tooComplex, message({ text: '{"verdict":"MAYBE","note":"x"}' })];
+    const client2: AnthropicClientLike = {
+      beta: { messages: { stream: () => { const next = replies2.shift()!; return { finalMessage: async () => (next instanceof Error ? Promise.reject(next) : next) }; } } },
+    };
+    await expect(new AnthropicAIProvider({ model: 'claude-opus-5-5', client: client2 }).generateObject({ task: 't', schemaName: 'V', schema, messages: [] })).rejects.toThrow(/did not match V/);
+
+    // Other 400s are not retried this way.
+    const other = new Anthropic.BadRequestError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'bad' } }, 'bad', new Headers());
+    const f = fakeClient(other);
+    await expect(new AnthropicAIProvider({ model: 'claude-opus-5-5', client: f.client }).generateObject({ task: 't', schemaName: 'V', schema, messages: [] })).rejects.toMatchObject({ retryable: false });
+    expect(f.calls).toHaveLength(1);
+  });
+
   it('keeps billed usage on errors when output is invalid JSON or fails the schema', async () => {
     const schema = z.object({ n: z.number() });
     const bad = new AnthropicAIProvider({ model: 'claude-opus-5-5', client: fakeClient(message({ text: '{"n":"seven"}' })).client });

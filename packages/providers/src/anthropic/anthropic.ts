@@ -16,6 +16,8 @@ import { ProviderError, type CallMeta, type ProviderInfo } from '../types.ts';
  * - Streaming for every request (long syntheses would hit HTTP timeouts otherwise).
  * - Structured output through `output_config.format` (JSON Schema from zod),
  *   validated with zod on our side so usage is still recorded if validation fails.
+ *   If the API rejects a schema as too complex to compile, the same request is
+ *   repeated with the schema stated in the system prompt; same validation.
  * - Thinking is adaptive (always on for Claude Opus 5.5); `effort` controls depth.
  * - Server-side refusal fallbacks (`fallbacks: "default"`): if a safety
  *   classifier declines, Anthropic re-runs the request on its recommended
@@ -85,14 +87,27 @@ export class AnthropicAIProvider implements AIProvider {
   async generateObject<T>(req: ObjectGenerationRequest<T>): Promise<ObjectGenerationResult<T>> {
     // JSON Schema derived from the zod schema (the SDK adapts it to what structured outputs support).
     const { schema } = betaZodOutputFormat(req.schema);
-    const msg = await this.run(req, { type: 'json_schema', schema });
+    let msg: Anthropic.Beta.Messages.BetaMessage;
+    let constrained = true;
+    try {
+      msg = await this.run(req, { type: 'json_schema', schema });
+    } catch (err) {
+      if (!isSchemaTooComplex(err)) throw err;
+      // Structured outputs compile the schema into a grammar, and the API refuses grammars over an
+      // internal size limit it does not publish (the request is rejected before any generation, so
+      // nothing is billed). Ask for the same JSON with the schema stated in the instructions; the
+      // answer is validated against the same zod schema below.
+      constrained = false;
+      msg = await this.run(withSchemaInstructions(req, schema), undefined);
+    }
     const meta = this.meta(msg);
-    const text = textOf(msg);
+    if (!constrained) meta.costNote = `${meta.costNote}; JSON schema given as instructions (too complex for constrained decoding)`;
+    const text = constrained ? textOf(msg) : jsonPart(textOf(msg));
     let json: unknown;
     try {
       json = JSON.parse(text);
     } catch {
-      throw new ProviderError('anthropic', `${req.task}: structured output was not valid JSON`, true, { meta });
+      throw new ProviderError('anthropic', `${req.task}: ${constrained ? 'structured output' : 'output'} was not valid JSON`, true, { meta });
     }
     const parsed = req.schema.safeParse(json);
     if (!parsed.success) {
@@ -161,6 +176,27 @@ export class AnthropicAIProvider implements AIProvider {
       costNote: `Estimated from token usage × list price for ${msg.model}${fallback ? ` (served by refusal fallback; requested ${this.opts.model})` : ''}`,
     };
   }
+}
+
+const SCHEMA_TOO_COMPLEX = /compiled grammar is too large|schema is too complex/i;
+
+function isSchemaTooComplex(err: unknown): boolean {
+  return err instanceof ProviderError && !err.retryable && SCHEMA_TOO_COMPLEX.test(err.message);
+}
+
+function withSchemaInstructions(req: TextGenerationRequest, schema: Record<string, unknown>): TextGenerationRequest {
+  const instructions =
+    'Output format: reply with one JSON object and nothing else (no prose, no code fences). It must conform to this JSON Schema; ' +
+    'a description of the form {enum: [...]} lists the only allowed values for that field.\n<json_schema>\n' +
+    `${JSON.stringify(schema)}\n</json_schema>`;
+  return { ...req, system: req.system ? `${req.system}\n\n${instructions}` : instructions };
+}
+
+/** The JSON object in an unconstrained reply (tolerates code fences or a stray sentence around it). */
+function jsonPart(text: string): string {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  return start >= 0 && end > start ? text.slice(start, end + 1) : text;
 }
 
 function textOf(msg: Anthropic.Beta.Messages.BetaMessage): string {
