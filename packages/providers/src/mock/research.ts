@@ -1,4 +1,4 @@
-import type { FetchedDocument, ResearchProvider, ResearchQuery, SearchResponse } from '../research.ts';
+import type { FetchResponse, ResearchProvider, ResearchQuery, SearchResponse } from '../research.ts';
 import { ProviderError } from '../types.ts';
 import { MOCK_FAIL_MARKER, MOCK_LABEL, mockInfo, mockMeta } from './common.ts';
 
@@ -8,6 +8,7 @@ import { MOCK_FAIL_MARKER, MOCK_LABEL, mockInfo, mockMeta } from './common.ts';
  */
 export class MockResearchProvider implements ResearchProvider {
   readonly info = mockInfo('RESEARCH');
+  readonly maxBatchSize = 20;
 
   async search(query: ResearchQuery): Promise<SearchResponse> {
     if (query.query.includes(MOCK_FAIL_MARKER)) throw new ProviderError('mock', 'Simulated search failure', true);
@@ -24,12 +25,16 @@ export class MockResearchProvider implements ResearchProvider {
     };
   }
 
-  async fetchDocument(url: string): Promise<FetchedDocument> {
+  async fetchDocuments(urls: string[]): Promise<FetchResponse> {
+    if (urls.length > this.maxBatchSize) throw new ProviderError('mock', `At most ${this.maxBatchSize} URLs per call`, false);
     return {
-      url,
-      title: `[${MOCK_LABEL}] Document`,
-      contentType: 'text/plain',
-      text: `${MOCK_LABEL} document for ${url}. No content was fetched.`,
+      documents: urls.map((url) => ({
+        url,
+        title: `[${MOCK_LABEL}] Document`,
+        contentType: 'text/plain',
+        text: `${MOCK_LABEL} document for ${url}. No content was fetched.`,
+      })),
+      failed: [],
       meta: mockMeta([{ unit: 'REQUESTS', quantity: 1 }]),
     };
   }

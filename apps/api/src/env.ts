@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { ProviderSettings } from '@docengine/providers';
 import { z } from 'zod';
 
 /** Treat empty strings (e.g. `KEY=` in .env) as unset. */
@@ -35,6 +36,15 @@ export const EnvSchema = z
     STORAGE_PROVIDER: ProviderName,
     RENDER_PROVIDER: ProviderName,
     PUBLISHING_PROVIDER: ProviderName,
+
+    // Anthropic (AI_PROVIDER=anthropic)
+    ANTHROPIC_API_KEY: opt(z.string().optional()),
+    AI_MODEL: opt(z.string().default('claude-opus-5-5')),
+    // Tavily (RESEARCH_PROVIDER=tavily)
+    TAVILY_API_KEY: opt(z.string().optional()),
+    TAVILY_ACCESS_MODE: opt(z.enum(['api-key', 'keyless']).default('api-key')),
+    /** $/credit for cost estimates: pay-as-you-go 0.008; monthly plans 0.005–0.0075. */
+    TAVILY_USD_PER_CREDIT: opt(z.coerce.number().min(0).max(1).default(0.008)),
 
     /** Directory of the built dashboard. Defaults to apps/web/dist. */
     WEB_DIST_DIR: opt(z.string().optional()),
@@ -78,6 +88,18 @@ export function loadEnv(): Env {
     }
   }
   return parseEnv(process.env);
+}
+
+/** Typed provider configuration (credentials stay server-side). */
+export function providerSettings(env: Env): ProviderSettings {
+  return {
+    anthropic: { model: env.AI_MODEL, ...(env.ANTHROPIC_API_KEY ? { apiKey: env.ANTHROPIC_API_KEY } : {}) },
+    tavily: {
+      keyless: env.TAVILY_ACCESS_MODE === 'keyless',
+      usdPerCredit: env.TAVILY_USD_PER_CREDIT,
+      ...(env.TAVILY_API_KEY && env.TAVILY_ACCESS_MODE !== 'keyless' ? { apiKey: env.TAVILY_API_KEY } : {}),
+    },
+  };
 }
 
 export function providerSelection(env: Env) {

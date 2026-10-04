@@ -113,10 +113,28 @@ export const SOURCE_TYPES = [
   'ACADEMIC',
   'BOOK',
   'ARCHIVE',
-  'REPUTABLE_SECONDARY',
-  'GENERAL_REFERENCE',
+  'REPUTABLE_SECONDARY', // quality journalism, museums' popular pages, established publishers
+  'GENERAL_REFERENCE', // encyclopedias and reference works (Wikipedia, Britannica)
+  'GENERAL_WEB', // blogs, SEO/history-content sites, forums — lowest tier
 ] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
+
+/** Source types strong enough to anchor key claims on their own. */
+export const HIGH_TIER_SOURCE_TYPES: readonly SourceType[] = ['PRIMARY', 'ACADEMIC', 'BOOK', 'ARCHIVE'];
+
+/** Lower number = stronger source. Used to rank and to measure diversity. */
+export const SOURCE_TIER: Record<SourceType, 1 | 2 | 3 | 4> = {
+  PRIMARY: 1,
+  ACADEMIC: 1,
+  BOOK: 1,
+  ARCHIVE: 1,
+  REPUTABLE_SECONDARY: 2,
+  GENERAL_REFERENCE: 3,
+  GENERAL_WEB: 4,
+};
+
+export const RETRIEVAL_STATUSES = ['PENDING', 'RETRIEVED', 'FAILED'] as const;
+export type RetrievalStatus = (typeof RETRIEVAL_STATUSES)[number];
 
 /**
  * Where a claim stands against the evidence. This is how the documentary
@@ -148,6 +166,14 @@ export type ClaimType = (typeof CLAIM_TYPES)[number];
 /** How a source relates to a claim. A myth is typically SUPPORTED by a popular source and CONTRADICTED by an archival one. */
 export const CITATION_STANCES = ['SUPPORTS', 'CONTRADICTS', 'CONTEXT'] as const;
 export type CitationStance = (typeof CITATION_STANCES)[number];
+
+/** KEY claims carry the documentary; they face the strictest evidence checks. */
+export const CLAIM_IMPORTANCES = ['KEY', 'SUPPORTING', 'BACKGROUND'] as const;
+export type ClaimImportance = (typeof CLAIM_IMPORTANCES)[number];
+
+/** FULL_TEXT: the quote comes from the retrieved document. SNIPPET: search-engine snippet only. */
+export const CITATION_BASES = ['FULL_TEXT', 'SNIPPET'] as const;
+export type CitationBasis = (typeof CITATION_BASES)[number];
 
 // ---------------------------------------------------------------------------
 // Visuals, infographics, media
@@ -280,6 +306,10 @@ export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
 export const PROVIDER_CALL_STATUSES = ['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED'] as const;
 export type ProviderCallStatus = (typeof PROVIDER_CALL_STATUSES)[number];
+
+/** Where a recorded cost comes from. Costs are never invented: no rate → UNPRICED. */
+export const COST_BASES = ['VENDOR_REPORTED', 'ESTIMATED', 'UNPRICED', 'MOCK'] as const;
+export type CostBasis = (typeof COST_BASES)[number];
 
 export const LANGUAGE_VERSION_STATUSES = [
   'PLANNED',

@@ -13,7 +13,8 @@
 export const USAGE_UNITS = [
   'INPUT_TOKENS',
   'OUTPUT_TOKENS',
-  'CACHED_INPUT_TOKENS',
+  'CACHED_INPUT_TOKENS', // prompt-cache reads
+  'CACHE_WRITE_TOKENS', // prompt-cache writes
   'CHARACTERS',
   'AUDIO_SECONDS',
   'VIDEO_SECONDS',
@@ -34,6 +35,8 @@ export interface Rate {
   model?: string;
   unit: UsageUnit;
   usdPerUnit: number;
+  /** Where the price comes from and when it was checked, e.g. "docs.tavily.com/documentation/api-credits (2026-10-04)". */
+  source?: string;
 }
 
 export interface CostEstimate {

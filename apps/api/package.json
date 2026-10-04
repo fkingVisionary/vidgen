@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "catalog:",
     "@docengine/core": "workspace:*",
     "@docengine/database": "workspace:*",
     "@docengine/pipeline": "workspace:*",

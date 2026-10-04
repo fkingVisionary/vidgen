@@ -170,13 +170,29 @@ export function runAIContract(name: string, factory: Factory<AIProvider>) {
 
 export function runResearchContract(name: string, factory: Factory<ResearchProvider>) {
   describe(`ResearchProvider contract: ${name}`, () => {
-    it('returns search results with URLs', async () => {
+    it('returns search results with absolute URLs, within maxResults', async () => {
       const r = await factory();
       expectInfo(r.info, 'RESEARCH');
-      const res = await r.search({ query: 'Dutch tulip market 1637 notarial records', maxResults: 2 });
+      const res = await r.search({ query: 'Dutch tulip market 1637 notarial records', maxResults: 3, depth: 'basic' });
       expectMeta(res.meta, r.info);
-      expect(res.results.length).toBeLessThanOrEqual(2);
-      for (const hit of res.results) expect(() => new URL(hit.url)).not.toThrow();
+      expect(res.results.length).toBeGreaterThan(0);
+      expect(res.results.length).toBeLessThanOrEqual(3);
+      for (const hit of res.results) {
+        expect(['http:', 'https:']).toContain(new URL(hit.url).protocol);
+        expect(hit.title).toMatch(/\S/);
+      }
+    });
+
+    it('accounts for every requested URL as retrieved or failed', async () => {
+      const r = await factory();
+      expect(r.maxBatchSize).toBeGreaterThan(0);
+      const hits = (await r.search({ query: 'tulip mania historiography', maxResults: 2, depth: 'basic' })).results;
+      const urls = hits.map((h) => h.url);
+      const res = await r.fetchDocuments(urls);
+      expectMeta(res.meta, r.info);
+      const seen = [...res.documents.map((d) => d.url), ...res.failed.map((f) => f.url)];
+      expect(seen.sort()).toEqual([...urls].sort());
+      for (const d of res.documents) expect(d.text.length).toBeGreaterThan(0);
     });
   });
 }

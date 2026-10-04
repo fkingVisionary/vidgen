@@ -7,6 +7,7 @@ packages:
 # as "catalog:". @prisma/client MUST match the prisma CLI that generated the
 # client, and apps/api must declare the runtime packages its bundle imports.
 catalog:
+  '@anthropic-ai/sdk': 0.131.0
   '@prisma/adapter-pg': 7.10.0
   '@prisma/client': 7.10.0
   prisma: 7.10.0

@@ -106,6 +106,31 @@ enum SourceType {
   ARCHIVE
   REPUTABLE_SECONDARY
   GENERAL_REFERENCE
+  GENERAL_WEB
+}
+
+enum RetrievalStatus {
+  PENDING
+  RETRIEVED
+  FAILED
+}
+
+enum ClaimImportance {
+  KEY
+  SUPPORTING
+  BACKGROUND
+}
+
+enum CitationBasis {
+  FULL_TEXT
+  SNIPPET
+}
+
+enum CostBasis {
+  VENDOR_REPORTED
+  ESTIMATED
+  UNPRICED
+  MOCK
 }
 
 enum ClaimVerdict {
@@ -353,10 +378,11 @@ model Job {
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  languageVersion LanguageVersion? @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion?  @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
   providerCalls   ProviderCall[]
   events          ProjectEvent[]
+  dossiers        ResearchDossier[]
 
   @@index([status, runAfter])
   @@index([projectId, type, status])
@@ -426,6 +452,8 @@ model ProviderCall {
   status            ProviderCallStatus @default(PENDING)
   /// Vendor-side id for async work (e.g. a video generation).
   providerJobId     String?            @map("provider_job_id")
+  /// Vendor request id (support tickets, debugging).
+  providerRequestId String?            @map("provider_request_id")
   /// Request summary (prompt, parameters). Never contains credentials.
   request           Json?
   response          Json?
@@ -434,6 +462,9 @@ model ProviderCall {
   usage             Json               @default("[]")
   estimatedCostUsd  Decimal?           @map("estimated_cost_usd") @db.Decimal(14, 6)
   actualCostUsd     Decimal?           @map("actual_cost_usd") @db.Decimal(14, 6)
+  /// Where the cost figure comes from: the vendor, our rate card (estimate), nowhere (unpriced) or a mock.
+  costBasis         CostBasis?         @map("cost_basis")
+  costNote          String?            @map("cost_note")
   outputAssetId     String?            @map("output_asset_id") @db.Uuid
   startedAt         DateTime           @default(now()) @map("started_at") @db.Timestamptz(3)
   completedAt       DateTime?          @map("completed_at") @db.Timestamptz(3)
@@ -489,43 +520,89 @@ model MediaAsset {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Source {
-  id               String     @id @default(uuid(7)) @db.Uuid
-  projectId        String     @map("project_id") @db.Uuid
-  sourceType       SourceType @map("source_type")
+  id               String           @id @default(uuid(7)) @db.Uuid
+  projectId        String           @map("project_id") @db.Uuid
+  sourceType       SourceType       @map("source_type")
   title            String
   author           String?
   publisher        String?
   /// Free-form because historical dates are messy ("1637", "c. 1841").
-  publishedDate    String?    @map("published_date")
+  publishedDate    String?          @map("published_date")
   url              String?
+  /// Canonical form of `url` used for de-duplication (no fragment, tracking params, trailing slash; lower-case host).
+  normalizedUrl    String?          @map("normalized_url")
+  domain           String?
   /// Full formatted citation.
   citation         String
-  reliabilityNotes String?    @map("reliability_notes")
+  reliability      ConfidenceLevel?
+  reliabilityNotes String?          @map("reliability_notes")
   notes            String?
-  accessedAt       DateTime?  @map("accessed_at") @db.Timestamptz(3)
-  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  /// Whether the full text was retrieved. Only retrieved sources can back claims.
+  retrievalStatus  RetrievalStatus  @default(PENDING) @map("retrieval_status")
+  retrievalError   String?          @map("retrieval_error")
+  /// Search-engine snippet: used for triage only, never as evidence.
+  searchSnippet    String?          @map("search_snippet")
+  searchScore      Float?           @map("search_score")
+  /// Research questions / queries that surfaced this source.
+  discoveredBy     Json             @default("[]") @map("discovered_by")
+  /// Set when this source's content duplicates another (mirror, syndicated copy).
+  duplicateOfId    String?          @map("duplicate_of_id") @db.Uuid
+  accessedAt       DateTime?        @map("accessed_at") @db.Timestamptz(3)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  citations ClaimCitation[]
+  project     Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  citations   ClaimCitation[]
+  document    SourceDocument?
+  duplicateOf Source?         @relation("SourceDuplicates", fields: [duplicateOfId], references: [id], onDelete: SetNull)
+  duplicates  Source[]        @relation("SourceDuplicates")
 
+  @@unique([projectId, normalizedUrl])
   @@index([projectId])
   @@map("sources")
 }
 
+/// Retrieved full text of a source, plus the cached per-source evidence analysis.
+model SourceDocument {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  sourceId        String    @unique @map("source_id") @db.Uuid
+  provider        String
+  contentFormat   String    @map("content_format")
+  text            String
+  chars           Int
+  sha256          String
+  fetchedAt       DateTime  @default(now()) @map("fetched_at") @db.Timestamptz(3)
+  /// Evidence notes and source assessment produced by the reading pass (cached across research runs).
+  analysis        Json?
+  analysisVersion String?   @map("analysis_version")
+  analyzedAt      DateTime? @map("analyzed_at") @db.Timestamptz(3)
+
+  source Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([sha256])
+  @@map("source_documents")
+}
+
 /// A versioned research dossier (human approval gate #1 reviews one version).
 model ResearchDossier {
-  id        String         @id @default(uuid(7)) @db.Uuid
-  projectId String         @map("project_id") @db.Uuid
-  version   Int
-  status    ArtifactStatus @default(DRAFT)
-  summary   String?
-  /// Timeline, open questions, myths-vs-evidence overview, dates needing verification.
-  content   Json           @default("{}")
-  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id            String         @id @default(uuid(7)) @db.Uuid
+  projectId     String         @map("project_id") @db.Uuid
+  version       Int
+  status        ArtifactStatus @default(DRAFT)
+  summary       String?
+  /// ResearchDossierContent contract: questions, timeline, prices, myths, interpretations, open questions…
+  content       Json           @default("{}")
+  /// QualityReport contract: automated checks run before human review.
+  qualityReport Json?          @map("quality_report")
+  qualityPassed Boolean?       @map("quality_passed")
+  /// Model(s) and prompt version that produced it, search/retrieval statistics.
+  stats         Json           @default("{}")
+  jobId         String?        @map("job_id") @db.Uuid
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   project   Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  job       Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
   claims    ResearchClaim[]
   stories   StoryArchitecture[]
   approvals Approval[]
@@ -539,6 +616,11 @@ model ResearchDossier {
 model ResearchClaim {
   id                String          @id @default(uuid(7)) @db.Uuid
   dossierId         String          @map("dossier_id") @db.Uuid
+  /// Stable key within the dossier ("C014"), referenced by timeline/myth/price sections.
+  claimKey          String          @map("claim_key")
+  /// Research question / theme the claim answers (chronology, prices, …).
+  category          String?
+  importance        ClaimImportance @default(SUPPORTING)
   statement         String
   claimType         ClaimType       @map("claim_type")
   verdict           ClaimVerdict    @default(UNVERIFIED)
@@ -554,20 +636,27 @@ model ResearchClaim {
   dossier   ResearchDossier @relation(fields: [dossierId], references: [id], onDelete: Cascade)
   citations ClaimCitation[]
 
+  @@unique([dossierId, claimKey])
   @@index([dossierId])
   @@map("research_claims")
 }
 
 /// Claim ↔ source link. A claim can be supported by one source and contradicted by another.
 model ClaimCitation {
-  id       String         @id @default(uuid(7)) @db.Uuid
-  claimId  String         @map("claim_id") @db.Uuid
-  sourceId String         @map("source_id") @db.Uuid
-  stance   CitationStance @default(SUPPORTS)
+  id            String         @id @default(uuid(7)) @db.Uuid
+  claimId       String         @map("claim_id") @db.Uuid
+  sourceId      String         @map("source_id") @db.Uuid
+  stance        CitationStance @default(SUPPORTS)
+  /// FULL_TEXT: quote taken from the retrieved document. SNIPPET: only a search snippet (never sufficient for key claims).
+  basis         CitationBasis  @default(FULL_TEXT)
   /// Page, folio, timestamp or anchor.
-  locator  String?
-  quote    String?
-  notes    String?
+  locator       String?
+  quote         String?
+  /// True when `quote` was found verbatim in the retrieved document text.
+  quoteVerified Boolean        @default(false) @map("quote_verified")
+  /// Evidence note this citation came from (reading pass), for traceability.
+  evidenceKey   String?        @map("evidence_key")
+  notes         String?
 
   claim  ResearchClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
   source Source        @relation(fields: [sourceId], references: [id], onDelete: Cascade)

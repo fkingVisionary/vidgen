@@ -6,14 +6,21 @@ export interface ChatMessage {
   content: string;
 }
 
+/** How hard the model should think. Higher = better on hard tasks, slower and more expensive. */
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface TextGenerationRequest {
   /** Logical task name for logs, cost attribution and mock fixtures, e.g. "research.dossier". */
   task: string;
   system?: string;
+  /** The system prompt is identical across many calls (e.g. per-source reading): let the provider cache it. */
+  cacheSystemPrompt?: boolean;
   messages: ChatMessage[];
   /** Overrides the provider's default model. */
   model?: string;
   maxTokens?: number;
+  effort?: ReasoningEffort;
+  signal?: AbortSignal;
 }
 
 export interface TextGenerationResult {

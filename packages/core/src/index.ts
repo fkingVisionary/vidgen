@@ -7,4 +7,5 @@ export * from './cost.ts';
 export * from './contracts/api.ts';
 export * from './contracts/creative.ts';
 export * from './contracts/infographic.ts';
+export * from './contracts/research.ts';
 export * from './views.ts';

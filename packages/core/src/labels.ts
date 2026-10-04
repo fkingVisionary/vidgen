@@ -1,4 +1,4 @@
-import type { ApprovalGate, JobType, ProjectStatus, Stage, StageState } from './enums.ts';
+import type { ApprovalGate, ClaimVerdict, JobType, ProjectStatus, SourceType, Stage, StageState } from './enums.ts';
 
 /** Human-readable labels for the dashboard. Kept out of the enums so copy can change freely. */
 
@@ -65,4 +65,22 @@ export const GATE_LABELS: Record<ApprovalGate, string> = {
   STORYBOARD: 'Storyboard',
   VISUAL_ASSETS: 'Generated visual assets',
   FINAL_VIDEO: 'Final video',
+};
+
+export const SOURCE_TYPE_LABELS: Record<SourceType, string> = {
+  PRIMARY: 'Primary source',
+  ACADEMIC: 'Academic / scholarly',
+  BOOK: 'Book / historical work',
+  ARCHIVE: 'Archive / museum / university',
+  REPUTABLE_SECONDARY: 'Reputable secondary',
+  GENERAL_REFERENCE: 'General reference',
+  GENERAL_WEB: 'General web',
+};
+
+export const CLAIM_VERDICT_LABELS: Record<ClaimVerdict, string> = {
+  ESTABLISHED: 'Established',
+  PROBABLE: 'Probable',
+  DISPUTED: 'Disputed',
+  UNVERIFIED: 'Unverified',
+  MYTH: 'Myth',
 };

@@ -29,6 +29,10 @@ const PAIRS: Record<string, readonly string[]> = {
   ProviderKind: core.PROVIDER_KINDS,
   ProviderCallStatus: core.PROVIDER_CALL_STATUSES,
   LanguageVersionStatus: core.LANGUAGE_VERSION_STATUSES,
+  RetrievalStatus: core.RETRIEVAL_STATUSES,
+  ClaimImportance: core.CLAIM_IMPORTANCES,
+  CitationBasis: core.CITATION_BASES,
+  CostBasis: core.COST_BASES,
 };
 
 describe('Prisma enums ↔ core enums', () => {

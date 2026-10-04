@@ -1,5 +1,6 @@
 import type { ProviderKind, ProviderStatusView } from '@docengine/core';
 import type { AIProvider } from './ai.ts';
+import { AnthropicAIProvider } from './anthropic/anthropic.ts';
 import { MockAIProvider } from './mock/ai.ts';
 import { MockPublishingProvider } from './mock/publishing.ts';
 import { MockRenderProvider } from './mock/render.ts';
@@ -7,10 +8,12 @@ import { MockResearchProvider } from './mock/research.ts';
 import { MockStorageProvider } from './mock/storage.ts';
 import { MockVideoProvider } from './mock/video.ts';
 import { MockVoiceProvider } from './mock/voice.ts';
+import { TavilyResearchProvider } from './tavily/tavily.ts';
 import type { PublishingProvider } from './publishing.ts';
 import type { RenderProvider } from './render.ts';
 import type { ResearchProvider } from './research.ts';
 import type { StorageProvider } from './storage.ts';
+import type { ProviderSettings } from './types.ts';
 import type { VideoProvider } from './video.ts';
 import type { VoiceProvider } from './voice.ts';
 
@@ -28,8 +31,8 @@ export type ProviderSlot = keyof ProviderSet;
 export type ProviderSelection = Record<ProviderSlot, string>;
 
 export interface BaseContext {
-  /** Server-side environment, for credentials. Never sent to the browser. */
-  env: Readonly<Record<string, string | undefined>>;
+  /** Validated provider configuration, including credentials. Never sent to the browser. */
+  settings: ProviderSettings;
   /** Structured-output fixtures for the MOCK LLM, keyed by task. */
   aiFixtures: Record<string, unknown>;
 }
@@ -51,8 +54,20 @@ const STORAGE_FACTORIES: Record<string, (ctx: BaseContext) => StorageProvider> =
 };
 
 const FACTORIES: { [S in OtherSlot]: Record<string, (ctx: FactoryContext) => ProviderSet[S]> } = {
-  ai: { mock: (ctx) => new MockAIProvider(ctx.aiFixtures) },
-  research: { mock: () => new MockResearchProvider() },
+  ai: {
+    mock: (ctx) => new MockAIProvider(ctx.aiFixtures),
+    anthropic: ({ settings }) => {
+      if (!settings.anthropic) throw new ProviderConfigError('AI_PROVIDER=anthropic needs Anthropic settings (ANTHROPIC_API_KEY, AI_MODEL)');
+      return new AnthropicAIProvider(settings.anthropic);
+    },
+  },
+  research: {
+    mock: () => new MockResearchProvider(),
+    tavily: ({ settings }) => {
+      if (!settings.tavily) throw new ProviderConfigError('RESEARCH_PROVIDER=tavily needs Tavily settings (TAVILY_API_KEY or TAVILY_ACCESS_MODE=keyless)');
+      return new TavilyResearchProvider(settings.tavily);
+    },
+  },
   voice: { mock: () => new MockVoiceProvider() },
   video: { mock: () => new MockVideoProvider() },
   render: { mock: (ctx) => new MockRenderProvider(ctx.storage) },
@@ -61,8 +76,8 @@ const FACTORIES: { [S in OtherSlot]: Record<string, (ctx: FactoryContext) => Pro
 
 /** Known future implementations, so configuring one gives a clear message instead of "unknown". */
 export const PLANNED_PROVIDERS: Record<ProviderSlot, readonly string[]> = {
-  ai: ['anthropic'],
-  research: ['anthropic-web-search', 'exa', 'tavily'],
+  ai: [],
+  research: ['exa', 'anthropic-web-search'],
   voice: ['elevenlabs'],
   video: ['higgsfield'],
   storage: ['s3'],
@@ -100,9 +115,9 @@ function pick<F>(slot: ProviderSlot, table: Record<string, F>, name: string): F 
 
 export function createProviders(
   selection: ProviderSelection,
-  opts: { env?: BaseContext['env']; aiFixtures?: BaseContext['aiFixtures'] } = {},
+  opts: { settings?: ProviderSettings; aiFixtures?: BaseContext['aiFixtures'] } = {},
 ): ProviderSet {
-  const base: BaseContext = { env: opts.env ?? {}, aiFixtures: opts.aiFixtures ?? {} };
+  const base: BaseContext = { settings: opts.settings ?? {}, aiFixtures: opts.aiFixtures ?? {} };
   const storage = pick('storage', STORAGE_FACTORIES, selection.storage)(base);
   const ctx: FactoryContext = { ...base, storage };
   const build = <S extends OtherSlot>(slot: S): ProviderSet[S] => pick(slot, FACTORIES[slot], selection[slot])(ctx);

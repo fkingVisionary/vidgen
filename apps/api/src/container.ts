@@ -2,7 +2,7 @@ import { createDatabase, type Database } from '@docengine/database';
 import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers, type JobQueue } from '@docengine/pipeline';
 import { createProviders, describeProviders, type ProviderSet } from '@docengine/providers';
 import type { Logger } from 'pino';
-import { providerSelection, type Env } from './env.ts';
+import { providerSelection, providerSettings, type Env } from './env.ts';
 
 /**
  * Composition root: the only place where concrete implementations are chosen
@@ -22,7 +22,7 @@ export interface AppContainer {
 export function createContainer(env: Env, logger: Logger, overrides: { db?: Database } = {}): AppContainer {
   const db = overrides.db ?? createDatabase({ connectionString: env.DATABASE_URL, maxConnections: env.DATABASE_POOL_SIZE });
   // Fails fast with a clear message if a provider is configured that is not implemented.
-  const providers = createProviders(providerSelection(env), { env: process.env });
+  const providers = createProviders(providerSelection(env), { settings: providerSettings(env) });
   const queue: JobQueue = new PostgresJobQueue(db);
   const projects = new ProjectService({
     db,

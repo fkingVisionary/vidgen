@@ -16,3 +16,5 @@ export { MockStorageProvider } from './mock/storage.ts';
 export { MockRenderProvider } from './mock/render.ts';
 export { MockPublishingProvider } from './mock/publishing.ts';
 export { encodeWav, parseWav } from './mock/wav.ts';
+export { TavilyResearchProvider, type TavilyOptions } from './tavily/tavily.ts';
+export { AnthropicAIProvider, ANTHROPIC_RATES, type AnthropicClientLike, type AnthropicOptions } from './anthropic/anthropic.ts';
