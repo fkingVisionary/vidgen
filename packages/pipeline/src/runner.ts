@@ -65,6 +65,13 @@ export class JobRunner {
       ...defined,
       logger: (opts.logger ?? silentLogger).child({ workerId: this.workerId }),
     };
+    // A healthy job must heartbeat several times per lock timeout, or it would be "recovered" while still running.
+    this.o.heartbeatIntervalMs = Math.min(this.o.heartbeatIntervalMs, Math.floor(this.o.lockTimeoutMs / 3));
+  }
+
+  /** Effective heartbeat interval (always well inside the lock timeout). */
+  get heartbeatIntervalMs(): number {
+    return this.o.heartbeatIntervalMs;
   }
 
   get running(): boolean {

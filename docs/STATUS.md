@@ -19,7 +19,7 @@ Last updated: milestone 1 (architecture & scaffold).
 | Deployment | Multi-stage Dockerfile, `railway.json` (validated against Railway's schema), release script (migrate + seed), non-root runtime, build-time check that bundled imports resolve | Docker build + container run against Postgres (see note) |
 | Local dev | `docker-compose.yml` (Postgres + test DB), `.env.example`, `pnpm dev` (API + Vite with proxy) | |
 
-Test counts at time of writing: **102 unit** + **27 integration**, all passing.
+Test counts at time of writing: **124 unit** (8 files) + **28 integration** (3 files), all passing — verified from a clean clone following the README.
 
 Docker note: in the development sandbox, outbound TLS from inside Docker is
 intercepted, so the image was built with a test-only copy of the Dockerfile

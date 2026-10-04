@@ -235,6 +235,14 @@ describe('queue mechanics', () => {
   });
 });
 
+describe('runner configuration', () => {
+  it('keeps the heartbeat well inside a short lock timeout', () => {
+    const base = { db, queue: new PostgresJobQueue(db), projects: new ProjectService({ db }), handlers: createMockStageHandlers(), providers: createProviders(ALL_MOCK) };
+    expect(new JobRunner({ ...base, lockTimeoutMs: 10_000 }).heartbeatIntervalMs).toBe(3_333);
+    expect(new JobRunner({ ...base }).heartbeatIntervalMs).toBe(30_000);
+  });
+});
+
 describe('retry policy', () => {
   it('backs off exponentially with a cap', () => {
     expect([1, 2, 3, 4].map((a) => retryDelayMs(a, 5_000, 30_000))).toEqual([5_000, 10_000, 20_000, 30_000]);
