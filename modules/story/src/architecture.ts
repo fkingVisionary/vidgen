@@ -12,7 +12,7 @@ import {
   type StoryType,
 } from '@docengine/core';
 import type { EvidenceBase } from './evidence.ts';
-import { caveatClaims, checkFigures, checkPerson, orderedKeys } from './rules.ts';
+import { MAX_AUTO_LINKS, caveatClaims, checkFigures, checkPerson, orderedKeys, strongestFirst } from './rules.ts';
 import type { ArchitectOutput } from './schemas.ts';
 import { WordIndex, nameGrounded, nameTokens, normalize, wordTokens } from './text.ts';
 
@@ -187,6 +187,13 @@ export function buildArchitecture(raw: ArchitectOutput, evidence: EvidenceBase, 
 
     // Story evidence: what the sequence declares, plus what its key events cite.
     const keys = new Set<string>();
+    // Claims the rules link (for a character, person or figure the telling uses), with what each was linked for.
+    const linkedFor = new Map<string, string>();
+    const addLinked = (k: string, what: string) => {
+      if (keys.has(k)) return;
+      keys.add(k);
+      linkedFor.set(k, what);
+    };
     const keyEvents = s.keyEvents
       .map((e) => ({ event: clean(e.event), claimKeys: orderedKeys(e.claimKeys.map((k) => k.trim()), evidence) }))
       .filter((e) => e.event);
@@ -207,7 +214,15 @@ export function buildArchitecture(raw: ArchitectOutput, evidence: EvidenceBase, 
       const known = findCharacter(name, ownUnits) ?? findCharacter(name, units);
       if (known) {
         characters.push(name);
-        for (const k of known.claimKeys) keys.add(k);
+        // One claim grounds a character: none is added if the sequence already cites one of theirs, otherwise
+        // their firmest. Linking every claim that names them would pull in unrelated myths and disputes.
+        const theirs = known.claimKeys.filter((k) => evidence.has(k));
+        if (!theirs.some((k) => keys.has(k))) {
+          for (const k of strongestFirst(evidence, theirs).slice(0, MAX_AUTO_LINKS)) {
+            addLinked(k, `the character ${name}`);
+            notes.push(`Sequence ${number}: linked ${k} (evidence for the character ${name})`);
+          }
+        }
         continue;
       }
       const check = checkPerson(name, [...keys].filter((k) => isCore.has(k)), evidence, { linkFrom: coreClaims });
@@ -215,7 +230,7 @@ export function buildArchitecture(raw: ArchitectOutput, evidence: EvidenceBase, 
         finding('UNGROUNDED_PERSON', `"${name}" is not in the selected units or their evidence`);
         continue;
       }
-      for (const k of check.link) keys.add(k);
+      for (const k of check.link) addLinked(k, `the name ${name}`);
       if (check.link.length) notes.push(`Sequence ${number}: linked ${check.link.join(', ')} (where the selected units' evidence names ${name})`);
       characters.push(name);
     }
@@ -239,7 +254,7 @@ export function buildArchitecture(raw: ArchitectOutput, evidence: EvidenceBase, 
     for (const f of figures.unsupported) finding('UNSUPPORTED_FIGURE', `uses the figure ${f}, which is not in the selected units' evidence`);
     for (const link of figures.links) {
       notes.push(`Sequence ${number}: linked ${link.claimKeys.join(', ')} (source of the figure ${link.figure})`);
-      for (const k of link.claimKeys) keys.add(k);
+      for (const k of link.claimKeys) addLinked(k, `the figure ${link.figure}`);
     }
     for (const name of peopleMentioned(storyTexts(draft), outsiders)) {
       finding('PERSON_OUTSIDE_SELECTION', `mentions ${name}, who appears in the dossier but not in the selected units' evidence`);
@@ -254,7 +269,13 @@ export function buildArchitecture(raw: ArchitectOutput, evidence: EvidenceBase, 
     const allKeys = [...claimKeys, ...contextKeys];
     const caveats = draft.caveats.filter((c, idx, all) => c.framing && allKeys.includes(c.claimKey) && all.findIndex((x) => x.claimKey === c.claimKey) === idx);
     for (const k of caveatClaims(allKeys, evidence)) {
-      if (!caveats.some((c) => c.claimKey === k)) finding('MISSING_CAVEAT', `uses ${k} (${evidence.claim(k)!.verdict}) without saying how the narration must present it`);
+      if (caveats.some((c) => c.claimKey === k)) continue;
+      const why = linkedFor.get(k);
+      finding(
+        'MISSING_CAVEAT',
+        `uses ${k} (${evidence.claim(k)!.verdict}) without saying how the narration must present it` +
+          (why ? ` (the evidence rules linked it for ${why}: add a caveat for it, or drop ${why})` : ''),
+      );
     }
     const sourceIds = evidence.sourcesFor(claimKeys);
     if (claimKeys.length > 0 && sourceIds.length === 0) finding('NO_SOURCES', 'no retrieved source with a verified quote backs its story evidence');

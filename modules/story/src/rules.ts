@@ -16,7 +16,7 @@ const VERDICT_ORDER: Record<ClaimVerdict, number> = { ESTABLISHED: 0, PROBABLE: 
  * Claim keys, best to link first: firmer verdicts (so a myth or dispute is
  * only pulled into a story when nothing firmer has the fact), then key claims.
  */
-function strongestFirst(evidence: EvidenceBase, keys: string[]): string[] {
+export function strongestFirst(evidence: EvidenceBase, keys: readonly string[]): string[] {
   return [...keys].sort((a, b) => {
     const ca = evidence.claim(a)!;
     const cb = evidence.claim(b)!;
@@ -24,7 +24,7 @@ function strongestFirst(evidence: EvidenceBase, keys: string[]): string[] {
   });
 }
 
-/** Claims linked automatically for one figure or person: the single best source of it. */
+/** Claims linked automatically for one figure, person or character: the single best source of it. */
 export const MAX_AUTO_LINKS = 1;
 
 /** Where evidence for a figure or person may come from. */

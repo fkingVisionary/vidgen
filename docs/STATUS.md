@@ -30,7 +30,7 @@ Railway; story mining has run on the real dossier, story architecture not yet
 | **Story architecture** (M3) | Builds premise, central question, narrative spine, resolution and sequences (hook, question, key events with claims, characters, conflict, escalation, reveal, ending beat, caveats, duration) from the editor's selection. Story evidence is the selected units' own claims only; other dossier claims appear only as labelled background (purpose, own sources) and may not add a story, person, event, figure, date or beat; sources, historical status and confidence derived per sequence; a fact-checking reviewer may return a corrected version (kept only if it has no more evidence problems); architecture gate (traceability, framing of disputed/myth claims, invented people, figures, HIGH-priority units, runtime, story vs list of facts); rework uses the editor's rejection notes | `architecture.test.ts`, `story.int.test.ts` |
 | **Story API + dashboard** (M3) | `GET /api/projects/:id/story`, `PATCH /api/story-candidates/:id`, `POST …/story/mine`, `POST …/story/architecture` (selection checked first); Story page: ranked candidates with scores and the ranking formula, arcs, myth threads, evidence (claims, quotes, sources), editor controls (approve/reject/flag, in-the-documentary, priority, notes), selection vs AI proposal, architecture with sequences and per-sequence evidence, both gate reports, cost; approval panel (Approve / Reject → Rework / Flag). Project pages are linked by an Overview · Research dossier · Story bar; the Research and Story stage boxes open their pages; new pages open at the top; pages fit a phone screen | `app.int.test.ts`; Playwright run on fake-AI data (editor actions, selection limits, rejection) with no console errors; Playwright at a 412 px phone viewport: every route into the Story page, no horizontal overflow |
 
-Test counts at time of writing: **264 unit** (17 files) + **51 integration** (5 files), all passing.
+Test counts at time of writing: **267 unit** (17 files) + **52 integration** (5 files), all passing.
 
 ## FIRST LIVE RUN (Railway, 2026-10-04)
 
@@ -68,6 +68,18 @@ Found live and fixed (each with tests):
    project page, clickable stage boxes, a "Review story candidates" button,
    a pointer from the dossier's story material, pages that open at the top and
    fit a phone screen.
+6. The first live story architecture (8 units, 9 sequences, ≈ $1.00 estimated
+   for 2 model calls) failed its gate on one point: sequence 2 used a myth
+   claim (C054) without a caveat. The reviewer removed it, but the rebuilt
+   revision still had it: the evidence rules re-added it, most likely through
+   a character, since naming one linked every claim that names them (the
+   reviewer had found three unused claims in that sequence, C001, C054 and
+   C066). Fixed: one firmest claim per character, none if the sequence already
+   cites one of theirs; findings say what a linked claim was linked for. Retry
+   reuses the two saved model calls and re-checks them with the fixed rules.
+   The Story page now offers Retry and "Back to story selection" when a story
+   job fails, and reloads the story when a run ends (it could show the
+   superseded version).
 
 Docker note: in the development sandbox, outbound TLS from inside Docker is
 intercepted, so local image builds used a test-only copy of the Dockerfile
@@ -82,8 +94,8 @@ a retry two minutes later succeeded.
 
 ## NOT YET VERIFIED LIVE
 
-- Story architecture with the real model on the *Tulip Mania* selection
-  (needs the editor's selection and a run).
+- A story architecture that passes its gate with the real model (the first
+  run failed on the rules bug above; a Retry with the fix is pending).
 - The cost of a clean research run end to end (the first run included failed
   attempts).
 

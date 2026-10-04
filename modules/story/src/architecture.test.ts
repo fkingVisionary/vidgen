@@ -93,8 +93,14 @@ describe('building the architecture', () => {
     s[1] = { ...s[1]!, reveal: 'Prices were reported at 5,500 guilders for one bulb.' };
     const built = buildArchitecture(output(s), evidence, units);
     expect(built.content.sequences[1]!.claimKeys).toContain('C009');
-    // C009 is DISPUTED: linking it means the sequence now needs a caveat for it.
-    expect(built.findings).toEqual([{ kind: 'MISSING_CAVEAT', sequence: 2, detail: 'uses C009 (DISPUTED) without saying how the narration must present it' }]);
+    // C009 is DISPUTED: linking it means the sequence now needs a caveat for it, and the finding says why it was linked.
+    expect(built.findings).toEqual([
+      {
+        kind: 'MISSING_CAVEAT',
+        sequence: 2,
+        detail: 'uses C009 (DISPUTED) without saying how the narration must present it (the evidence rules linked it for the figure 5500: add a caveat for it, or drop the figure 5500)',
+      },
+    ]);
   });
 
   it('ignores units outside the selection, and requires HIGH-priority units and reasons for unused ones', () => {
@@ -221,5 +227,51 @@ describe('architecture quality gate', () => {
     const s = units.map(withCaveats);
     s[0] = { ...s[0]!, estimatedDurationSec: 400 };
     expect(report(buildArchitecture(output(s), evidence, units)).checks.find((c) => c.id === 'duration_consistency')).toMatchObject({ status: 'WARN', metric: 1 });
+  });
+});
+
+describe('evidence for characters', () => {
+  // Shaped like the live Tulip Mania run: the florists appear in an established claim, a myth and the pamphlets.
+  const s02 = units[1]!;
+  const colleges: SelectedUnit = {
+    ...s02,
+    claimKeys: ['C002', 'C010', 'C013', 'C017'],
+    characters: [
+      { name: 'florists', kind: 'GROUP', role: 'Trade bulbs in the taverns', claimKeys: ['C002', 'C010', 'C013'] },
+      { name: 'ruined speculators', kind: 'GROUP', role: 'The legend', claimKeys: ['C010'] },
+    ],
+  };
+  const selection = [units[0]!, colleges, ...units.slice(2)];
+  const build = (over: Partial<ArchitectSequence>) =>
+    buildArchitecture(output([seq(colleges, { keyEvents: [{ event: 'The colleges meet in the inn', claimKeys: ['C002'] }], ...over })]), evidence, selection);
+  const missingCaveats = (built: ReturnType<typeof build>) => built.findings.filter((f) => f.kind === 'MISSING_CAVEAT');
+
+  it('does not pull every claim that names a character into the sequence', () => {
+    // The live failure: the reviewer dropped the myth from a sequence, and naming the florists brought it back.
+    const built = build({ claimKeys: ['C002', 'C017'], characters: ['florists'] });
+    expect(built.content.sequences[0]!.claimKeys).toEqual(['C002', 'C017']);
+    expect(missingCaveats(built)).toEqual([]);
+  });
+
+  it('links only the firmest claim of a character the sequence does not cite', () => {
+    const built = build({ claimKeys: ['C017'], keyEvents: [{ event: 'Haarlem is the centre of the trade', claimKeys: ['C017'] }], characters: ['florists'] });
+    expect(built.content.sequences[0]!.claimKeys).toEqual(['C002', 'C017']);
+    expect(built.notes).toContain('Sequence 1: linked C002 (evidence for the character florists)');
+    expect(missingCaveats(built)).toEqual([]);
+  });
+
+  it('says why a claim the rules linked needs a caveat', () => {
+    const built = build({ claimKeys: ['C002', 'C017'], characters: ['ruined speculators'] });
+    expect(built.content.sequences[0]!.claimKeys).toEqual(['C002', 'C010', 'C017']);
+    expect(missingCaveats(built)).toEqual([
+      {
+        kind: 'MISSING_CAVEAT',
+        sequence: 1,
+        detail: 'uses C010 (MYTH) without saying how the narration must present it (the evidence rules linked it for the character ruined speculators: add a caveat for it, or drop the character ruined speculators)',
+      },
+    ]);
+    // With the caveat the sequence is sound.
+    const framed = build({ claimKeys: ['C002', 'C017'], characters: ['ruined speculators'], caveats: [{ claimKey: 'C010', framing: 'The ruin is the legend, not the record.' }] });
+    expect(missingCaveats(framed)).toEqual([]);
   });
 });

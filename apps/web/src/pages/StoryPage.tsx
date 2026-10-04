@@ -29,7 +29,7 @@ import {
   type UpdateStoryCandidateInput,
 } from '@docengine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { api } from '../api.ts';
 import { CandidateStatusBadge, HistoricalBadge, PriorityBadge, SourceTypeBadge, StatusBadge, StoryTypeBadge } from '../components/badges.tsx';
@@ -59,6 +59,21 @@ export function StoryPage() {
     queryFn: () => api.story(id, { pack: packVersion, architecture: archVersion }),
     refetchInterval: running ? 3_000 : false,
   });
+  // Polling stops when a run ends, possibly before its result was fetched: reload the story whenever the
+  // project status or a story job's state changes, so the page never shows a superseded version.
+  const queryClient = useQueryClient();
+  const stamp = project.data
+    ? `${project.data.status}|${project.data.jobs
+        .filter((j) => (STORY_JOBS as readonly string[]).includes(j.type))
+        .map((j) => `${j.id}:${j.status}`)
+        .join(',')}`
+    : null;
+  const lastStamp = useRef<string | null>(null);
+  useEffect(() => {
+    if (stamp === null) return;
+    if (lastStamp.current !== null && lastStamp.current !== stamp) void queryClient.invalidateQueries({ queryKey: ['story', id] });
+    lastStamp.current = stamp;
+  }, [stamp, id, queryClient]);
   const [tab, setTab] = useState<Tab | null>(null);
 
   if (story.isPending || project.isPending) return <p className="text-sm text-stone-500">Loading…</p>;
@@ -168,10 +183,14 @@ function StoryActions({ project: p, view: v, running }: { project: ProjectDetail
   const mine = useStoryMutation(() => api.mineStory(p.id, brief.trim() || undefined), () => setBrief(''));
   const build = useStoryMutation(() => api.buildArchitecture(p.id, archNotes.trim() || undefined), () => setArchNotes(''));
   const decide = useStoryMutation((decision: ApprovalDecision) => api.approve(p.id, { gate: 'STORY', decision, notes: gateNotes.trim() || undefined }), () => setGateNotes(''));
-  const error = mine.error ?? build.error ?? decide.error;
+  const retry = useStoryMutation((jobId: string) => api.retryJob(jobId));
+  const back = useStoryMutation(() => api.rewind(p.id, { to: 'STORY_SELECTION', reason: 'Back to the selection after a failed story architecture run' }));
+  const error = mine.error ?? build.error ?? decide.error ?? retry.error ?? back.error;
   const progress = p.events.find((e) => e.type === 'JOB_PROGRESS');
   const failedStory = p.status === 'FAILED' && p.failedFromStatus?.startsWith('STORY');
-  const failedJob = p.jobs.find((j) => (STORY_JOBS as readonly string[]).includes(j.type) && j.status === 'FAILED');
+  const failedArchitecture = p.status === 'FAILED' && p.failedFromStatus === 'STORY_ARCHITECTING';
+  // The newest failed job of the phase that failed (jobs are newest first).
+  const failedJob = p.jobs.find((j) => j.type === (failedArchitecture ? 'STORY_ARCHITECTURE' : 'STORY_MINING') && j.status === 'FAILED');
   const canRemine = ['STORY_SELECTION', 'STORY_REVIEW', 'STORY_APPROVED'].includes(p.status) || (failedStory && p.failedFromStatus !== 'STORY_MINING');
 
   const remine = (
@@ -252,9 +271,27 @@ function StoryActions({ project: p, view: v, running }: { project: ProjectDetail
       {failedStory && (
         <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">
           <p>
-            Failed during <strong>{STATUS_LABELS[p.failedFromStatus!]}</strong>. Retry the job from the <Link className="underline" to={`/projects/${p.slug}`}>project page</Link> (completed model calls are reused), or run another mining pass.
+            Failed during <strong>{STATUS_LABELS[p.failedFromStatus!]}</strong>.
           </p>
           {failedJob?.error && <p className="mt-1 text-xs break-words">{failedJob.error}</p>}
+          <div className="mt-2 flex flex-wrap gap-2">
+            {failedJob && (
+              <button disabled={retry.isPending || back.isPending} onClick={() => retry.mutate(failedJob.id)} className={`${button} bg-red-700 text-white hover:bg-red-600`}>
+                Retry
+              </button>
+            )}
+            {failedArchitecture && p.actions.rewindTargets.includes('STORY_SELECTION') && (
+              <button disabled={retry.isPending || back.isPending} onClick={() => back.mutate(undefined)} className={`${button} bg-white text-stone-800 ring-1 ring-stone-300 hover:bg-stone-50`}>
+                Back to story selection
+              </button>
+            )}
+          </div>
+          <p className="mt-2 text-xs">
+            Retry continues from the last completed model call: completed calls are reused, not paid again, and their output is checked again with the current rules.{' '}
+            {failedArchitecture
+              ? 'Back to story selection lets you change the selection or add instructions, then generate a new architecture (new model calls).'
+              : 'You can also run another mining pass with a brief.'}
+          </p>
         </div>
       )}
 

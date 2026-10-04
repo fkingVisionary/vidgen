@@ -276,6 +276,34 @@ describe('story architecture (fake AI, real database)', () => {
     expect(await latestArchitecture(projectId)).toMatchObject({ status: 'DRAFT', qualityPassed: false });
   });
 
+  it('re-checks a failed architecture on Retry with the current rules, without paying again', async () => {
+    const s = setup();
+    const { projectId } = await mined(s);
+    await selectTitles(projectId, ['The ruin that never happened', 'The tavern colleges', 'Striped tulips', 'Proefman in court', 'The courts step back']);
+    // As in the live run: a character of one unit is evidenced by a myth that another unit's sequence frames.
+    const colleges = (await latestPack(projectId)).candidates.find((c) => c.title === 'The tavern colleges')!;
+    const florists = (claimKeys: string[]) => [{ name: 'florists', kind: 'GROUP', role: 'Trade bulbs in the taverns', claimKeys }];
+    await db.storyCandidate.update({ where: { id: colleges.id }, data: { characters: florists(['C010']) } });
+    s.ai.architectOptions = { secondsPerSequence: 150 };
+    const job = await run(s, projectId, 'STORY_ARCHITECTURE');
+
+    expect(job.status).toBe('FAILED');
+    expect(job.error).toMatch(/Disputed, unverified and myth material is framed \(1: Sequence \d: C010 \(MYTH\) has no caveat\)/);
+    expect(s.ai.prompts['story.review']![0]).toContain('the evidence rules linked it for the character florists');
+    expect(s.ai.calls).toMatchObject({ 'story.architect': 1, 'story.review': 1 });
+
+    // The rules now see the florists in C002, which the sequence already cites, so nothing else is linked.
+    await db.storyCandidate.update({ where: { id: colleges.id }, data: { characters: florists(['C002', 'C010']) } });
+    const retry = await s.projects.retryJob(job.id, 'test');
+    await s.runner.drain();
+    expect(await db.job.findUniqueOrThrow({ where: { id: retry.id } })).toMatchObject({ status: 'SUCCEEDED' });
+    expect(s.ai.calls).toMatchObject({ 'story.architect': 1, 'story.review': 1 });
+    const arch = await latestArchitecture(projectId);
+    expect(arch).toMatchObject({ version: 2, status: 'IN_REVIEW', qualityPassed: true });
+    expect(arch.stats).toMatchObject({ resumedSteps: ['architect', 'review'] });
+    expect(await statusOf(projectId)).toBe('STORY_REVIEW');
+  });
+
   it('fails invented people and a runtime far from the target', async () => {
     const s = setup();
     const { projectId } = await mined(s);

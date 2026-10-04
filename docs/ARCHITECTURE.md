@@ -527,6 +527,16 @@ unnamed event is left to the reviewer and the editor. The architect sees the
 units' claims as story evidence and the rest of the dossier only as a
 one-line-per-claim background list.
 
+**Links the rules add.** When a sequence uses a figure, a name or a character
+that its cited claims do not cover, the rules link the single firmest claim of
+the selected units that does (established before probable before disputed,
+myth or unverified). A unit's character gets no link when the sequence already
+cites one of their claims. (Linking every claim that names a character, as the
+first version did, can pull a myth into a sequence that does not tell it, and
+undo a reviewer's removal of it; this most likely failed the first live run.)
+A linked claim that needs a caveat produces a finding that says what it was
+linked for, so the reviewer can add the caveat or drop what needed it.
+
 **Editorial control.** The AI's selection is a proposal (`ai_selected`); the
 editor's `selected`, `status`, `priority` and notes are what the architect
 gets. HIGH priority must be used (gate check); the architect must explain any
