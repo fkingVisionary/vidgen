@@ -6,7 +6,7 @@ import { api } from '../api.ts';
 import { StatusBadge } from '../components/badges.tsx';
 import { QualityReportView, Section } from '../components/evidence.tsx';
 import { ProjectNav } from '../components/ProjectNav.tsx';
-import { AssessmentList, SectionCard, TimingSummary, VersionsTab, VoiceTab, button, useScriptRequest } from '../components/script.tsx';
+import { AssessmentList, JudgmentsSection, MeasurementsSection, ReviewChangesSection, SectionCard, TimingSummary, VersionsTab, VoiceTab, button, useScriptRequest } from '../components/script.tsx';
 import { formatDate, formatUsd } from '../format.ts';
 
 type Tab = 'script' | 'quality' | 'voice' | 'versions' | 'runs';
@@ -158,19 +158,30 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
   const [brief, setBrief] = useState('');
   const [gateNotes, setGateNotes] = useState('');
   const s = v.script;
-  const generate = useScriptRequest(() => api.generateScript(p.id, notes.trim() ? { notes: notes.trim() } : {}), () => {
+  // Off by default: the performance pass stays within the runtime maximum unless the user says otherwise.
+  const [overMax, setOverMax] = useState(false);
+  const over = overMax ? { allowPerformanceOverMax: true } : {};
+  const generate = useScriptRequest(() => api.generateScript(p.id, { ...(notes.trim() ? { notes: notes.trim() } : {}), ...over }), () => {
     setNotes('');
     onQueued();
   });
-  const revise = useScriptRequest(() => api.reviseScript(p.id, { baseVersion: s!.version, brief: brief.trim() }), () => {
+  const revise = useScriptRequest(() => api.reviseScript(p.id, { baseVersion: s!.version, brief: brief.trim(), ...over }), () => {
     setBrief('');
     onQueued();
   });
   const [direction, setDirection] = useState('');
-  const refine = useScriptRequest(() => api.refineScript(p.id, { baseVersion: s!.version, ...(direction.trim() ? { instructions: direction.trim() } : {}) }), () => {
+  const refine = useScriptRequest(() => api.refineScript(p.id, { baseVersion: s!.version, ...(direction.trim() ? { instructions: direction.trim() } : {}), ...over }), () => {
     setDirection('');
     onQueued();
   });
+  const overMaxToggle = (id: string) => (
+    <label htmlFor={id} className="mt-2 flex items-start gap-2 text-xs text-stone-600">
+      <input id={id} type="checkbox" checked={overMax} onChange={(e) => setOverMax(e.target.checked)} className="mt-0.5" />
+      <span>
+        Let pauses and slower delivery take it past the {fmtClock(p.targetMinutesMax * 60)} maximum. Off: the performance pass stays within it, giving up the least valuable timing first.
+      </span>
+    </label>
+  );
   const decide = useScriptRequest((decision: ApprovalDecision) => api.approve(p.id, { gate: 'SCRIPT', decision, notes: gateNotes.trim() || undefined }), () => setGateNotes(''));
   const retry = useScriptRequest((jobId: string) => api.retryJob(jobId));
   const progress = p.events.find((e) => e.type === 'JOB_PROGRESS');
@@ -196,6 +207,7 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
             The story architecture{v.architecture ? ` v${v.architecture.version}` : ''} is approved. The Script Engine plans the narration, writes it, has a script editor and a fact checker review it, and marks the performance — then stops for you. No voice is generated.
           </p>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Instructions for the writer (optional) — e.g. keep the opening under a minute" className="mt-2 w-full rounded-md border border-stone-300 px-2 py-1.5 text-sm" />
+          {overMaxToggle('over-max-draft')}
           <button disabled={generate.isPending || !v.editorial.generate.allowed} onClick={() => generate.mutate(undefined)} className={`${button} mt-1 bg-sky-700 text-white hover:bg-sky-600`}>
             Generate Script Draft
           </button>
@@ -258,6 +270,7 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
             Director's instructions (optional)
           </label>
           <textarea id="director-instructions" value={direction} onChange={(e) => setDirection(e.target.value)} rows={3} placeholder="e.g. drier humour in the opening; let the court scene breathe; keep the companion out of section 5" className="mt-1 w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm" />
+          {overMaxToggle('over-max-refine')}
           <button disabled={refine.isPending} onClick={() => refine.mutate(undefined)} className={`${button} mt-1 bg-violet-700 text-white hover:bg-violet-600`}>
             Refine the narration
           </button>
@@ -269,6 +282,7 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
           <summary className="cursor-pointer font-medium text-sky-900">Generate Revision of v{s.version} (the whole script)…</summary>
           <p className="mt-2 text-stone-700">The writer rewrites the whole script from your brief — the plan is made again, then the script editor, the fact checker and the performance pass review it. v{s.version} is kept. To change one section only, use “Regenerate section” on it (cheaper: the others are copied unchanged).</p>
           <textarea value={brief} onChange={(e) => setBrief(e.target.value)} rows={3} placeholder="What to change — e.g. the first 90 seconds are too slow; start closer to the collapse" className="mt-2 w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm" />
+          {overMaxToggle('over-max-revise')}
           <button disabled={revise.isPending || brief.trim().length < 10} onClick={() => revise.mutate(undefined)} className={`${button} mt-1 bg-sky-700 text-white hover:bg-sky-600`}>
             Generate Revision
           </button>
@@ -340,12 +354,17 @@ function ScriptTab({ projectId, view: v }: { projectId: string; view: ScriptView
 function QualityTab({ view: v }: { view: ScriptView }) {
   const s = v.script!;
   const editor = s.content?.editor;
+  const report = s.qualityReport;
+  const changes = s.content?.reviewChanges ?? [];
   return (
     <div className="space-y-4">
-      {s.qualityReport ? <QualityReportView report={s.qualityReport} claims={s.evidence.claims} reviewTitle="Reviewers' issues" /> : <p className="text-sm text-stone-500">No quality report.</p>}
+      {report?.measurements && report.measurements.length > 0 && <MeasurementsSection items={report.measurements} />}
+      {report ? <QualityReportView report={report} claims={s.evidence.claims} reviewTitle="Reviewers' issues (model judgments)" /> : <p className="text-sm text-stone-500">No quality report.</p>}
+      {changes.length > 0 && <ReviewChangesSection changes={changes} />}
+      {report?.judgments && report.judgments.length > 0 && <JudgmentsSection items={report.judgments} />}
       {editor?.assessment && editor.assessment.length > 0 && <AssessmentList items={editor.assessment} against={s.revisionOfVersion} />}
       {editor && (
-        <Section title="Script editor's scores (recorded, never blocking)">
+        <Section title="Script editor's scores (model judgment — recorded, never blocking)">
           <p className="text-sm">{editor.verdict}</p>
           <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2">
             {SCRIPT_SCORES.map((k) =>

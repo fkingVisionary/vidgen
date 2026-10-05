@@ -7,8 +7,9 @@ import {
   runtimeTarget,
   scriptTiming,
   type RuntimeTarget,
+  type ScriptChangeLog,
   type ScriptContent,
-  type ScriptIssue,
+  type ScriptReviewChange,
   type ScriptSectionPlan,
 } from '@docengine/core';
 import { NonRetryableError, type StageContext, type StageHandler } from '@docengine/pipeline';
@@ -16,14 +17,16 @@ import { ProviderError } from '@docengine/providers';
 import { CostCeiling, EvidenceBase, StepCheckpoint } from '@docengine/story/shared';
 import { z } from 'zod';
 import { DEFAULT_SCRIPT_CONFIG, SCRIPT_STEPS, type ScriptConfig, type ScriptStep } from './config.ts';
-import { compareDrafts, evidenceChanges } from './compare.ts';
-import { allBlocks, applyPatch, applyPerformance, markCentralQuestion, mergePronunciations, sectionDurationSec, sectionWords, sectionsFromWriter, type ScriptDraft } from './draft.ts';
+import { compareDrafts, diffBlocks, evidenceChanges } from './compare.ts';
+import { allBlocks, applyPerformance, markCentralQuestion, mergePronunciations, sectionDurationSec, sectionWords, sectionsFromWriter, type ScriptDraft } from './draft.ts';
+import { fitPerformance, performanceBudget, renderBudget, type PerformanceBudget } from './performance.ts';
 import { PROMPT_VERSION, REFINEMENT_CHECKLIST, factCheckSystemPrompt, performanceSystemPrompt, plannerSystemPrompt, refineSystemPrompt, rewriteSystemPrompt, scriptEditorSystemPrompt, writerSystemPrompt } from './prompts.ts';
 import { renderTrimPlan, selfReportMismatch, type Refrain } from './craft.ts';
 import { computeScriptReport } from './quality.ts';
 import { renderArchitecture, renderEvidence, renderScript } from './render.ts';
+import { issueResolution, reviewPatch, reviewSummary } from './review.ts';
 import { CRAFT_KINDS, blockingCount, checkScript, cutPlan, isBlocking, ruleDigest, type RuleDigest, type ScriptFinding, type ScriptFindingKind } from './rules.ts';
-import { FactCheckOutput, PerformanceOutput, PlannerOutput, RefineOutput, ScriptEditorOutput, WriterOutput, type ScriptPatch } from './schemas.ts';
+import { FactCheckOutput, PerformanceOutput, PlannerOutput, RefineOutput, ScriptEditorOutput, WriterOutput } from './schemas.ts';
 import { buildScope, type ScriptScope } from './scope.ts';
 import { loadVersion, saveVersion, type LoadedScript } from './store.ts';
 
@@ -143,43 +146,59 @@ class ScriptRun {
       findings: draftFindings.filter(isBlocking).map((f) => f.detail).slice(0, 30),
     });
 
-    // C. Script editor (craft).
+    // C. Script editor (craft). Each change it proposes is judged on its own.
     await this.ceiling.check();
     const refined = mode === 'REFINEMENT' ? base! : null;
+    const context = { base: base?.draft ?? null, changeLog: writerOut.changeLog ?? null, kept: keptLines };
+    const reviewChanges: ScriptReviewChange[] = [];
+    const judged = { scope, target, allowed, base: base?.draft ?? null, kept: keptLines };
     const edited = await this.steps.step('edit', EditStep, () =>
       this.unavailableOnError(() =>
-        this.call('edit', 'script.edit', ScriptEditorOutput, 'ScriptEditorReview', scriptEditorSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { previous: refined, base: base?.draft ?? null, checklist: refined !== null, cuts: true, kept: keptLines }), (x) => ({ issues: x.issues.length, edits: x.edits.length, assessment: x.assessment.length })),
+        this.call('edit', 'script.edit', ScriptEditorOutput, 'ScriptEditorReview', scriptEditorSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { ...context, previous: base, refinement: refined !== null, checklist: refined !== null, cuts: true }), (x) => ({ issues: x.issues.length, edits: x.edits.length, assessment: x.assessment.length })),
       ),
     );
     let editor: ScriptContent['editor'] = null;
     if ('unavailable' in edited) notes.push(`Script editor unavailable: ${edited.unavailable}`);
     else {
-      const r = this.tryPatch(draft, edited, scope, target, allowed, 'Script editor', notes);
+      const r = reviewPatch(draft, edited, 'SCRIPT_EDITOR', judged);
       draft = r.draft;
-      editor = { verdict: edited.verdict, scores: edited.scores, issues: edited.issues.map((i) => ({ ...i, ...resolve(i.ref, r) })), ...(refined ? { assessment: checklistAnswers(edited.assessment, notes) } : {}) };
+      reviewChanges.push(...r.changes);
+      notes.push(...r.notes, ...[reviewSummary('Script editor', r.changes)].filter((x): x is string => x !== null));
+      editor = { verdict: edited.verdict, scores: edited.scores, issues: edited.issues.map((i) => ({ ...i, ...issueResolution(i.ref, r) })), ...(refined ? { assessment: checklistAnswers(edited.assessment, notes) } : {}) };
     }
 
-    // D. Fact checker (last word on facts).
+    // D. Fact checker (last word on facts): it sees what the editor's changes became.
     await this.ceiling.check();
     const checked = await this.steps.step('factCheck', FactStep, () =>
-      this.unavailableOnError(() => this.call('factCheck', 'script.factCheck', FactCheckOutput, 'ScriptFactCheck', factCheckSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { previous: null, checklist: false, refinementOf: refined?.row.version }), (x) => ({ issues: x.issues.length, edits: x.edits.length }))),
+      this.unavailableOnError(() =>
+        this.call('factCheck', 'script.factCheck', FactCheckOutput, 'ScriptFactCheck', factCheckSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { ...context, previous: base, refinement: refined !== null, reviewed: reviewChanges }), (x) => ({ issues: x.issues.length, edits: x.edits.length })),
+      ),
     );
     let factCheck: ScriptContent['factCheck'] = null;
     if ('unavailable' in checked) notes.push(`Fact checker unavailable: ${checked.unavailable}`);
     else {
-      const r = this.tryPatch(draft, checked, scope, target, allowed, 'Fact checker', notes);
+      const r = reviewPatch(draft, checked, 'FACT_CHECKER', judged);
       draft = r.draft;
-      factCheck = { verdict: checked.verdict, issues: checked.issues.map((i) => ({ ...i, ...resolve(i.ref, r) })) };
-      // The editor's issue references now point at the fact checker's numbering too.
-      if (editor && r.kept) editor = { ...editor, issues: editor.issues.map((i) => (i.ref && r.keyMap.has(i.ref) ? { ...i, ref: r.keyMap.get(i.ref) ?? i.ref } : i)) };
+      // The editor's issues and kept changes now point at the fact checker's numbering.
+      for (const c of reviewChanges) if (c.savedRef && r.keyMap.has(c.savedRef)) c.savedRef = r.keyMap.get(c.savedRef) ?? null;
+      reviewChanges.push(...r.changes);
+      notes.push(...r.notes, ...[reviewSummary('Fact checker', r.changes)].filter((x): x is string => x !== null));
+      factCheck = { verdict: checked.verdict, issues: checked.issues.map((i) => ({ ...i, ...issueResolution(i.ref, r) })) };
+      if (editor) editor = { ...editor, issues: editor.issues.map((i) => (i.ref && r.keyMap.has(i.ref) ? { ...i, ref: r.keyMap.get(i.ref) ?? i.ref } : i)) };
     }
 
-    // E. Performance: delivery where it matters, pauses with a reason, pronunciation.
+    // E. Performance: delivery where it matters, pauses with a reason, pronunciation — within the runtime budget.
     await this.ceiling.check();
-    const perf = await this.steps.step('perform', PerformStep, () => this.unavailableOnError(() => this.perform(draft, scope, allowed, target)));
+    const budget = performanceBudget(draft, target, allowed);
+    const perf = await this.steps.step('perform', PerformStep, () => this.unavailableOnError(() => this.perform(draft, scope, allowed, budget)));
     if ('unavailable' in perf) notes.push(`Performance pass unavailable: ${perf.unavailable}`);
     else {
       draft = applyPerformance(draft, perf, scope, allowed, notes);
+      const fit = fitPerformance(draft, target, allowed, { allowOverMax: input.allowPerformanceOverMax });
+      draft = fit.draft;
+      reviewChanges.push(...fit.changes);
+      if (fit.trimmedSec > 0) notes.push(`Performance: ${fit.trimmedSec.toFixed(1)} s of pauses and slower delivery given up to stay within the ${fmtClock(target.maxSec)} maximum (${fmtClock(fit.beforeSec)} → ${fmtClock(fit.afterSec)}; ${fit.changes.map((c) => c.id).join(', ')})`);
+      else if (input.allowPerformanceOverMax && fit.beforeSec > target.maxSec) notes.push(`Performance: runs ${fmtClock(fit.beforeSec)}, past the ${fmtClock(target.maxSec)} maximum — the user allowed it`);
       notes.push(...perf.notes.map((n) => `Performance: ${n}`));
     }
 
@@ -195,6 +214,7 @@ class ScriptRun {
       performanceNotes: 'unavailable' in perf ? [] : perf.notes,
       editor,
       factCheck,
+      reviewChanges,
       provenance: {
         origin: mode,
         baseVersion: base?.row.version ?? null,
@@ -207,7 +227,7 @@ class ScriptRun {
     };
     const findings = checkScript(draft, scope, { target, factIssues: factCheck?.issues, previous: base?.draft ?? null, kept: keptLines });
     const timing = scriptTiming(allBlocks(draft), target);
-    const report = computeScriptReport({ findings, timing, content, notes, reviewers: { editor: 'unavailable' in edited ? edited.unavailable : null, factCheck: 'unavailable' in checked ? checked.unavailable : null } });
+    const report = computeScriptReport({ findings, timing, content, notes, draft, narrationSec: budget.narrationSec, reviewers: { editor: 'unavailable' in edited ? edited.unavailable : null, factCheck: 'unavailable' in checked ? checked.unavailable : null } });
     const stats = {
       engineVersion: CURRENT_SCRIPT_ENGINE,
       promptVersion: PROMPT_VERSION,
@@ -290,6 +310,13 @@ class ScriptRun {
         estimatedCostUsd: spend,
         resumedSteps: stats.resumedSteps,
         notes,
+        review: {
+          kept: reviewChanges.filter((c) => c.status === 'ACCEPTED').length,
+          rejected: reviewChanges.filter((c) => c.status === 'REJECTED').length,
+          skipped: reviewChanges.filter((c) => c.status === 'SKIPPED').length,
+          changes: reviewChanges.map((c) => `${c.id} ${c.type} ${c.ref ?? ''} ${c.status}${c.status === 'ACCEPTED' ? (c.rulesImpacted.length ? ` (${c.rulesImpacted.join(', ')})` : '') : `: ${c.rejectionReason}`}`).slice(0, 60),
+        },
+        measurements: report.measurements?.map((m) => `${m.label}: ${m.value}${m.detail ? ` — ${m.detail}` : ''}`),
         ...(comparison ? { comparison } : {}),
       },
     );
@@ -335,27 +362,6 @@ class ScriptRun {
     const draft = { sections, pronunciations: mergePronunciations(base.draft.pronunciations, []) };
     markCentralQuestion(draft.sections, out.centralQuestion, notes);
     return draft;
-  }
-
-  /** Keep a reviewer's patch only if the rules find no more blocking problems after it. */
-  private tryPatch(draft: ScriptDraft, patch: ScriptPatch, scope: ScriptScope, target: RuntimeTarget, allowed: ReadonlySet<number>, who: string, notes: string[]): Patched {
-    const identity: Patched = { draft, kept: false, keyMap: new Map(allBlocks(draft).map((b) => [b.key, b.key])), touched: new Set() };
-    if (patch.edits.length + patch.removals.length + patch.insertions.length === 0) return identity;
-    const before = blockingCount(checkScript(draft, scope, { target }));
-    const local: string[] = [];
-    const r = applyPatch(draft, patch, scope, allowed, who, local);
-    if (r.changed === 0) {
-      notes.push(...local);
-      return identity;
-    }
-    const after = blockingCount(checkScript(r.draft, scope, { target }));
-    if (after > before) {
-      notes.push(`${who}: its ${r.changed} change(s) were not kept — they left ${after} blocking findings, against ${before} before`);
-      return identity;
-    }
-    notes.push(...local, `${who}: ${r.changed} change(s) kept (blocking findings ${before} → ${after})`);
-    const touched = new Set([...patch.edits.map((e) => e.ref), ...patch.removals].map((x) => x.trim()));
-    return { draft: r.draft, kept: true, keyMap: r.keyMap, touched };
   }
 
   // ── Model calls ────────────────────────────────────────────────────────────
@@ -466,8 +472,11 @@ class ScriptRun {
 
   /**
    * What a reviewer sees: the script (the sections it may change in full),
-   * the rule findings, the architecture and the evidence — and, for a
-   * refinement's script editor, the version refined and the checklist.
+   * the rule findings, the architecture and the evidence; the version it was
+   * made from, the writer's change log and the lines the writer removed on
+   * purpose (so a deliberate cut is not mistaken for an accident); the
+   * changes already judged in this run, kept or rejected and why; and, for a
+   * refinement's script editor, the checklist.
    */
   private reviewPrompt(
     draft: ScriptDraft,
@@ -475,22 +484,33 @@ class ScriptRun {
     target: RuntimeTarget,
     allowed: ReadonlySet<number>,
     brief: string | null,
-    opts: { previous?: LoadedScript | null; base?: ScriptDraft | null; checklist?: boolean; refinementOf?: number; cuts?: boolean; kept?: readonly string[] } = {},
+    opts: {
+      previous?: LoadedScript | null;
+      base?: ScriptDraft | null;
+      refinement?: boolean;
+      checklist?: boolean;
+      cuts?: boolean;
+      kept?: readonly string[];
+      changeLog?: ScriptChangeLog | null;
+      reviewed?: readonly ScriptReviewChange[];
+    } = {},
   ): string {
     const only = allowed.size === scope.architecture.sequences.length ? undefined : allowed;
     const inSections = (ref: string | null) => ref === null || only === undefined || [...only].some((n) => ref.startsWith(`${n}.`) || ref === `S${n}`);
     const previous = opts.previous ?? null;
-    // Checked against the version it was made from (its refrains must survive), shown in full only to a refinement's editor.
+    // Checked against the version it was made from: its claim links and refrains must survive.
     const checks = { target, previous: opts.base ?? previous?.draft ?? null, kept: opts.kept ?? [] };
     const findings = checkScript(draft, scope, checks).filter((f) => inSections(f.ref) && f.kind !== 'RUNTIME_PLAN');
     const timing = scriptTiming(allBlocks(draft), target);
     const { plan, refrains } = opts.cuts ? cutPlan(draft, scope, checks) : { plan: null, refrains: [] as Refrain[] };
     const cuts = plan ? renderTrimPlan({ ...plan, candidates: plan.candidates.filter((c) => inSections(c.ref)) }) : null;
+    const removed = previous ? removedLines(previous.draft, draft, only) : [];
+    const log = opts.changeLog;
     return [
       this.header(target),
-      `This version runs ${fmtClock(timing.totalSec)} (${timing.words} spoken words).`,
+      `This version runs ${fmtClock(timing.totalSec)} (${timing.words} spoken words), measured from the script.`,
       ...(brief ? ['', `# The editor's brief for this version\n${brief}`] : []),
-      ...(opts.refinementOf ? ['', `This version is a narrative refinement of v${opts.refinementOf}: rewording must not change what the evidence supports — hedges kept, numbers and dates unchanged, quotations exact, fiction still fiction.`] : []),
+      ...(opts.refinement && previous ? ['', `This version is a narrative refinement of v${previous.row.version}: rewording must not change what the evidence supports — hedges kept, numbers and dates unchanged, quotations exact, fiction still fiction, every factual sentence still citing the claim behind it.`] : []),
       '',
       `# The script${only ? ` — review and change only section${only.size > 1 ? 's' : ''} ${[...only].join(', ')}` : ''}`,
       renderScript(draft, { only }),
@@ -506,14 +526,25 @@ class ScriptRun {
             ...(refrains.length ? ['', '# Deliberate repetition — keep it: it is not redundancy', ...renderRepetition(refrains)] : []),
           ]
         : []),
+      ...(log && (log.summary || log.changes.length)
+        ? ['', "# The writer's change log (its own account — the measured figures above are what count)", log.summary, ...log.changes.map((c) => `- ${c.section ? `Section ${c.section}: ` : ''}${c.what} — ${c.why}`)]
+        : []),
+      ...(removed.length ? ['', `# Lines the writer removed on purpose from v${previous!.row.version} (${removed.length}) — not accidents: do not bring one back unless the story or the evidence needs it`, ...removed.map((l) => `- "${l}"`)] : []),
+      ...(opts.kept?.length ? ['', `# Lines the refinement says it kept word for word (${opts.kept.length})`, ...opts.kept.map((l) => `- "${l}"`)] : []),
+      ...(opts.reviewed?.length
+        ? [
+            '',
+            '# Changes already judged in this run — do not undo an accepted change unless it broke the evidence; do not propose a rejected one again without fixing why it was rejected',
+            ...opts.reviewed.map((c) => `- ${c.id} ${c.type} ${c.ref ?? ''} — ${c.status}${c.status === 'ACCEPTED' ? '' : `: ${c.rejectionReason}`} (${c.reason || 'no reason given'})`),
+          ]
+        : []),
       ...(previous
         ? [
             '',
-            `# The previous version (v${previous.row.version}) this one refines — for comparison only; do not change it (${fmtClock(scriptTiming(allBlocks(previous.draft), target).totalSec)})`,
-            renderScript(previous.draft),
+            `# The version this one was made from (v${previous.row.version}) — for comparison only; do not change it (${fmtClock(scriptTiming(allBlocks(previous.draft), target).totalSec)})`,
+            renderScript(previous.draft, { only }),
           ]
         : []),
-      ...(opts.kept?.length ? ['', `# Lines the refinement says it kept word for word (${opts.kept.length})`, ...opts.kept.map((l) => `- "${l}"`)] : []),
       ...(opts.checklist ? ['', `# Refinement checklist — answer every question, in this order, for this version against v${previous?.row.version ?? '?'}`, ...REFINEMENT_CHECKLIST.map((q, i) => `${i + 1}. ${q}`)] : []),
       '',
       renderArchitecture(scope),
@@ -532,12 +563,11 @@ class ScriptRun {
     }
   }
 
-  private async perform(draft: ScriptDraft, scope: ScriptScope, allowed: ReadonlySet<number>, target: RuntimeTarget): Promise<PerformanceOutput> {
+  private async perform(draft: ScriptDraft, scope: ScriptScope, allowed: ReadonlySet<number>, budget: PerformanceBudget): Promise<PerformanceOutput> {
     const only = allowed.size === scope.architecture.sequences.length ? undefined : allowed;
-    const timing = scriptTiming(allBlocks(draft), target);
     const parts = [
       `Documentary: ${this.ctx.project.title} — ${this.ctx.project.topic}`,
-      `Runtime: ${fmtClock(timing.totalSec)} of narration (acceptable ${fmtClock(target.minSec)}–${fmtClock(target.maxSec)}).${timing.totalSec > target.maxSec ? ' It already runs over its maximum: add no pause the story does not need.' : ''}`,
+      renderBudget(budget),
       `Narrator: ${scope.architecture.narrativeMode}; point of view ${scope.architecture.povStrategy.type}.`,
       `Cast: ${scope.architecture.cast.map((m) => `${m.name} (${m.kind})`).join('; ')}`,
       '',
@@ -581,22 +611,6 @@ class ScriptRun {
       SELECT SUM(COALESCE(actual_cost_usd, estimated_cost_usd))::text AS spent FROM provider_calls WHERE job_id = ${this.ctx.job.id}::uuid`;
     return Math.round(Number(row?.spent ?? 0) * 10_000) / 10_000;
   }
-}
-
-interface Patched {
-  draft: ScriptDraft;
-  kept: boolean;
-  keyMap: Map<string, string | null>;
-  /** References the reviewer changed or removed. */
-  touched: Set<string>;
-}
-
-/** Where a reviewer's issue stands after its own patch. */
-function resolve(ref: string | null, r: Patched): Pick<ScriptIssue, 'ref' | 'resolution'> {
-  if (!ref) return { ref: null, resolution: r.kept ? 'recorded' : 'open: left for the editor' };
-  const now = r.keyMap.has(ref) ? r.keyMap.get(ref)! : ref;
-  if (r.kept && r.touched.has(ref)) return { ref: now, resolution: now === null ? 'fixed: the block was removed' : 'fixed by its own edit' };
-  return { ref: now ?? ref, resolution: 'open: left for the editor' };
 }
 
 function summarizeWriter(x: WriterOutput): Record<string, unknown> {
@@ -684,4 +698,15 @@ function digestLine(d: RuleDigest): string {
 function digestChange(a: RuleDigest, b: RuleDigest): string {
   const kinds = digestOrder().filter((k) => a.counts[k] || b.counts[k]);
   return `${a.words} → ${b.words} words, ${a.runtime} → ${b.runtime}${b.overMax ? ` (${b.overMax} over the maximum)` : ''}; ${kinds.length ? kinds.map((k) => `${k} ${a.counts[k] ?? 0} → ${b.counts[k] ?? 0}`).join(', ') : 'no findings in either'}`;
+}
+
+/** Block texts of the version a run started from that the new version no longer has (in the sections it may change). */
+function removedLines(previous: ScriptDraft, draft: ScriptDraft, only?: ReadonlySet<number>): string[] {
+  const out: string[] = [];
+  for (const s of previous.sections) {
+    if (only && !only.has(s.sequence)) continue;
+    const now = draft.sections.find((x) => x.sequence === s.sequence)?.blocks ?? [];
+    for (const d of diffBlocks(s.blocks, now)) if (d.op === 'removed') out.push(d.text);
+  }
+  return out.slice(0, 40);
 }

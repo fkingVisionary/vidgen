@@ -175,6 +175,8 @@ export type ContentPackageRequest = z.infer<typeof ContentPackageRequest>;
  */
 export const ScriptJobInput = z.object({
   notes: z.string().trim().max(5000).optional(),
+  /** The user lets the performance pass (pauses, slower delivery) take the script past the runtime maximum. Off by default. */
+  allowPerformanceOverMax: z.boolean().default(false),
   revise: z
     .object({
       baseVersion: z.number().int().min(1),
@@ -187,7 +189,7 @@ export const ScriptJobInput = z.object({
 export type ScriptJobInput = z.infer<typeof ScriptJobInput>;
 
 /** Generate the first draft (or a fresh draft) from the approved architecture. */
-export const GenerateScriptInput = z.object({ notes: z.string().trim().max(5000).optional() });
+export const GenerateScriptInput = z.object({ notes: z.string().trim().max(5000).optional(), allowPerformanceOverMax: z.boolean().optional() });
 export type GenerateScriptInput = z.infer<typeof GenerateScriptInput>;
 
 /**
@@ -199,6 +201,7 @@ export const ReviseScriptInput = z.object({
   baseVersion: z.number().int().min(1),
   sections: z.array(z.number().int().min(1)).max(60).default([]),
   brief: z.string().trim().min(10, 'Say what to change (at least a sentence)').max(5000),
+  allowPerformanceOverMax: z.boolean().optional(),
 });
 // The request shape (`sections` may be left out); the service parses it.
 export type ReviseScriptInput = z.input<typeof ReviseScriptInput>;
@@ -214,6 +217,7 @@ export type ReviseScriptInput = z.input<typeof ReviseScriptInput>;
 export const RefineScriptInput = z.object({
   baseVersion: z.number().int().min(1),
   instructions: z.string().trim().max(5000).optional(),
+  allowPerformanceOverMax: z.boolean().optional(),
 });
 export type RefineScriptInput = z.input<typeof RefineScriptInput>;
 

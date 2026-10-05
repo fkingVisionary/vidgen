@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scriptTiming, type RuntimeTarget } from '@docengine/core';
 import { describe, expect, it } from 'vitest';
-import { craftFindings, detectRefrains, protectedBlocks, selfReportMismatch, trimPlan } from './craft.ts';
+import { craftFindings, dependentsOf, detectRefrains, protectedBlocks, selfReportMismatch, trimPlan } from './craft.ts';
 import { allBlocks, type ScriptDraft } from './draft.ts';
 import { checkScript, cutPlan, type ScriptFinding } from './rules.ts';
 import type { ScriptScope } from './scope.ts';
@@ -66,7 +66,7 @@ describe('redundancy and deliberate repetition (business)', () => {
 
   it('recognises a refrain and leaves it alone — it is not redundancy, not a repeated phrase, and must survive a refinement', () => {
     const draft = businessDraft();
-    expect(detectRefrains(draft, business)).toEqual(expect.arrayContaining([{ phrase: 'the money was real', refs: ['1.3', '2.2', '3.4'], kind: 'REFRAIN' }]));
+    expect(detectRefrains(draft, business)).toEqual(expect.arrayContaining([{ phrase: 'the money was real', refs: ['1.3', '2.2', '3.4'], kind: 'REFRAIN', purpose: 'CLOSURE' }]));
     const all = checkScript(draft, business, { target: ONE_MINUTE });
     expect(refs(all, 'RETOLD_CONTENT')).not.toContain('2.2');
     expect(refs(all, 'RETOLD_CONTENT')).not.toContain('3.4');
@@ -123,7 +123,9 @@ describe('low-value exposition (science)', () => {
   it('flags facts along for the ride, and leaves the story’s facts alone', () => {
     const fs = craft(science, draft()).findings;
     expect(refs(fs, 'PASSENGER_FACT')).toEqual(['1.2', '2.2']);
-    expect(of(fs, 'PASSENGER_FACT')[1]!.detail).toBe('Block 2.2 may be a passenger: rests only on background claims; names Pellman and never again; cites Pellman for its own sake; has nobody in it; only orients — cut it, or tie it to the people and the question');
+    expect(of(fs, 'PASSENGER_FACT')[1]!.detail).toBe(
+      'Block 2.2 may be a passenger: nobody in it, no story beat, not a key claim or the question, no cause and effect, no open question, and no later section builds on it; it rests only on background claims; it names Pellman and never again; it cites Pellman for its own sake — would the viewer miss it? A candidate, not a deletion: cut it, or tie it to the people and the question',
+    );
   });
 
   it('flags authorities named once only to be cited, and blocks that load several new names', () => {
@@ -365,7 +367,7 @@ describe('a callback (science)', () => {
   it('recognises a phrase that returns at the ending as a callback: protected, and not a retelling', () => {
     const draft = bookended();
     const callbacks = detectRefrains(draft, science).filter((r) => r.kind === 'CALLBACK');
-    expect(callbacks).toEqual([{ phrase: 'climbed the same hundred steps to the dome', refs: ['1.1', '2.2'], kind: 'CALLBACK' }]);
+    expect(callbacks).toEqual([{ phrase: 'climbed the same hundred steps to the dome', refs: ['1.1', '2.2'], kind: 'CALLBACK', purpose: 'CLOSURE' }]);
     expect(refs(craft(science, draft).findings, 'RETOLD_CONTENT')).toEqual([]);
     const protect = protectedBlocks(draft, science, callbacks);
     expect(protect.get('1.1')).toBe('a callback ("climbed the same hundred steps to the dome")');
@@ -382,6 +384,113 @@ describe('a callback (science)', () => {
     expect(of(craft(science, cut, ONE_MINUTE, draft).findings, 'REFRAIN_LOST').map((f) => f.detail)).toEqual([
       'The callback "climbed the same hundred steps to the dome" (1.1, 2.2 in the previous version) is said only once now (1.1): repetition that pays off is not redundancy',
     ]);
+  });
+});
+
+// ── Callbacks, as the engine defines them (business, history, science) ───────
+
+const collapse = syntheticScope({
+  question: 'Why did it all fall apart?',
+  claims: [
+    { key: 'V1', statement: 'Vantor grew to four thousand employees by 2015.', importance: 'KEY' },
+    { key: 'V2', statement: 'Historians disagree about what caused the collapse.', verdict: 'DISPUTED', importance: 'KEY' },
+    { key: 'V3', statement: 'Dr. Ruth Smith studied the company accounts.', importance: 'SUPPORTING' },
+    { key: 'V4', statement: 'Vantor collapsed in 2019.', importance: 'KEY' },
+  ],
+  cast: [{ id: 'R1', name: 'Ruth Smith', kind: 'REAL_PERSON', description: 'Economist who studied the accounts.', claimKeys: ['V3'] }],
+  sequences: [
+    { title: 'The rise', beats: [{ id: '1.1', basis: 'DOCUMENTED', function: 'COLD_OPEN', claimKeys: ['V1'] }, { id: '1.2', basis: 'UNCERTAIN', function: 'CONFLICT', claimKeys: ['V2'] }] },
+    { title: 'The accounts', beats: [{ id: '2.1', basis: 'DOCUMENTED', function: 'INVESTIGATION', claimKeys: ['V3'], castIds: ['R1'] }] },
+    { title: 'The fall', beats: [{ id: '3.1', basis: 'DOCUMENTED', function: 'INVESTIGATION', claimKeys: ['V3'], castIds: ['R1'] }, { id: '3.2', basis: 'UNCERTAIN', function: 'CONFLICT', claimKeys: ['V2'] }, { id: '3.3', basis: 'DOCUMENTED', function: 'CONSEQUENCE', claimKeys: ['V4'] }] },
+  ],
+});
+
+describe('callbacks, as the engine defines them', () => {
+  const film = () =>
+    syntheticDraft(collapse, [
+      [
+        { text: 'Why did it all fall apart?', infoClass: 'FRAMING', extra: { centralQuestion: 'POSED' } },
+        { text: 'The company appears unstoppable.', infoClass: 'DOCUMENTED', beatIds: ['1.1'], claimKeys: ['V1'] },
+        { text: 'Historians disagree about exactly what happened.', infoClass: 'UNCERTAIN', beatIds: ['1.2'], claimKeys: ['V2'] },
+      ],
+      [{ text: 'Dr. Smith explains the discovery.', infoClass: 'DOCUMENTED', beatIds: ['2.1'], claimKeys: ['V3'] }],
+      [
+        { text: 'Dr. Smith explains the later experiment.', infoClass: 'DOCUMENTED', beatIds: ['3.1'], claimKeys: ['V3'] },
+        { text: 'Historians disagree about the details.', infoClass: 'UNCERTAIN', beatIds: ['3.2'], claimKeys: ['V2'] },
+        { text: 'The same numbers that once made the company look invincible now expose why it collapsed.', infoClass: 'DOCUMENTED', beatIds: ['3.3'], claimKeys: ['V4'], extra: { centralQuestion: 'ANSWERED' } },
+      ],
+    ]);
+
+  it('counts a later passage that recalls an earlier idea to reverse it — not a repeated hedge, not a recurring person', () => {
+    const found = detectRefrains(film(), collapse).filter((r) => r.kind !== 'ESCALATION');
+    expect(found).toEqual([{ phrase: 'company', refs: ['1.2', '3.3'], kind: 'CALLBACK', purpose: 'REVERSAL', recall: true }]);
+    // The reversal is protected from cuts; the hedge and the person are not.
+    const protect = protectedBlocks(film(), collapse, found);
+    expect(protect.get('1.2')).toBe('a callback ("company")');
+    expect(protect.has('3.2')).toBe(false);
+  });
+
+  it('does not take a recurring term for a callback', () => {
+    const ledger = syntheticDraft(collapse, [
+      [
+        { text: 'Why did it all fall apart?', infoClass: 'FRAMING', extra: { centralQuestion: 'POSED' } },
+        { text: 'The quarterly ledger records every sale.', infoClass: 'DOCUMENTED', beatIds: ['1.1'], claimKeys: ['V1'] },
+      ],
+      [{ text: 'The quarterly ledger records the first loss.', infoClass: 'DOCUMENTED', beatIds: ['2.1'], claimKeys: ['V3'] }],
+      [{ text: 'In 2019 the quarterly ledger records nothing at all.', infoClass: 'DOCUMENTED', beatIds: ['3.3'], claimKeys: ['V4'], extra: { centralQuestion: 'ANSWERED' } }],
+    ]);
+    expect(detectRefrains(ledger, collapse).filter((r) => r.kind === 'CALLBACK')).toEqual([]);
+  });
+
+  it('keeps a purposeful return out of the retellings, and still flags a return that only says it again', () => {
+    // The ending recalls the opening briefly and says something new: good repetition.
+    expect(refs(craft(collapse, film()).findings, 'RETOLD_CONTENT')).toEqual([]);
+  });
+});
+
+// ── Passenger candidates: what the viewer would miss (science) ───────────────
+
+const lake = syntheticScope({
+  question: 'Why did the lake turn red?',
+  claims: [
+    { key: 'L1', statement: 'The lake turned red in the summer of 1962.', importance: 'KEY' },
+    { key: 'L2', statement: 'Scientists disagree whether algae or iron caused the colour.', verdict: 'DISPUTED', importance: 'KEY' },
+    { key: 'L3', statement: 'The lake is 14 metres deep at its centre.', importance: 'BACKGROUND' },
+    { key: 'L4', statement: 'Iron levels in the lake were three times normal in 1962 after the mine upstream reopened.', importance: 'SUPPORTING' },
+  ],
+  sequences: [
+    { title: 'The colour', beats: [{ id: '1.1', basis: 'DOCUMENTED', function: 'COLD_OPEN', claimKeys: ['L1'] }, { id: '1.2', basis: 'DOCUMENTED', claimKeys: ['L3'] }] },
+    { title: 'The explanations', beats: [{ id: '2.1', basis: 'UNCERTAIN', function: 'INVESTIGATION', claimKeys: ['L2'] }, { id: '2.2', basis: 'DOCUMENTED', claimKeys: ['L4', 'L3'] }] },
+  ],
+});
+
+describe('passenger candidates (science)', () => {
+  const draft = (later: string, claims = ['L4']) =>
+    syntheticDraft(lake, [
+      [
+        { text: 'In the summer of 1962 the lake turned red.', infoClass: 'DOCUMENTED', beatIds: ['1.1'], claimKeys: ['L1'], extra: { centralQuestion: 'POSED' } },
+        { text: 'The lake is 14 metres deep at its centre.', infoClass: 'DOCUMENTED', beatIds: ['1.2'], claimKeys: ['L3'] },
+      ],
+      [
+        { text: 'Scientists still disagree: algae, or iron.', infoClass: 'UNCERTAIN', beatIds: ['2.1'], claimKeys: ['L2'] },
+        { text: later, infoClass: 'DOCUMENTED', beatIds: ['2.2'], claimKeys: claims, extra: { centralQuestion: 'ANSWERED' } },
+      ],
+    ]);
+
+  it('flags a fact that gives the viewer nothing the story needs — and not one a later section builds on', () => {
+    const alone = craft(lake, draft('Iron levels were three times normal that year, because the mine upstream had reopened.')).findings;
+    expect(refs(alone, 'PASSENGER_FACT')).toEqual(['1.2']);
+    expect(of(alone, 'PASSENGER_FACT')[0]!.detail).toMatch(/^Block 1\.2 may be a passenger: nobody in it, no story beat, not a key claim or the question, no cause and effect, no open question, and no later section builds on it; it rests only on background claims — would the viewer miss it\?/);
+    // The depth matters once the explanation uses it: no longer a passenger.
+    const used = craft(lake, draft('At 14 metres, the iron from the reopened mine settled in the deepest water.', ['L4', 'L3'])).findings;
+    expect(refs(used, 'PASSENGER_FACT')).toEqual([]);
+    expect(dependentsOf(draft('At 14 metres, the iron from the reopened mine settled in the deepest water.', ['L4', 'L3'])).get('1.2')).toEqual(['2.2']);
+  });
+
+  it('never flags a block for an open question, cause and effect, or a person', () => {
+    const fs = craft(lake, draft('Iron levels were three times normal that year, because the mine upstream had reopened.')).findings;
+    expect(refs(fs, 'PASSENGER_FACT')).not.toContain('2.1');
+    expect(refs(fs, 'PASSENGER_FACT')).not.toContain('2.2');
   });
 });
 
@@ -410,11 +519,15 @@ describe('deliberate escalation and the writer’s own account', () => {
 });
 
 describe('the rules are generic', () => {
-  it('name no documentary, person, place, date or claim', () => {
+  it('name no documentary, person, place, date, claim, section or block — in any of the quality modules', () => {
     const here = dirname(fileURLToPath(import.meta.url));
-    const source = readFileSync(join(here, 'craft.ts'), 'utf8');
-    expect(source).not.toMatch(/tulip|bulb|guilder|haarlem|amsterdam|thijs|mackay|semper|florist|1636|1637/i);
-    expect(source).not.toMatch(/\bC\d{3}\b/);
-    expect(source).not.toMatch(/['"`]\d+\.\d+['"`]/);
+    for (const file of ['craft.ts', 'evidence.ts', 'review.ts', 'performance.ts', 'wording.ts']) {
+      const source = readFileSync(join(here, file), 'utf8');
+      expect([file, /tulip|bulb|guilder|haarlem|amsterdam|alkmaar|thijs|mackay|semper|florist|goldgar|cuyck|orphan chamber|1636|1637/i.exec(source)?.[0] ?? null]).toEqual([file, null]);
+      expect([file, /\bC\d{3}\b/.exec(source)?.[0] ?? null]).toEqual([file, null]);
+      // No section or block singled out ("7", "3.4"), no phrase of a particular script.
+      expect([file, /(?:section|sequence|ref|key)\s*===?\s*['"`]?\d/.exec(source)?.[0] ?? null]).toEqual([file, null]);
+      expect([file, /['"`]\d+\.\d+['"`]/.exec(source)?.[0] ?? null]).toEqual([file, null]);
+    }
   });
 });

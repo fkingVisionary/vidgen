@@ -1,5 +1,6 @@
 import type { ScriptTiming } from '@docengine/core';
-import { sentences, wordTokens } from '@docengine/story/shared';
+import { extractFigures, sentences, wordTokens } from '@docengine/story/shared';
+import { isHedgePhrase, stem } from './wording.ts';
 import { allBlocks, type DraftBlock, type DraftSection, type ScriptDraft } from './draft.ts';
 import type { ScriptFinding } from './rules.ts';
 import { fictionalCast, realCast, type ScriptScope } from './scope.ts';
@@ -52,7 +53,7 @@ export function humanIn(b: DraftBlock, scope: ScriptScope): boolean {
 const narrationOf = (draft: ScriptDraft) => allBlocks(draft).filter((b) => !b.speakerId);
 
 /** Words that occur in a large share of the narration: the film's subject, not evidence of repetition. */
-function topicWords(blocks: readonly DraftBlock[]): Set<string> {
+export function topicWords(blocks: readonly DraftBlock[]): Set<string> {
   const df = new Map<string, number>();
   for (const b of blocks) for (const w of new Set(contentWords(b.text))) df.set(w, (df.get(w) ?? 0) + 1);
   const limit = Math.max(3, blocks.length * 0.3);
@@ -90,7 +91,7 @@ const ABSTRACT_SUBJECTS = new Set('research evidence history legend tradition ru
 interface NameRun {
   /** Its words, lower-case. */
   words: string[];
-  /** As written ("Anne Goldgar"). */
+  /** As written ("Ada Brennan"). */
   form: string;
   /** Its span in the sentence's tokens. */
   start: number;
@@ -209,69 +210,120 @@ const castWords = (scope: ScriptScope) => new Set([...scope.cast.values()].flatM
 
 // ── Deliberate repetition ────────────────────────────────────────────────────
 
+/** What a return to earlier material does for the story. */
+export type RepetitionPurpose = 'PAYOFF' | 'REVERSAL' | 'RESOLUTION' | 'CLOSURE' | 'ESCALATION';
+
 export interface Refrain {
-  /** The repeated words, normalized ("not one"). */
+  /** The repeated words, normalized ("not one"); for a recall, the words the two blocks share. */
   phrase: string;
-  /** Blocks it occurs in. */
+  /** Blocks it occurs in, earliest first. */
   refs: string[];
-  /** REFRAIN: a short line said again. CALLBACK: an echo at a structural point (an opening and an ending, section edges). ESCALATION: a run of short sentences built the same way. */
+  /** REFRAIN: a short line said again. CALLBACK: a later passage that returns to an earlier one with a purpose. ESCALATION: a run of short sentences built the same way. */
   kind: 'REFRAIN' | 'CALLBACK' | 'ESCALATION';
+  purpose: RepetitionPurpose;
+  /** A callback that recalls an earlier idea without repeating its words ("the same numbers that once…"). */
+  recall?: boolean;
 }
 
 /** A sentence short enough to carry a refrain. */
 const SHORT = 7;
 
-/**
- * Repetition that is a device, not a fault: the same short line said again
- * (a refrain), a phrase that returns at a structural point — the opening and
- * the ending, the edges of sections — (a callback), and runs of short
- * sentences built the same way ("Not one. Not ten. Not a hundred.") — an
- * escalation. The redundancy and repetition checks leave these alone, and a
- * refinement must keep them.
- */
-export function detectRefrains(draft: ScriptDraft, scope: ScriptScope): Refrain[] {
-  const blocks = allBlocks(draft);
-  const sectionIndex = new Map<string, number>();
+/** Words that turn a return into a reversal ("once… now", "no longer", "turned out"). */
+const CONTRAST = /\b(no longer|once|now|instead|turned out|after all|in the end|at last|finally|but|yet)\b/i;
+/** Words that recall something earlier in the film. */
+const RECALL = /\b(the same|that once|once (?:made|seemed|looked|was|were|had|stood|promised)|remember|back (?:at|to|in) (?:the|that)|at the (?:start|beginning)|where (?:it|this|we|the story) (?:all )?(?:began|started)|no longer|full circle|now (?:exposes?|explains?|shows?|tells?|looks?|seems?|reveals?|reads?))\b/i;
+
+/** The beats that carry the story forward (not orientation or transition). */
+const STORY_FUNCTIONS = new Set(['COLD_OPEN', 'STAKES', 'CONFLICT', 'ESCALATION', 'TURN', 'REVEAL', 'CONSEQUENCE', 'INVESTIGATION']);
+
+interface Places {
+  section: Map<string, number>;
+  edge: Set<string>;
+  last: number;
+  byKey: Map<string, DraftBlock>;
+}
+
+function places(draft: ScriptDraft): Places {
+  const section = new Map<string, number>();
   const edge = new Set<string>();
   draft.sections.forEach((s, i) => {
-    for (const b of s.blocks) sectionIndex.set(b.key, i);
-    if (s.blocks[0]) edge.add(s.blocks[0].key);
+    for (const b of s.blocks) section.set(b.key, i);
     if (s.blocks.at(-1)) edge.add(s.blocks.at(-1)!.key);
   });
-  const lastSection = draft.sections.length - 1;
-  const names = castWords(scope);
+  return { section, edge, last: draft.sections.length - 1, byKey: new Map(allBlocks(draft).map((b) => [b.key, b])) };
+}
+
+/** What a later block does when it returns to earlier material: from where it stands, its beats and its words. */
+function purposeOf(b: DraftBlock, at: Places, scope: ScriptScope): RepetitionPurpose {
+  const functions = b.beatIds.map((id) => scope.beats.get(id)?.beat.function);
+  const contrast = CONTRAST.test(b.text);
+  if (b.centralQuestion === 'ANSWERED' || at.section.get(b.key) === at.last) return contrast ? 'REVERSAL' : 'CLOSURE';
+  if (functions.includes('TURN') || functions.includes('REVEAL')) return 'REVERSAL';
+  if (functions.includes('CONSEQUENCE')) return 'RESOLUTION';
+  return contrast ? 'REVERSAL' : 'PAYOFF';
+}
+
+/** Is the later block placed, or worded, to make a return mean something: a payoff point, a bookend, or words that recall? */
+function hasPurpose(later: DraftBlock, earlier: DraftBlock, at: Places, scope: ScriptScope): boolean {
+  const functions = later.beatIds.map((id) => scope.beats.get(id)?.beat.function);
+  const payoffPoint = later.centralQuestion === 'ANSWERED' || at.section.get(later.key) === at.last || at.edge.has(later.key) || functions.some((f) => f === 'TURN' || f === 'REVEAL' || f === 'CONSEQUENCE');
+  const bookend = at.section.get(earlier.key) === 0;
+  return payoffPoint || bookend || RECALL.test(later.text) || CONTRAST.test(later.text);
+}
+
+/**
+ * Repetition that is a device, not a fault. A refrain: the same short line
+ * said again in a later section. A callback: a later passage that returns to
+ * an earlier one with a purpose — payoff, reversal, resolution, closure —
+ * either by echoing a distinctive phrase at a point that makes it mean
+ * something (a payoff point, a bookend, words that recall) or by recalling
+ * the earlier idea in new words ("the same numbers that once made it look
+ * unbeatable now…"). An escalation: short sentences in a row built the same
+ * way. Not a callback: uncertainty language ("historians disagree"), a
+ * recurring person, source, place or term, a phrase within one section, or an
+ * echo whose blocks otherwise retell each other (a recap). The redundancy and
+ * repetition checks leave devices alone, and a refinement must keep them.
+ */
+export function detectRefrains(draft: ScriptDraft, scope: ScriptScope): Refrain[] {
+  const blocks = allBlocks(draft).filter((b) => !b.speakerId || b.speechKind !== 'RECORDED_QUOTE');
+  const at = places(draft);
+  const names = new Set([...castWords(scope), ...namesInScript(draft).words.keys()]);
   const meaningful = (tokens: readonly string[]) => tokens.some((t) => t.length >= 4 && !FUNCTION_WORDS.has(t) && !names.has(t) && !/^\d+$/.test(t));
   const out: Refrain[] = [];
 
-  // Short lines said again.
+  // Refrains: a short line said again, in a later section.
   const lines = new Map<string, string[]>();
   for (const b of blocks) {
     for (const s of sentences(b.text)) {
       const t = wordTokens(s);
-      if (t.length === 0 || t.length > SHORT || !meaningful(t)) continue;
+      if (t.length === 0 || t.length > SHORT || !meaningful(t) || isHedgePhrase(s)) continue;
       const k = t.join(' ');
       const refs = lines.get(k) ?? [];
       if (!refs.includes(b.key)) refs.push(b.key);
       lines.set(k, refs);
     }
   }
-  for (const [phrase, refs] of lines) if (refs.length >= 2) out.push({ phrase, refs, kind: 'REFRAIN' });
+  for (const [phrase, refs] of lines) {
+    if (new Set(refs.map((r) => at.section.get(r))).size < 2) continue;
+    out.push({ phrase, refs, kind: 'REFRAIN', purpose: purposeOf(at.byKey.get(refs.at(-1)!)!, at, scope) });
+  }
 
-  // Callbacks: a distinctive phrase — three to six words, two content words or
-  // more, not only the film's subject words — that returns at a structural
-  // point (the opening and the ending, the edges of sections) or echoes a
-  // short line, in blocks that do not otherwise retell each other: an ending
-  // that repeats the opening's facts is a recap, not a callback.
+  // Echoes: a distinctive phrase — three to six words, two content words or more once names are set aside, not uncertainty language.
   const topic = topicWords(narrationOf(draft));
+  const content = (g: readonly string[]) => g.filter((w) => w.length >= 3 && !FUNCTION_WORDS.has(w) && !/^\d+$/.test(w) && !names.has(w));
   const grams = new Map<string, { refs: string[]; inShort: boolean }>();
+  const pairs = new Map<string, Set<string>>();
   for (const b of blocks) {
     for (const s of sentences(b.text)) {
       const t = wordTokens(s);
+      for (let i = 0; i + 1 < t.length; i++) {
+        if (!FUNCTION_WORDS.has(t[i]!) && !FUNCTION_WORDS.has(t[i + 1]!)) pairs.set(`${t[i]} ${t[i + 1]}`, (pairs.get(`${t[i]} ${t[i + 1]}`) ?? new Set()).add(b.key));
+      }
       for (let n = 3; n <= 6; n++) {
         for (let i = 0; i + n <= t.length; i++) {
           const g = t.slice(i, i + n);
-          const content = g.filter((w) => w.length >= 3 && !FUNCTION_WORDS.has(w) && !/^\d+$/.test(w));
-          if (content.length < 2 || content.every((w) => topic.has(w) || names.has(w)) || !meaningful(g)) continue;
+          const c = content(g);
+          if (c.length < 2 || c.every((w) => topic.has(w)) || !meaningful(g)) continue;
           const k = g.join(' ');
           const e = grams.get(k) ?? { refs: [], inShort: false };
           if (!e.refs.includes(b.key)) e.refs.push(b.key);
@@ -281,23 +333,31 @@ export function detectRefrains(draft: ScriptDraft, scope: ScriptScope): Refrain[
       }
     }
   }
-  const structural: Refrain[] = [];
+  /** A recurring term: the phrase, or two content words of it side by side, in three blocks or more. */
+  const term = (phrase: string, refs: readonly string[]) => {
+    if (refs.length >= 3) return true;
+    const t = phrase.split(' ');
+    for (let i = 0; i + 1 < t.length; i++) if ((pairs.get(`${t[i]} ${t[i + 1]}`)?.size ?? 0) >= 3) return true;
+    return false;
+  };
+  const structural: { phrase: string; refs: string[] }[] = [];
   for (const [phrase, e] of grams) {
-    if (e.refs.length < 2 || out.some((r) => r.phrase.includes(phrase))) continue;
-    const sections = e.refs.map((r) => sectionIndex.get(r) ?? -1);
-    const bookend = sections.includes(0) && sections.includes(lastSection) && lastSection > 0;
-    const atEdges = e.refs.filter((r) => edge.has(r)).length >= 2 && new Set(sections).size >= 2;
-    if (e.inShort || bookend || atEdges) structural.push({ phrase, refs: e.refs, kind: 'CALLBACK' });
+    if (e.refs.length < 2 || out.some((r) => r.phrase.includes(phrase)) || isHedgePhrase(phrase) || term(phrase, e.refs)) continue;
+    const sections = e.refs.map((r) => at.section.get(r) ?? -1);
+    if (new Set(sections).size < 2) continue;
+    const first = at.byKey.get(e.refs[0]!)!;
+    const later = at.byKey.get(e.refs.at(-1)!)!;
+    if (e.inShort || hasPurpose(later, first, at, scope)) structural.push({ phrase, refs: e.refs });
   }
   // One phrase per echo: overlapping phrases in the same blocks merge into the longest stretch they all share.
   const texts = new Map(blocks.map((b) => [b.key, ` ${wordTokens(b.text).join(' ')} `]));
-  const groups = new Map<string, Refrain[]>();
+  const groups = new Map<string, { phrase: string; refs: string[] }[]>();
   for (const c of structural) groups.set(c.refs.join(','), [...(groups.get(c.refs.join(',')) ?? []), c]);
-  const echoes: Refrain[] = [];
+  const echoes: { phrase: string; refs: string[] }[] = [];
   for (const group of groups.values()) {
     const refs = group[0]!.refs;
     const merged = new Set<string>();
-    for (const t of sentences(blocks.find((b) => b.key === refs[0])!.text).map((x) => wordTokens(x))) {
+    for (const t of sentences(at.byKey.get(refs[0]!)!.text).map((x) => wordTokens(x))) {
       const covered = t.map(() => false);
       for (const c of group) {
         const g = c.phrase.split(' ');
@@ -312,11 +372,10 @@ export function detectRefrains(draft: ScriptDraft, scope: ScriptScope): Refrain[
       }
     }
     const phrases = [...merged].filter((m) => refs.every((r) => texts.get(r)!.includes(` ${m} `)));
-    for (const phrase of phrases.length ? phrases : group.map((c) => c.phrase)) echoes.push({ phrase, refs, kind: 'CALLBACK' });
+    for (const phrase of phrases.length ? phrases : group.map((c) => c.phrase)) echoes.push({ phrase, refs });
   }
   // Blocks that share the echo and little else: a callback. Blocks that share much more, a whole sentence, or the
   // wording of a claim they both cite: a retelling.
-  const byKey = new Map(blocks.map((b) => [b.key, b]));
   const contentOf = new Map(blocks.map((b) => [b.key, [...new Set(contentWords(b.text).filter((w) => !topic.has(w) && !names.has(w)))]]));
   const retold = (refs: readonly string[], phrase: string) => {
     const drop = new Set(phrase.split(' '));
@@ -327,7 +386,7 @@ export function detectRefrains(draft: ScriptDraft, scope: ScriptScope): Refrain[
         const y = new Set(contentOf.get(refs[j]!)!.filter((w) => !drop.has(w)));
         const small = Math.min(x.length, y.size);
         if (small >= 3 && x.filter((w) => y.has(w)).length / small >= 0.45) return true;
-        const shared = byKey.get(refs[i]!)!.claimKeys.filter((k) => byKey.get(refs[j]!)!.claimKeys.includes(k));
+        const shared = at.byKey.get(refs[i]!)!.claimKeys.filter((k) => at.byKey.get(refs[j]!)!.claimKeys.includes(k));
         const factWords = new Set(shared.flatMap((k) => contentWords(scope.evidence.claim(k)?.statement ?? '')));
         if (contentWords(phrase).filter((w) => factWords.has(w)).length >= 2) return true;
       }
@@ -337,7 +396,24 @@ export function detectRefrains(draft: ScriptDraft, scope: ScriptScope): Refrain[
   echoes.sort((x, y) => y.phrase.split(' ').length - x.phrase.split(' ').length);
   for (const c of echoes) {
     if (retold(c.refs, c.phrase)) continue;
-    if (!out.some((r) => r.phrase.includes(c.phrase) && c.refs.every((x) => r.refs.includes(x)))) out.push(c);
+    if (!out.some((r) => r.phrase.includes(c.phrase) && c.refs.every((x) => r.refs.includes(x)))) out.push({ ...c, kind: 'CALLBACK', purpose: purposeOf(at.byKey.get(c.refs.at(-1)!)!, at, scope) });
+  }
+
+  // Recalls: a later block whose words recall an earlier idea, sharing its subject but saying something new about it.
+  const plainWords = (b: DraftBlock) => new Set(contentWords(b.text).filter((w) => !names.has(w) && !isHedgePhrase(w)));
+  for (const later of blocks) {
+    const ls = at.section.get(later.key) ?? 0;
+    if (ls === 0 || !RECALL.test(later.text) || out.some((r) => r.kind === 'CALLBACK' && r.refs.at(-1) === later.key)) continue;
+    const mine = plainWords(later);
+    let best: { b: DraftBlock; shared: string[] } | null = null;
+    for (const earlier of blocks) {
+      if ((at.section.get(earlier.key) ?? 0) >= ls) continue;
+      const theirs = plainWords(earlier);
+      const shared = [...mine].filter((w) => theirs.has(w));
+      if (shared.length && (!best || shared.length > best.shared.length)) best = { b: earlier, shared };
+    }
+    if (!best || mine.size === 0 || (mine.size - best.shared.length) / mine.size < 0.5) continue;
+    out.push({ phrase: best.shared.join(' '), refs: [best.b.key, later.key], kind: 'CALLBACK', purpose: purposeOf(later, at, scope), recall: true });
   }
 
   // Escalation: short sentences in a row that open the same way.
@@ -345,8 +421,8 @@ export function detectRefrains(draft: ScriptDraft, scope: ScriptScope): Refrain[
     const ss = sentences(b.text).map((s) => wordTokens(s));
     for (let i = 0; i + 1 < ss.length; i++) {
       const [x, y] = [ss[i]!, ss[i + 1]!];
-      if (x.length && y.length && x.length <= SHORT && y.length <= SHORT && x[0] === y[0]) {
-        if (!out.some((r) => r.kind === 'ESCALATION' && r.refs.includes(b.key))) out.push({ phrase: x[0]!, refs: [b.key], kind: 'ESCALATION' });
+      if (x.length && y.length && x.length <= SHORT && y.length <= SHORT && x[0] === y[0] && !isHedgePhrase(x.join(' '))) {
+        if (!out.some((r) => r.kind === 'ESCALATION' && r.refs.includes(b.key))) out.push({ phrase: x[0]!, refs: [b.key], kind: 'ESCALATION', purpose: 'ESCALATION' });
       }
     }
   }
@@ -356,7 +432,7 @@ export function detectRefrains(draft: ScriptDraft, scope: ScriptScope): Refrain[
 /** The text with refrain phrases taken out (so an echo does not count as a retelling). */
 function withoutRefrains(text: string, refrains: readonly Refrain[]): string {
   let t = ` ${wordTokens(text).join(' ')} `;
-  for (const r of refrains) if (r.kind !== 'ESCALATION') t = t.split(` ${r.phrase} `).join(' ');
+  for (const r of refrains) if (r.kind !== 'ESCALATION' && !r.recall) t = t.split(` ${r.phrase} `).join(' ');
   return t;
 }
 
@@ -387,8 +463,9 @@ export interface Retelling {
  * words (the film's subject words aside) already spoken, especially over the
  * same claims or beats. Deliberate echoes are taken out first.
  */
-export function retellings(draft: ScriptDraft, refrains: readonly Refrain[]): Retelling[] {
+export function retellings(draft: ScriptDraft, refrains: readonly Refrain[], scope?: ScriptScope): Retelling[] {
   const blocks = narrationOf(draft);
+  const at = places(draft);
   const topic = topicWords(blocks);
   const sectionOf = new Map<string, number>();
   for (const s of draft.sections) for (const b of s.blocks) sectionOf.set(b.key, s.sequence);
@@ -404,7 +481,9 @@ export function retellings(draft: ScriptDraft, refrains: readonly Refrain[]): Re
       const overlap = shared / mine.size;
       const a = blocks[j]!;
       const sharedEvidence = [...b.claimKeys.filter((k) => a.claimKeys.includes(k)), ...b.beatIds.filter((x) => a.beatIds.includes(x))];
-      const retold = overlap >= 0.6 || (overlap >= 0.45 && sharedEvidence.length > 0);
+      // A return with a purpose — a payoff point, a bookend, words that recall or reverse — that mostly says something new is good repetition.
+      const purposeful = scope !== undefined && overlap < 0.5 && (at.section.get(a.key) ?? 0) < (at.section.get(b.key) ?? 0) && hasPurpose(b, a, at, scope);
+      const retold = !purposeful && (overlap >= 0.6 || (overlap >= 0.45 && sharedEvidence.length > 0));
       if (retold && (!best || overlap > best.overlap)) best = { ref: b.key, of: a.key, overlap, sharedEvidence, crossSection: sectionOf.get(a.key) !== sectionOf.get(b.key) };
     }
     if (best) out.push(best);
@@ -412,8 +491,8 @@ export function retellings(draft: ScriptDraft, refrains: readonly Refrain[]): Re
   return out;
 }
 
-function redundancy(draft: ScriptDraft, refrains: readonly Refrain[], out: ScriptFinding[]): Retelling[] {
-  const told = retellings(draft, refrains);
+function redundancy(draft: ScriptDraft, scope: ScriptScope, refrains: readonly Refrain[], out: ScriptFinding[]): Retelling[] {
+  const told = retellings(draft, refrains, scope);
   const byRef = new Map(allBlocks(draft).map((b) => [b.key, b]));
   for (const r of told) {
     out.push({
@@ -460,15 +539,75 @@ function redundancy(draft: ScriptDraft, refrains: readonly Refrain[], out: Scrip
 
 // ── 2. Low-value exposition ──────────────────────────────────────────────────
 
+const CAUSAL = /\b(because|so that|which meant|that meant|meant that|led to|leading to|as a result|therefore|that is why|that's why|caused|forced|in order to|thanks to|due to)\b|(?:^|[,;:.]\s+)so\b/i;
+const OPEN_QUESTION = /\?|\b(nobody knows|no one knows|unknown|a mystery|the puzzle|how come)\b/i;
+
 /**
- * Facts along for the ride: a fact block that rests only on background
- * claims, names someone or something the film never mentions again, has
- * nobody in it, or only cites an authority — two of these and it is probably
- * a passenger. Also: authorities named once and only to be cited, and blocks
- * that load several new names at once.
+ * What later sections take from each block: a block whose claim, distinctive
+ * words (two or more, the film's subject words aside), names or figures come
+ * back in a later section is information the story builds on — not
+ * disposable, however minor it looks.
  */
-function exposition(draft: ScriptDraft, scope: ScriptScope, out: ScriptFinding[]): void {
+export function dependentsOf(draft: ScriptDraft): Map<string, string[]> {
+  const blocks = narrationOf(draft);
+  const topic = topicWords(blocks);
+  const sectionOf = new Map<string, number>();
+  draft.sections.forEach((s, i) => s.blocks.forEach((b) => sectionOf.set(b.key, i)));
   const names = namesInScript(draft);
+  const profile = blocks.map((b) => ({
+    b,
+    words: new Set(contentWords(b.text).filter((w) => !topic.has(w) && !isHedgePhrase(w)).map(stem)),
+    names: new Set((names.mentions.get(b.key) ?? []).flatMap((m) => m.words)),
+    figures: new Set(extractFigures(b.text)),
+  }));
+  const out = new Map<string, string[]>();
+  for (const x of profile) {
+    const later = profile.filter((y) => (sectionOf.get(y.b.key) ?? 0) > (sectionOf.get(x.b.key) ?? 0));
+    const users = later.filter(
+      (y) =>
+        y.b.claimKeys.some((k) => x.b.claimKeys.includes(k)) ||
+        [...x.words].filter((w) => y.words.has(w)).length >= 2 ||
+        [...x.names].some((w) => y.names.has(w)) ||
+        [...x.figures].some((f) => y.figures.has(f)),
+    );
+    out.set(x.b.key, users.map((y) => y.b.key));
+  }
+  return out;
+}
+
+/**
+ * What a factual block gives the viewer: a story beat, a key claim or the
+ * central question, people, cause and effect, an open question, something a
+ * later section builds on, or a deliberate repetition. A block that gives none
+ * of these is a passenger candidate: would the viewer miss it?
+ */
+export function contributions(b: DraftBlock, scope: ScriptScope, dependents: ReadonlyMap<string, string[]>, repetition: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  const functions = b.beatIds.map((id) => scope.beats.get(id)?.beat.function);
+  if (functions.some((f) => f && STORY_FUNCTIONS.has(f))) out.push('a story beat');
+  if (b.claimKeys.some((k) => scope.evidence.claim(k)?.importance === 'KEY')) out.push('a key claim');
+  const question = new Set(contentWords(scope.architecture.centralQuestion).map(stem));
+  if (contentWords(b.text).map(stem).filter((w) => question.has(w)).length >= 2) out.push('the central question');
+  if (humanIn(b, scope)) out.push('people');
+  if (CAUSAL.test(b.text)) out.push('cause and effect');
+  if (OPEN_QUESTION.test(b.text) || isHedgePhrase(b.text)) out.push('an open question');
+  if ((dependents.get(b.key) ?? []).length) out.push(`what ${dependents.get(b.key)!.slice(0, 3).join(', ')} build on`);
+  if (repetition.has(b.key)) out.push('a deliberate repetition');
+  return out;
+}
+
+/**
+ * Facts along for the ride: a factual block that gives the viewer nothing the
+ * story needs — no story beat, no key claim or central question, nobody in it,
+ * no cause and effect, no open question, nothing a later section builds on,
+ * no deliberate repetition — is a passenger candidate (flagged for the
+ * writer and the editor, never cut automatically). Also: authorities named
+ * once only to be cited, and blocks that load several new names at once.
+ */
+function exposition(draft: ScriptDraft, scope: ScriptScope, refrains: readonly Refrain[], out: ScriptFinding[]): void {
+  const names = namesInScript(draft);
+  const dependents = dependentsOf(draft);
+  const repetition = new Set(refrains.flatMap((r) => r.refs));
   const cast = castWords(scope);
   const once = (m: NameMention) => m.words.every((w) => (names.words.get(w)?.refs.length ?? 0) <= 1 && !cast.has(w));
   const firstHere = (m: NameMention, key: string) => m.words.every((w) => names.words.get(w)?.refs[0] === key) && !m.words.some((w) => cast.has(w));
@@ -483,21 +622,20 @@ function exposition(draft: ScriptDraft, scope: ScriptScope, out: ScriptFinding[]
     const fresh = unique(mentions.filter((m) => firstHere(m, b.key)).map((m) => m.form));
     if (fresh.length >= 3) out.push({ kind: 'NAME_LOAD', ref: b.key, detail: `Block ${b.key} introduces ${fresh.length} new names at once (${fresh.join(', ')}): the ear holds one at a time` });
 
-    if ((b.infoClass !== 'DOCUMENTED' && b.infoClass !== 'UNCERTAIN') || b.centralQuestion) continue;
+    // Passenger candidates: factual blocks that give the viewer nothing the story needs (flagged, never cut automatically).
+    if ((b.infoClass !== 'DOCUMENTED' && b.infoClass !== 'UNCERTAIN') || b.centralQuestion || b.speakerId) continue;
+    if (contributions(b, scope, dependents, repetition).length) continue;
     const importance = b.claimKeys.map((k) => scope.evidence.claim(k)?.importance);
-    // A block that carries a key claim is never a passenger.
-    if (importance.includes('KEY')) continue;
-    const reasons: string[] = [];
-    const background = importance.length > 0 && importance.every((i) => i === 'BACKGROUND');
-    if (background) reasons.push('rests only on background claims');
-    if (orphans.length) reasons.push(`names ${orphans.join(', ')} and never again`);
-    if (authorities.length) reasons.push(`cites ${authorities.join(', ')} for its own sake`);
-    if (!humanIn(b, scope)) reasons.push('has nobody in it');
-    const functions = b.beatIds.map((id) => scope.beats.get(id)?.beat.function);
-    if (functions.length && functions.every((f) => f === 'ORIENTATION' || f === 'TRANSITION')) reasons.push('only orients');
-    if (reasons.length >= 2 && (background || orphans.length > 0 || authorities.length > 0)) {
-      out.push({ kind: 'PASSENGER_FACT', ref: b.key, detail: `Block ${b.key} may be a passenger: ${reasons.join('; ')} — cut it, or tie it to the people and the question` });
-    }
+    const why = [
+      ...(importance.length > 0 && importance.every((i) => i === 'BACKGROUND') ? ['it rests only on background claims'] : []),
+      ...(orphans.length ? [`it names ${orphans.join(', ')} and never again`] : []),
+      ...(authorities.length ? [`it cites ${authorities.join(', ')} for its own sake`] : []),
+    ];
+    out.push({
+      kind: 'PASSENGER_FACT',
+      ref: b.key,
+      detail: `Block ${b.key} may be a passenger: nobody in it, no story beat, not a key claim or the question, no cause and effect, no open question, and no later section builds on it${why.length ? `; ${why.join('; ')}` : ''} — would the viewer miss it? A candidate, not a deletion: cut it, or tie it to the people and the question`,
+    });
   }
   const authorities = unique(chatter.map((c) => c.form));
   if (authorities.length >= 3) {
@@ -746,7 +884,7 @@ function evidenceCompleteness(draft: ScriptDraft, scope: ScriptScope, out: Scrip
 function refrainsLost(previous: ScriptDraft, draft: ScriptDraft, scope: ScriptScope, out: ScriptFinding[]): void {
   const now = allBlocks(draft).map((b) => ({ key: b.key, text: ` ${wordTokens(b.text).join(' ')} ` }));
   for (const r of detectRefrains(previous, scope)) {
-    if (r.kind === 'ESCALATION') continue;
+    if (r.kind === 'ESCALATION' || r.recall) continue;
     // It survives while a three-word part of it, two content words or more, still returns: a refinement may reword around it.
     const words = r.phrase.split(' ');
     const thirds = words.length > 3 ? words.slice(0, -2).map((_, i) => words.slice(i, i + 3).join(' ')).filter((p) => contentWords(p).length >= 2) : [];
@@ -827,6 +965,7 @@ const CUT_WEIGHT: Partial<Record<ScriptFinding['kind'], { score: number; why: st
 export function trimPlan(draft: ScriptDraft, timing: ScriptTiming, findings: readonly ScriptFinding[], protect: ReadonlyMap<string, string>, scope: ScriptScope): TrimPlan | null {
   if (timing.totalSec <= timing.maxSec) return null;
   const overSections = new Set(findings.filter((f) => f.kind === 'SECTION_OVER_BUDGET' || f.kind === 'ENDING_DRAG').map((f) => f.ref));
+  const dependents = dependentsOf(draft);
   const candidates: (TrimCandidate & { score: number })[] = [];
   for (const s of draft.sections) {
     for (const b of s.blocks) {
@@ -848,6 +987,11 @@ export function trimPlan(draft: ScriptDraft, timing: ScriptTiming, findings: rea
       if (importance.length && importance.every((i) => i === 'BACKGROUND')) {
         score += 1;
         reasons.push('background only');
+      }
+      // Information a later section builds on is not disposable: compress it, don't cut it.
+      if (score > 0 && (dependents.get(b.key) ?? []).length) {
+        score -= 1.5;
+        reasons.push(`${dependents.get(b.key)!.slice(0, 3).join(', ')} build on it — compress, don't cut`);
       }
       if (score > 0) candidates.push({ ref: b.key, sec: Math.round(b.estimatedDurationSec * 10) / 10, reasons, score });
     }
@@ -914,8 +1058,8 @@ export interface CraftOptions {
 export function craftFindings(draft: ScriptDraft, scope: ScriptScope, timing: ScriptTiming, opts: CraftOptions = {}): { findings: ScriptFinding[]; refrains: Refrain[] } {
   const out: ScriptFinding[] = [];
   const refrains = detectRefrains(draft, scope);
-  redundancy(draft, refrains, out);
-  exposition(draft, scope, out);
+  redundancy(draft, scope, refrains, out);
+  exposition(draft, scope, refrains, out);
   pacing(draft, timing, out);
   naturalness(draft, out);
   metaNarration(draft, out);

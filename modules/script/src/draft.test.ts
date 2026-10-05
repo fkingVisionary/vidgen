@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compareDrafts, diffBlocks, evidenceChanges, wordDiff } from './compare.ts';
-import { allBlocks, applyPatch, applyPerformance, mergePronunciations, sectionsFromWriter } from './draft.ts';
+import { allBlocks, applyPerformance, mergePronunciations, sectionsFromWriter } from './draft.ts';
 import type { WriterBlock } from './schemas.ts';
 import { fixtureDraft, fixtureScope } from './testing.ts';
 
@@ -32,35 +32,6 @@ describe('a draft from the writer', () => {
       'Block 2.1: beat 9.9 is not in the architecture; dropped',
       'The central question is answered in 5.5, which is not a block of the script; ignored',
     ]);
-  });
-});
-
-describe('a reviewer patch', () => {
-  it('edits, removes and inserts blocks it may change, renumbers, and says where every block went', () => {
-    const d = fixtureDraft(scope);
-    const notes: string[] = [];
-    const r = applyPatch(
-      d,
-      {
-        edits: [{ ref: '2.2', text: 'In April 1637 the courts declined to enforce the contracts.', infoClass: null, claimKeys: null, beatIds: null }],
-        removals: ['2.1'],
-        insertions: [{ after: '2.0', block: block('The courts had a choice to make.', { infoClass: 'FRAMING', beatIds: [], claimKeys: [] }) }],
-      },
-      scope,
-      new Set([2]),
-      'Fact checker',
-      notes,
-    );
-    expect(r.changed).toBe(3);
-    expect(r.draft.sections[1]!.blocks.map((b) => `${b.key} ${b.text}`)).toEqual(['2.1 The courts had a choice to make.', '2.2 In April 1637 the courts declined to enforce the contracts.']);
-    expect(r.keyMap.get('2.1')).toBeNull();
-    expect(r.keyMap.get('2.2')).toBe('2.2');
-    // Sections outside the allowed set are not touched.
-    const outside = applyPatch(d, { edits: [{ ref: '1.2', text: 'Changed.', infoClass: null, claimKeys: null, beatIds: null }], removals: [], insertions: [] }, scope, new Set([2]), 'Script editor', notes);
-    expect(outside.changed).toBe(0);
-    expect(notes).toContain('Script editor: edit of 1.2 skipped (no such block it may change)');
-    // The original draft is unchanged.
-    expect(d.sections[1]!.blocks.map((b) => b.key)).toEqual(['2.1', '2.2']);
   });
 });
 

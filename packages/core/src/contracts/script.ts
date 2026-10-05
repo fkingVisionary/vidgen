@@ -10,7 +10,10 @@ import {
   PRESENTATIONS,
   PRONUNCIATION_CONFIDENCES,
   SCRIPT_BLOCK_CLASSES,
+  SCRIPT_CHANGE_STATUSES,
+  SCRIPT_CHANGE_TYPES,
   SCRIPT_ORIGINS,
+  SCRIPT_REVIEWERS,
   SCRIPT_SCORES,
   SPEECH_KINDS,
   VISUAL_INTENTS,
@@ -174,6 +177,37 @@ export const ScriptAssessmentItem = z.object({
 });
 export type ScriptAssessmentItem = z.infer<typeof ScriptAssessmentItem>;
 
+/**
+ * One change a reviewer proposed during a run — the script editor, the fact
+ * checker, or the performance pass — and what became of it. Each change is
+ * judged on its own: tried on a copy of the script, kept if it breaks no
+ * invariant (evidence, classes, claim links, fiction and real-person
+ * boundaries, quotations, uncertainty, the architecture, the runtime
+ * maximum), rejected with the reason if it does, skipped if it cannot apply.
+ */
+export const ScriptReviewChange = z.object({
+  /** "E3": the script editor's third change; "F1": the fact checker's first; "P2": a performance mark. */
+  id: z.string(),
+  reviewer: z.enum(SCRIPT_REVIEWERS),
+  type: z.enum(SCRIPT_CHANGE_TYPES),
+  /** The section it is in, when there is one. */
+  section: z.number().int().nullable(),
+  /** The block as the reviewer saw it ("3.4"; for an insertion, the block it follows). */
+  ref: z.string().nullable(),
+  /** Where the block is in the saved version (null when it was removed, or the change was not kept). */
+  savedRef: z.string().nullable(),
+  originalText: z.string().nullable(),
+  proposedText: z.string().nullable(),
+  /** The reviewer's reason, in its words. */
+  reason: z.string(),
+  status: z.enum(SCRIPT_CHANGE_STATUSES),
+  /** The rules it touched: findings it resolved, or the ones that rejected it. */
+  rulesImpacted: z.array(z.string()),
+  /** Why it was rejected or skipped; null when kept. */
+  rejectionReason: z.string().nullable(),
+});
+export type ScriptReviewChange = z.infer<typeof ScriptReviewChange>;
+
 /** Script.content: everything about a version that is not a section or a block. */
 export const ScriptContent = z.object({
   engineVersion: z.literal(1),
@@ -197,6 +231,8 @@ export const ScriptContent = z.object({
   /** The fact checker's issues (evidence). */
   factCheck: z.object({ verdict: z.string(), issues: z.array(ScriptIssue) }).nullable(),
   provenance: ScriptProvenance,
+  /** Every change the reviewers proposed in the run that made this version, and what became of each (versions before granular review have none). */
+  reviewChanges: z.array(ScriptReviewChange).optional(),
 });
 export type ScriptContent = z.infer<typeof ScriptContent>;
 

@@ -56,7 +56,7 @@ describe('script prompts', () => {
   });
 
   it('teach the story economy the checks enforce — to the writer, a rewrite, the refinement and the script editor', () => {
-    const rules = ['STORY ECONOMY', 'Say it once.', 'is a passenger', 'Introduce a real person by what they do', 'At most one line about the film itself', 'rests on a claim about them', 'Speech, not page', 'Deliberate repetition is not redundancy'];
+    const rules = ['STORY ECONOMY', 'Say it once.', 'is a passenger candidate', 'a minor-looking fact a later section relies on is not disposable', 'Introduce a real person by what they do', 'At most one line about the film itself', 'rests on a claim about them', 'Speech, not page', 'Repeat with a purpose, never without', 'A repeated hedge ("historians disagree"), a recurring name or a recurring term is not a callback'];
     for (const name of ['writer', 'rewrite', 'refine', 'editor'] as const) for (const rule of rules) expect([name, rule, prompts[name].includes(rule)]).toEqual([name, rule, true]);
     // Runtime: the weak material goes first, nothing protected goes, and nobody estimates length — it is measured.
     expect(prompts.refine).toContain('Make those cuts first: they cost the story nothing');
@@ -65,7 +65,23 @@ describe('script prompts', () => {
     expect(prompts.writer).toContain('Do not state the word count or the runtime: the system measures them.');
     expect(prompts.editor).toContain('WHEN IT RUNS LONG — only when the prompt gives a cut plan');
     expect(prompts.factCheck).toContain('Start with what the automated rules flag about evidence: PERSON_WITHOUT_EVIDENCE');
-    expect(prompts.performance).toContain('Pauses cost time');
+    expect(prompts.performance).toContain('Pauses and slower delivery cost time, and the prompt gives your budget');
+    expect(prompts.performance).toContain('Never speed delivery up to make room.');
+  });
+
+  it('hold every reviewer change to the invariants, one change at a time, evidence before prose', () => {
+    for (const name of ['editor', 'factCheck'] as const) {
+      expect(prompts[name]).toContain('THE INVARIANTS — no change may weaken them, however much better it reads');
+      expect(prompts[name]).toContain('Prefer slightly weaker prose with correct evidence over better prose that blurs the evidence.');
+      expect(prompts[name]).toContain('Every change carries its reason, in one sentence.');
+      expect(prompts[name]).toContain('Each change is judged on its own');
+    }
+    expect(prompts.factCheck).toContain('do not undo an accepted change unless it broke the evidence');
+    expect(prompts.refine).toContain('Prefer slightly weaker prose with correct evidence over better prose that blurs the evidence.');
+    for (const name of ['writer', 'refine', 'editor', 'factCheck'] as const) {
+      expect(prompts[name]).toContain('Probability words ("probably", "most likely", "what probably happened") belong to PROBABLE claims only');
+      expect(prompts[name]).toContain('what a real person did, said or owned rests on a claim about them that the block cites');
+    }
   });
 
   it('give the script editor thirteen yes-is-good questions', () => {

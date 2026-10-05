@@ -11,7 +11,7 @@ import { ScriptEditing } from './editing.ts';
 import { createScriptStage } from './stage.ts';
 import { loadVersion } from './store.ts';
 import { REFINEMENT_CHECKLIST, refineSystemPrompt } from './prompts.ts';
-import { FakeScriptAI } from './testing.ts';
+import { FakeScriptAI, parseScript } from './testing.ts';
 
 const db = useTestDatabase();
 
@@ -65,6 +65,7 @@ async function scripted(s: Setup) {
 }
 
 const version = async (projectId: string, v: number) => (await loadVersion(db, projectId, v))!;
+const allBlocksOf = (v: Awaited<ReturnType<typeof version>>) => v.draft.sections.flatMap((x) => x.blocks);
 /** What a version says and how it was edited: compared before and after other versions are made. */
 const snapshot = async (projectId: string, v: number) => {
   const x = await version(projectId, v);
@@ -303,7 +304,7 @@ describe('script engine (fake AI, real database)', () => {
     expect(prompt).toMatch(/^# The approved story architecture \(v\d+\)$/m);
     expect(prompt).toMatch(/^# Evidence: the \d+ claims the architecture cites/m);
     const editorPrompt = s.ai.prompts['script.edit']!.at(-1)!;
-    expect(editorPrompt).toContain('# The previous version (v1) this one refines — for comparison only; do not change it');
+    expect(editorPrompt).toContain('# The version this one was made from (v1) — for comparison only; do not change it');
     expect(editorPrompt).toContain(`# Refinement checklist — answer every question, in this order, for this version against v1\n1. ${REFINEMENT_CHECKLIST[0]}`);
     expect(s.ai.prompts['script.factCheck']!.at(-1)).toContain('This version is a narrative refinement of v1');
     expect(s.ai.prompts['script.factCheck']!.at(-1)).not.toContain('# Refinement checklist');
@@ -393,8 +394,8 @@ describe('script engine (fake AI, real database)', () => {
     const log = await db.projectEvent.findMany({ where: { projectId, type: 'JOB_PROGRESS', jobId: job.id }, orderBy: { createdAt: 'asc' } });
     // The run opens with what the rules find in the version it refines…
     expect(log[1]).toMatchObject({
-      message: expect.stringMatching(/^Script quality rules on v1: \d+ words, 2:\d\d \(0:\d\d over the maximum\); RETOLD_CONTENT \d+/),
-      data: { version: 1, rules: { overMax: expect.any(String), counts: expect.objectContaining({ RETOLD_CONTENT: expect.any(Number), PASSENGER_FACT: expect.any(Number) }) } },
+      message: expect.stringMatching(/^Script quality rules on v1: \d+ words, 2:\d\d \(0:\d\d over the maximum\); .*RETOLD_CONTENT \d+/),
+      data: { version: 1, rules: { overMax: expect.any(String), counts: expect.objectContaining({ RETOLD_CONTENT: expect.any(Number) }) } },
     });
     // …the refiner reads them — story-level rules first, a kind found everywhere summarised — with the repetition to keep and where to cut.
     const refine = s.ai.prompts['script.refine']!.at(-1)!;
@@ -410,7 +411,13 @@ describe('script engine (fake AI, real database)', () => {
     expect(editor).toContain('Cut or compress first (ranked by the rules):');
     expect(editor).toMatch(/# Lines the refinement says it kept word for word \(1\)\n- "/);
     expect(s.ai.prompts['script.factCheck']!.at(-1)).not.toContain('where to cut');
-    expect(s.ai.prompts['script.perform']!.at(-1)).toMatch(/^Runtime: 2:\d\d of narration \(acceptable 1:00–2:00\)\. It already runs over its maximum: add no pause the story does not need\.$/m);
+    expect(s.ai.prompts['script.perform']!.at(-1)).toMatch(/^Runtime budget: the acceptable range is 1:00–2:00; the narration with no pauses or pace changes runs 2:\d\d: it already reaches the maximum, so add no pause and no slower delivery/m);
+    // The narration alone passes the maximum: the performance's pauses are given up, each recorded.
+    const v2 = await version(projectId, 2);
+    const performed = ScriptContent.parse(v2.row.content).reviewChanges!.filter((c) => c.reviewer === 'PERFORMANCE');
+    expect(performed.length).toBeGreaterThan(0);
+    expect(performed.every((c) => c.status === 'REJECTED' && c.originalText === 'pause before short (transition)' && c.proposedText === 'no timing')).toBe(true);
+    expect(QualityReport.parse(v2.row.qualityReport).normalizations).toContainEqual(expect.stringMatching(/^Performance: \d+\.\d s of pauses and slower delivery given up to stay within the 2:00 maximum/));
     // The log closes with the rules on both versions, then the version saved.
     expect(log.at(-2)!.message).toMatch(/^Script quality rules, v1 → v2: \d+ → \d+ words, 2:\d\d → 2:\d\d \(0:\d\d over the maximum\); /);
     expect(Object.keys((log.at(-2)!.data as { rules: object }).rules)).toEqual(['v1', 'v2']);
@@ -469,6 +476,58 @@ describe('script engine (fake AI, real database)', () => {
     await expect(s.projects.refineScript(projectId, { baseVersion: 7 }, 'editor')).rejects.toThrow(/Script v7 not found/);
   });
 
+  it('judges each reviewer change on its own — the safe edit kept, a dropped hedge and a removed question rejected — and tells the fact checker which', async () => {
+    const s = setup();
+    const projectId = await approvedArchitecture(s);
+    const why = { score: 7, why: 'Solid (test).' };
+    s.ai.editor = (prompt) => {
+      const blocks = parseScript(prompt);
+      const posed = prompt.split('\n').find((l) => / · POSED Q0/.test(l))!.match(/^\[(\d+\.\d+)\]/)![1]!;
+      const plain = blocks.find((b) => b.infoClass === 'DOCUMENTED' && !b.speaker)!;
+      const hedged = blocks.find((b) => b.infoClass === 'UNCERTAIN' && !b.speaker && /suggest|probably|likely|disagree|legend|story goes/i.test(b.text))!;
+      return {
+        verdict: 'Mixed (test).',
+        scores: { NARRATIVE_SCORE: why, AUDIO_FLOW_SCORE: why, CLARITY_SCORE: why, EMOTIONAL_SCORE: why, ENDING_SCORE: why },
+        issues: [{ ref: hedged.ref, severity: 'MINOR', kind: 'UNNATURAL_SPEECH', note: 'Too hedged (test).' }],
+        assessment: [],
+        edits: [
+          { ref: plain.ref, reason: 'Tighter (test).', text: `${plain.text} Plainly.`, infoClass: null, claimKeys: null, beatIds: null },
+          { ref: hedged.ref, reason: 'Say it straight (test).', text: 'It happened exactly like that (test).', infoClass: null, claimKeys: null, beatIds: null },
+        ],
+        removals: [{ ref: posed, reason: 'The question slows the opening (test).' }],
+        insertions: [],
+      };
+    };
+    const job = await s.projects.generateScript(projectId, {}, 'editor');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
+    const v1 = await version(projectId, 1);
+    const content = ScriptContent.parse(v1.row.content);
+    const editorChanges = content.reviewChanges!.filter((c) => c.reviewer === 'SCRIPT_EDITOR');
+    expect(editorChanges.map((c) => `${c.id} ${c.type} ${c.status}`)).toEqual(['E1 EDIT ACCEPTED', 'E2 EDIT REJECTED', 'E3 REMOVE REJECTED']);
+    expect(editorChanges[1]!.rejectionReason).toMatch(/^Violates uncertainty presentation — /);
+    expect(editorChanges[2]!.rejectionReason).toMatch(/^Violates the central narrative question — No block poses the central question/);
+    // The good change survives the bad ones; the bad ones leave no trace in the script.
+    expect(allBlocksOf(v1).some((b) => b.text.endsWith(' Plainly.'))).toBe(true);
+    expect(allBlocksOf(v1).some((b) => b.text === 'It happened exactly like that (test).')).toBe(false);
+    expect(allBlocksOf(v1).find((b) => b.centralQuestion === 'POSED')).toBeDefined();
+    expect(v1.row.qualityPassed).toBe(true);
+    // The editor's issue on the hedged block says why its fix was not kept.
+    expect(content.editor!.issues[0]!.resolution).toMatch(/^open: its change E2 was rejected — Violates uncertainty presentation/);
+    // The fact checker saw what became of each change.
+    const factPrompt = s.ai.prompts['script.factCheck']!.at(-1)!;
+    expect(factPrompt).toContain('# Changes already judged in this run — do not undo an accepted change unless it broke the evidence; do not propose a rejected one again without fixing why it was rejected');
+    expect(factPrompt).toMatch(/^- E2 EDIT \d+\.\d+ — REJECTED: Violates uncertainty presentation .*\(Say it straight \(test\)\.\)$/m);
+    expect(factPrompt).toMatch(/^- E1 EDIT \d+\.\d+ — ACCEPTED \(Tighter \(test\)\.\)$/m);
+    // Measured, not judged: the report counts the changes; the log lists them.
+    const report = QualityReport.parse(v1.row.qualityReport);
+    expect(report.measurements?.find((m) => m.id === 'review_changes')).toMatchObject({ value: '1 kept, 2 rejected, 0 skipped', detail: 'script editor 1 kept / 2 rejected / 0 skipped' });
+    expect(report.judgments?.map((j) => j.id)).toEqual(['script_editor', 'fact_checker']);
+    expect(report.checks.map((c) => c.id)).not.toContain('script_editor');
+    const final = await db.projectEvent.findFirstOrThrow({ where: { projectId, type: 'JOB_PROGRESS', jobId: job.id }, orderBy: { createdAt: 'desc' } });
+    expect(final.data).toMatchObject({ review: { kept: 1, rejected: 2, skipped: 0 } });
+  });
+
   it('lets a version with blocking findings reach review, and keeps a fact checker’s fix only when it helps', async () => {
     const s = setup();
     const projectId = await approvedArchitecture(s);
@@ -481,15 +540,18 @@ describe('script engine (fake AI, real database)', () => {
     // The fact checker fixes the block it was shown.
     s.ai.factChecker = (prompt) => {
       const ref = /^\[(\d+\.\d+)\] .*\n.*7,777/m.exec(prompt)?.[1] ?? '4.3';
-      return { verdict: 'One unsupported figure (test).', issues: [{ ref, severity: 'CRITICAL', kind: 'WRONG_NUMBER', note: '7,777 is not in the evidence (test).' }], edits: [{ ref, text: 'The record shows what happened next (fixed, test).', infoClass: null, claimKeys: null, beatIds: null }], removals: [], insertions: [] };
+      return { verdict: 'One unsupported figure (test).', issues: [{ ref, severity: 'CRITICAL', kind: 'WRONG_NUMBER', note: '7,777 is not in the evidence (test).' }], edits: [{ ref, reason: 'Remove the unsupported figure (test).', text: 'The record shows what happened next (fixed, test).', infoClass: null, claimKeys: null, beatIds: null }], removals: [], insertions: [] };
     };
     await s.projects.generateScript(projectId, {}, 'editor');
     await s.runner.drain();
     const v1 = await version(projectId, 1);
     expect(v1.row.qualityPassed).toBe(true);
     const fact = ScriptContent.parse(v1.row.content).factCheck!;
-    expect(fact.issues).toEqual([{ ref: '4.3', severity: 'CRITICAL', kind: 'WRONG_NUMBER', note: '7,777 is not in the evidence (test).', resolution: 'fixed by its own edit' }]);
-    expect(QualityReport.parse(v1.row.qualityReport).normalizations).toContain('Fact checker: 1 change(s) kept (blocking findings 1 → 0)');
+    expect(fact.issues).toEqual([{ ref: '4.3', severity: 'CRITICAL', kind: 'WRONG_NUMBER', note: '7,777 is not in the evidence (test).', resolution: 'fixed by its own change (F1)' }]);
+    expect(QualityReport.parse(v1.row.qualityReport).normalizations).toContain('Fact checker: 1 of 1 change(s) kept, 0 rejected, 0 skipped');
+    expect(ScriptContent.parse(v1.row.content).reviewChanges).toEqual([
+      expect.objectContaining({ id: 'F1', reviewer: 'FACT_CHECKER', type: 'EDIT', ref: '4.3', savedRef: '4.3', status: 'ACCEPTED', reason: 'Remove the unsupported figure (test).', rulesImpacted: expect.arrayContaining(['resolves UNSUPPORTED_FIGURE']) }),
+    ]);
 
     // Without a fix the version still reaches review, with the gate blocking approval.
     s.ai.factChecker = () => ({ verdict: 'Fine (test).', issues: [], edits: [], removals: [], insertions: [] });
@@ -513,7 +575,10 @@ describe('script engine (fake AI, real database)', () => {
     expect(s.ai.calls).toMatchObject({ 'script.plan': 1, 'script.write': 1, 'script.edit': 1, 'script.factCheck': 2, 'script.perform': 1 });
     const v1 = await version(projectId, 1);
     expect(ScriptContent.parse(v1.row.content).editor).toBeNull();
-    expect(QualityReport.parse(v1.row.qualityReport).checks.find((c) => c.id === 'script_editor')).toMatchObject({ status: 'WARN', detail: '[fake-ai] refused (test)' });
+    // A reviewer's verdict is a judgment, not a check: recorded as not reviewed, with why.
+    const report = QualityReport.parse(v1.row.qualityReport);
+    expect(report.checks.find((c) => c.id === 'script_editor')).toBeUndefined();
+    expect(report.judgments?.find((j) => j.id === 'script_editor')).toMatchObject({ value: 'not reviewed', detail: '[fake-ai] refused (test)', source: 'script editor (model)' });
     expect(v1.row.stats).toMatchObject({ resumedSteps: ['plan', 'write', 'edit'] });
   });
 

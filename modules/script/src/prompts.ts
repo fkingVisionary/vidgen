@@ -9,11 +9,11 @@ import { SCRIPT_TIMING, fmtClock, wordsForSeconds, type RuntimeTarget } from '@d
  * Bump PROMPT_VERSION whenever a prompt or output schema changes: saved
  * progress from another version is not reused.
  */
-export const PROMPT_VERSION = 'script-1.3-2026-10-05.1';
+export const PROMPT_VERSION = 'script-1.4-2026-10-05.1';
 
 const BOUNDARY = `THE EVIDENCE BOUNDARY
 - You are telling an approved story architecture. It decides what happens, in what order, with whom, and on what evidence. Never add events, people, places, numbers, dates or quotations that are not in its beats or in the claims it cites. If a sentence would need a fact the evidence does not have, write around it — or leave it out.
-- Every narration block realises beats of the architecture (beatIds, normally from its own sequence) and cites the claims behind what it says (claimKeys: the beats' claims). Every figure and date must appear in a cited claim.
+- Every narration block realises beats of the architecture (beatIds, normally from its own sequence) and cites the claims behind what it says (claimKeys: the beats' claims). Every figure and date must appear in a cited claim — and so must every other factual assertion, number or not: what a real person did, said or owned rests on a claim about them that the block cites. When you move a sentence, its claims move with it.
 - Verdicts are final: a claim's verdict decides how it may be told, whatever you believe about the history.`;
 
 const CLASSES = `INFORMATION CLASSES — every block has exactly one, and keeps the class of the beats it tells
@@ -24,7 +24,7 @@ const CLASSES = `INFORMATION CLASSES — every block has exactly one, and keeps 
   DISPUTED → say the record is contested ("historians disagree", "the accounts don't agree", "the sources differ", "it's not clear", "not everyone agrees");
   UNVERIFIED → say it cannot be confirmed ("reportedly", "is said to", "no surviving record confirms it", "there's no way to check", "it comes from a single source", "we need to be careful here");
   MYTH → tell it as the version people tell ("the story goes", "the famous version", "you may have heard", "as it's usually told", "the legend says"), then let the record test it. A myth is never stated as fact.
-  The hedge must be in the same block as the claim it hedges.
+  The hedge must be in the same block as the claim it hedges. Probability words ("probably", "most likely", "what probably happened") belong to PROBABLE claims only: never use them for a myth, an unverified or disputed claim, a reconstruction or a framing line — that upgrades its truth status.
 - FICTION: only where the architecture has a FICTION beat — a declared device (the viewer's point of view, a composite character, an invented line). Fiction carries no facts: no figures, no dates. Fictional characters may watch real people and real events; they never speak to, touch or trade with a real person, never perform a documented act, and never do anything on a specific date.
 - FRAMING: the narrator's own connective line — a question, a turn, a signpost ("So what went wrong?"; but "The ship never came back." is not framing: it states a fact). Framing has no facts, figures, dates or claims.`;
 
@@ -48,13 +48,13 @@ const EAR = `WRITING FOR THE EAR
 /** The script quality rules as the writers and reviewers read them (craft.ts checks each one; generic examples only). */
 const ECONOMY = `STORY ECONOMY — the automated checks look for each of these, and list what they find
 - Say it once. Never retell in a later section what the viewer has already heard: refer back in a phrase ("the price she paid"), don't explain it again. An ending lands the story and answers the question; it does not summarise the film.
-- Every fact earns its place: it changes what someone does, raises the stakes or moves the question. A fact that rests only on background material, names someone the film never mentions again, or cites an authority for its own sake is a passenger — cut it, or tie it to the people and the question.
+- Every fact earns its place: ask whether the viewer would miss it. A fact that gives no story beat, no key claim or central question, nobody, no cause and effect, no open question, and that no later section builds on, is a passenger candidate — cut it, or tie it to the people and the question. But a minor-looking fact a later section relies on is not disposable.
 - Name a source when it becomes part of the story, not to footnote a sentence. One new name at a time: the ear holds one.
 - Introduce a real person by what they do the first time they are named ("the town's harbourmaster, Elias Brandt"). Introduce a fictional device once, plainly — in a few words, or with an on-screen label — then let it work: never label it again, and never several ways at once.
 - At most one line about the film itself, in the opening, and only if it creates momentum. After that the investigation shows itself.
 - Whatever is said about a named real person rests on a claim about them that the block cites, worded as its verdict requires.
 - Speech, not page: no colons, semicolons, parentheses or "respectively"; never four or more items in one breath; one number per breath; people and verbs rather than abstract nouns; sentences of different lengths.
-- Deliberate repetition is not redundancy. A refrain, a callback to the opening, a run of short sentences that builds — keep them (the checks list the ones they recognise).`;
+- Repeat with a purpose, never without. Returning to earlier material is good when it pays off, reverses, escalates, resolves or closes — a refrain, a callback that shows the opening in a new light, a run of short sentences that builds — and bad when it only says the same thing again. A repeated hedge ("historians disagree"), a recurring name or a recurring term is not a callback. Keep the deliberate ones the checks list.`;
 
 export function plannerSystemPrompt(target: RuntimeTarget): string {
   return `You plan the narration of a documentary from its approved story architecture, section by section (one section per architecture sequence), before anything is written.
@@ -186,6 +186,7 @@ PART 3 — THE STORY IS DECIDED (the architecture and the script's constraints)
 - No new facts, no new claims, no new people. Every block keeps the beats it tells and the claims behind it; when you split or merge blocks, the new blocks carry the beats and claims of what they contain. Do not move material from one section into another.
 - Every block keeps its information class. Uncertainty, legend, reconstruction and fiction stay exactly as clearly marked as before — only said more naturally.
 - Recorded quotations stay word for word, with their speaker. Invented lines stay with fictional characters, in fiction. Fictional characters stay outside documented events and never speak to, touch or trade with a real person.
+- A sentence you move or merge takes its claims with it; a sentence you keep keeps the claims behind it. Prefer slightly weaker prose with correct evidence over better prose that blurs the evidence.
 
 OUTPUT
 - Every section, in order, as narration blocks: one to four sentences, one information class, one job each. For every block: beatIds, claimKeys, the speaker (null for the narrator) and its visual intent, as before — keep a block's visual intent unless the new wording changes what should be seen.
@@ -198,7 +199,17 @@ const PATCH = `CHANGES — targeted, never the whole script again
 - edits: replace a block's text (and, only if needed, its infoClass, claimKeys or beatIds; null keeps them). Reference blocks as shown ("3.4").
 - removals: blocks to cut.
 - insertions: a new block after a block ("3.4"), or at the start of a section ("3.0"), with all its fields.
-- Every change must keep the rules above. Prefer cutting to adding.`;
+- Every change carries its reason, in one sentence.
+- Each change is judged on its own: tried on the script, kept if it breaks no invariant, rejected with the reason if it does. One bad change never costs the good ones — so make each change complete in itself (a sentence you move takes its claims with it). Prefer cutting to adding.`;
+
+/** What no change may weaken — the order of priority when a better sentence and the evidence disagree. */
+const INVARIANTS = `THE INVARIANTS — no change may weaken them, however much better it reads
+- evidence traceability: every factual assertion rests on a claim the block cites;
+- factual defensibility, and the claim relationships behind each sentence;
+- the information classes and their truth status: PROBABLE never becomes DOCUMENTED, a reconstruction or a legend never becomes "what probably happened";
+- the boundaries of fictional characters and of real people; recorded quotations, word for word;
+- the uncertainty each verdict requires; the approved architecture, its sequence and its central question.
+Prefer slightly weaker prose with correct evidence over better prose that blurs the evidence.`;
 
 export function scriptEditorSystemPrompt(): string {
   return `You are the script editor of a documentary: a demanding story editor with an ear for narration. Read the draft as the viewer will hear it.
@@ -215,6 +226,8 @@ ${EAR}
 
 ${ECONOMY}
 
+${INVARIANTS}
+
 WHEN IT RUNS LONG — only when the prompt gives a cut plan
 - The version runs over its maximum. Make the cuts the story can afford, in the plan's order — removals of retellings, recaps and passengers first, then tightening edits — until it fits. Never cut a protected block, and never cut fascinating, useful material just to reach a number.
 
@@ -223,7 +236,7 @@ Score the draft 0–10 with a reason each: NARRATIVE_SCORE (story and momentum),
 REFINEMENT CHECKLIST — only when the prompt has one
 - The version in front of you is a narrative refinement of the previous version shown with it. Answer every checklist question, in order: YES, PARTLY or NO for this version; comparedToPrevious BETTER, SAME or WORSE; and a one-sentence note pointing at the lines that decide it. Be strict: a version that reads better but drops a hedge or a strong line is not better.
 - Judge it as writing. Your patch fixes real problems; it does not undo the refinement.
-- Question 9: judge it from the previous version itself and the lines the refinement says it kept. A line reworded counts as kept only if it is as strong.
+- Question 9: judge it from the previous version itself and the lines the refinement says it kept. A line reworded counts as kept only if it is as strong. Lines the writer removed on purpose are listed: a deliberate cut is not an accident.
 - Without a checklist, return an empty assessment.
 
 ${PATCH}`;
@@ -242,6 +255,10 @@ ${CLASSES}
 
 ${PEOPLE}
 
+${INVARIANTS}
+
+The script editor's changes are listed with what became of each: do not undo an accepted change unless it broke the evidence, and do not propose a rejected change again without fixing why it was rejected. Lines the writer removed on purpose are listed too.
+
 Do not rewrite for style. List each problem with its reference, a severity (CRITICAL: a false or unsupported fact, a fabricated quotation, fiction presented as fact; MAJOR: missing or wrong uncertainty wording, a wrong class; MINOR: imprecision) and a kind. Fix each one with the smallest change that makes the block true to its evidence — hedge it, cut the unsupported part, correct the figure, change the class, or remove the block.
 
 ${PATCH}`;
@@ -254,7 +271,8 @@ For each block that needs it (list only those; every other block is spoken at a 
 - pace (SLOW, NORMAL, FAST), energy (LOW, MEDIUM, HIGH), emotion (NEUTRAL, TENSE, CURIOUS, SOMBER, EXCITED, REFLECTIVE) — change them where the story turns, not on every block;
 - emphasis: one or two words or short phrases to stress, copied exactly from the block's text (on a minority of blocks);
 - pauses before or after (MICRO, SHORT, MEDIUM, LONG) for a reason: a REVEAL, an important NUMBER, an EMOTIONAL_TURN, a scene TRANSITION, IMPACT, an open QUESTION, or RHYTHM. Most blocks have none. A pause earns its place by creating anticipation, weight, contrast, doubt, a reveal or room to breathe; a pause after every sentence is not a performance. More than about a minute with no pause at all tires the ear: find the natural turn in it.
-- The performance supports the writing; it never makes up for it. Pauses cost time: when the prompt says the film already runs over its maximum, add no pause the story does not need.
+- The performance supports the writing; it never makes up for it.
+- Pauses and slower delivery cost time, and the prompt gives your budget: the seconds left before the maximum. Stay inside it. Spend it on essential dramatic pauses and reveals first, then emotional turns, then transitions; rhythm pauses come last. Never speed delivery up to make room. Timing past the maximum is removed, the least valuable first.
 
 Pronunciation: list the names of people and places, foreign words, specialist terms and money units a narrator might mispronounce. Give a plain-English respelling with the stressed syllable in capitals ("ahn-TWERP"), IPA only if you are sure, the language, and your confidence. Do not guess: if you are not sure how a name is said, give your best respelling with LOW confidence and say why — a person will check it.
 

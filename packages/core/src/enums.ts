@@ -414,6 +414,16 @@ export const SCRIPT_ORIGINS = [
 ] as const;
 export type ScriptOrigin = (typeof SCRIPT_ORIGINS)[number];
 
+/** Who proposed a change to a script version during its run. */
+export const SCRIPT_REVIEWERS = ['SCRIPT_EDITOR', 'FACT_CHECKER', 'PERFORMANCE'] as const;
+export type ScriptReviewer = (typeof SCRIPT_REVIEWERS)[number];
+/** What a proposed change does: a block's text or evidence, a block removed or added, or performance timing. */
+export const SCRIPT_CHANGE_TYPES = ['EDIT', 'REMOVE', 'INSERT', 'PERFORMANCE'] as const;
+export type ScriptChangeType = (typeof SCRIPT_CHANGE_TYPES)[number];
+/** What became of a proposed change: each is judged on its own. */
+export const SCRIPT_CHANGE_STATUSES = ['ACCEPTED', 'REJECTED', 'SKIPPED'] as const;
+export type ScriptChangeStatus = (typeof SCRIPT_CHANGE_STATUSES)[number];
+
 /** How sure a pronunciation note is. Anything below HIGH is flagged for human review. */
 export const PRONUNCIATION_CONFIDENCES = ['HIGH', 'MEDIUM', 'LOW'] as const;
 export type PronunciationConfidence = (typeof PRONUNCIATION_CONFIDENCES)[number];

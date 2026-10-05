@@ -14,8 +14,10 @@ import {
   unknownProperNouns,
   wordTokens,
 } from '@docengine/story/shared';
+import { evidenceInvariants } from './evidence.ts';
 import { craftFindings, humanIn, inEscalation, partOfRefrain, protectedBlocks, renderTrimPlan, trimPlan, type Refrain, type TrimPlan } from './craft.ts';
 import { allBlocks, fictionalMentions, sectionDurationSec, type DraftBlock, type DraftSection, type ScriptDraft } from './draft.ts';
+import { DISPUTED_PATTERN, MYTH_PATTERN, PROBABILITY_PATTERN, UNVERIFIED_PATTERN, stem } from './wording.ts';
 import { beatClasses, fictionalCast, realCast, type ScriptScope } from './scope.ts';
 
 /**
@@ -38,6 +40,8 @@ export const SCRIPT_FINDING_KINDS = [
   'UNSUPPORTED_FIGURE', // a figure or year in no claim of the architecture
   'PERSON_OUTSIDE_ARCHITECTURE', // a dossier person the architecture does not cite
   'PERSON_WITHOUT_EVIDENCE', // documented or uncertain narration naming a real person none of its claims mentions
+  'ASSERTION_UNCITED', // a sentence about a real person that says what an uncited claim about them says
+  'CLAIM_LINK_LOST', // a sentence kept from the version before that no longer cites the claim behind it
   'UNKNOWN_NAME', // a name the evidence and the cast do not know
   // Information classes
   'CLASS_MISMATCH', // the block's class does not match the beats it realises
@@ -49,6 +53,7 @@ export const SCRIPT_FINDING_KINDS = [
   'DISPUTED_AS_FACT', // a DISPUTED claim without words saying it is disputed
   'UNVERIFIED_AS_FACT', // an UNVERIFIED claim without words saying it is unconfirmed
   'PROBABLE_UNHEDGED', // a PROBABLE claim without a hedge
+  'UNCERTAINTY_UPGRADED', // probability wording for a myth, an unverified or disputed claim, a reconstruction or framing
   // Fiction boundary
   'FICTION_IN_DOCUMENTED', // a fictional device in narration presented as documented fact
   'FICTION_REAL_INTERACTION', // a fictional character speaking to, touching or trading with a real person
@@ -132,15 +137,7 @@ export const blockingCount = (fs: readonly ScriptFinding[]) => fs.filter(isBlock
 
 // ── Wording patterns (heuristics) ────────────────────────────────────────────
 
-/** Words that say a claim is disputed (including the natural ways a narrator says so: "the accounts don't agree"). */
-export const DISPUTED_PATTERN =
-  /\b(disput\w*|debat\w*|contest\w*|disagree\w*|controvers\w*|not everyone agrees|(?:nobody|no one|no two \w+) agrees?|unclear|uncertain|some (?:historians|scholars|accounts|sources|writers) (?:say|argue|claim|believe|think|doubt|suggest)|others? (?:argue|say|claim|doubt|suggest)|historians (?:argue|differ|debate|question|doubt|disagree)|(?:accounts|sources|versions|records|witnesses|details|numbers|stories|historians) (?:differ|conflict|clash|contradict each other)|(?:don't|do not|doesn't|does not|didn't|did not|never) (?:quite )?agree|(?:it's|it is|that's|that is) not clear|hard to say|depends on (?:who|whom) you (?:ask|believe|read)|still argued over|we (?:can't|cannot|don't|do not) know|no one (?:knows|can say))\b/i;
-/** Words that say a claim cannot be confirmed (including "there's no way to check", "a single source", "we need to be careful"). */
-export const UNVERIFIED_PATTERN =
-  /\b(unconfirmed|unverified|unproven|cannot be (?:confirmed|verified|checked)|can't be (?:confirmed|verified|checked)|could not be (?:confirmed|verified|checked)|no (?:surviving )?(?:record|source|document|witness) (?:confirms|proves|shows|backs)|nothing (?:else )?(?:confirms|proves|backs (?:it|this|that) up)|(?:there's|there is|we have) no way (?:to (?:check|confirm|know|verify)|of (?:knowing|checking))|(?:we|no one|nobody) (?:can't|cannot|could not|couldn't|can) (?:confirm|check|verify) (?:it|this|that)|(?:can't|cannot) be sure|(?:a|one|the) (?:single|only|lone) (?:source|account|record|witness)|(?:we|you) (?:should|need to|have to) be careful|reportedly|allegedly|(?:is|was|are|were) said to|supposedly|if (?:the|this|that) (?:story|account|report) is true|we (?:can't|cannot|don't|do not) know|we have no way of knowing)\b/i;
-/** Words that frame a claim as the popular story or legend (including "the famous version", "you may have heard", "as it's usually told"). */
-export const MYTH_PATTERN =
-  /\b(myths?|legends?|legendary|the story goes|(?:so|as) the story goes|it is (?:often|commonly|widely|still|usually) (?:said|claimed|told|repeated|believed)|(?:often|commonly|widely|endlessly|usually|always|generally) (?:told|repeated|claimed|said)|(?:popular|famous|familiar|usual|classic|standard|traditional|well-known) (?:account|story|version|telling|memory|belief|image|picture|tale)|the version (?:everyone|most people|people|you) (?:knows?|remembers?|tells?|heard)|you (?:may|might) (?:have heard|know|remember)|you've (?:probably )?heard|people (?:still )?(?:say|tell|repeat|believe)|folklore|tall tales?|supposedly|according to (?:the )?(?:legend|popular|story)|the tale|retold|the familiar story)\b/i;
+export { DISPUTED_PATTERN, MYTH_PATTERN, UNVERIFIED_PATTERN };
 /** Words a narrator uses to admit not knowing what someone thought. */
 const UNKNOWABLE = /\b(we (?:can't|cannot|don't|do not) know|no (?:record|source|letter|diary) (?:tells|says|records|shows)|perhaps|may have|might have|must have|probably|likely)\b/i;
 
@@ -391,6 +388,7 @@ export function checkScript(draft: ScriptDraft, scope: ScriptScope, opts: CheckO
   performance(draft, out);
   pronunciation(draft, scope, out);
   out.push(...craft.findings);
+  out.push(...evidenceInvariants(draft, scope, opts.previous ?? null));
   const plan = trimPlan(draft, timing, out, protectedBlocks(draft, scope, craft.refrains, opts.kept), scope);
   if (plan) out.push({ kind: 'RUNTIME_PLAN', ref: null, detail: `Over the ${clock(plan.maxSec)} maximum by ${clock(plan.overMaxSec)}: cut or compress first ${plan.candidates.slice(0, 8).map((c) => `${c.ref} (${c.reasons.join(', ')})`).join('; ') || '(no obvious candidate)'}` });
   return out;
@@ -405,7 +403,7 @@ export function cutPlan(draft: ScriptDraft, scope: ScriptScope, opts: CheckOptio
 }
 
 /** The kinds the script quality rules report (craft.ts): one blocking, the rest warnings. */
-export const CRAFT_KINDS: readonly ScriptFindingKind[] = ['PERSON_WITHOUT_EVIDENCE', ...SCRIPT_FINDING_KINDS.slice(SCRIPT_FINDING_KINDS.indexOf('RETOLD_CONTENT'))];
+export const CRAFT_KINDS: readonly ScriptFindingKind[] = ['PERSON_WITHOUT_EVIDENCE', 'ASSERTION_UNCITED', 'CLAIM_LINK_LOST', 'UNCERTAINTY_UPGRADED', ...SCRIPT_FINDING_KINDS.slice(SCRIPT_FINDING_KINDS.indexOf('RETOLD_CONTENT'))];
 
 export interface RuleDigest {
   words: number;

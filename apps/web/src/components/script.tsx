@@ -20,7 +20,10 @@ import {
   fmtClock,
   fmtVariance,
   type ClaimView,
+  type QualityJudgment,
+  type QualityMeasurement,
   type ScriptAssessmentItem,
+  type ScriptReviewChange,
   type ScriptBlockClass,
   type ScriptCompareView,
   type ScriptBlockView,
@@ -454,7 +457,7 @@ function Comparison({ cmp }: { cmp: ScriptCompareView }) {
   const ev = [...evidence.claimsAdded.map((k) => `+${k}`), ...evidence.claimsRemoved.map((k) => `−${k}`)];
   const figs = [...evidence.figuresAdded.map((k) => `+${k}`), ...evidence.figuresRemoved.map((k) => `−${k}`)];
   const row = (label: string, x: ReactNode, y: ReactNode) => (
-    <tr>
+    <tr key={label}>
       <th className="py-1 pr-3 text-left font-normal text-stone-500">{label}</th>
       <td className="py-1 pr-3 tabular-nums">{x}</td>
       <td className="py-1 tabular-nums">{y}</td>
@@ -487,7 +490,7 @@ function Comparison({ cmp }: { cmp: ScriptCompareView }) {
             {row('Blocks', facts.a.blocks, facts.b.blocks)}
             {row('Quality gate', gate(facts.a), gate(facts.b))}
             {row('Model cost', facts.a.cost.calls ? `${formatUsd(facts.a.cost.totalUsd)} · ${facts.a.cost.calls} calls` : '—', facts.b.cost.calls ? `${formatUsd(facts.b.cost.totalUsd)} · ${facts.b.cost.calls} calls` : '—')}
-            {SCRIPT_SCORES.filter((k) => facts.a.scores[k] !== undefined || facts.b.scores[k] !== undefined).map((k) => row(SCRIPT_SCORE_LABELS[k], facts.a.scores[k] ?? '—', facts.b.scores[k] ?? '—'))}
+            {SCRIPT_SCORES.filter((k) => facts.a.scores[k] !== undefined || facts.b.scores[k] !== undefined).map((k) => row(`${SCRIPT_SCORE_LABELS[k]} (model judgment)`, facts.a.scores[k] ?? '—', facts.b.scores[k] ?? '—'))}
             {CLASS_ORDER.filter((k) => facts.a.classWords[k] || facts.b.classWords[k]).map((k) => row(`${SCRIPT_BLOCK_CLASS_LABELS[k]} (words)`, facts.a.classWords[k] ?? 0, facts.b.classWords[k] ?? 0))}
           </tbody>
         </table>
@@ -501,7 +504,9 @@ function Comparison({ cmp }: { cmp: ScriptCompareView }) {
       </p>
       {cmp.changeLog && (cmp.changeLog.summary || cmp.changeLog.changes.length > 0) && (
         <div>
-          <p className="font-medium">What changed in v{b.version}, and why</p>
+          <p className="font-medium">
+            What changed in v{b.version}, and why <span className="font-normal text-stone-500">— the writer's own account; the measured figures above are what count</span>
+          </p>
           {cmp.changeLog.summary && <p className="mt-1 text-stone-700">{cmp.changeLog.summary}</p>}
           <ul className="mt-1 list-disc pl-5 text-stone-700">
             {cmp.changeLog.changes.map((c, i) => (
@@ -545,7 +550,7 @@ const ANSWER_TONE: Record<ScriptAssessmentItem['answer'], string> = { YES: 'bg-e
 /** The script editor's refinement checklist, answered against the version refined. */
 export function AssessmentList({ items, against }: { items: ScriptAssessmentItem[]; against: number | null }) {
   return (
-    <Section title={`Refinement checklist — the script editor${against ? `, against v${against}` : ''}`}>
+    <Section title={`Refinement checklist — the script editor${against ? `, against v${against}` : ''} (model judgment)`}>
       <ol className="space-y-1.5 text-sm">
         {items.map((x, i) => (
           <li key={i} className="flex flex-wrap items-baseline gap-x-2">
@@ -556,6 +561,78 @@ export function AssessmentList({ items, against }: { items: ScriptAssessmentItem
           </li>
         ))}
       </ol>
+    </Section>
+  );
+}
+
+// ── Measured, judged, and what the reviewers proposed ────────────────────────
+
+/** What code measured from the script: never a model's estimate. */
+export function MeasurementsSection({ items }: { items: QualityMeasurement[] }) {
+  return (
+    <Section title="Measured — computed from the script, not estimated by a model">
+      <ul className="divide-y divide-stone-100 text-sm">
+        {items.map((m) => (
+          <li key={m.id} className="py-1.5 break-words">
+            <span className="font-medium">{m.label}:</span> <span className="tabular-nums">{m.value}</span>
+            {m.detail && <span className="text-stone-500"> — {m.detail}</span>}
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+/** What the models judged: opinions, recorded, never measurements. */
+export function JudgmentsSection({ items }: { items: QualityJudgment[] }) {
+  return (
+    <Section title="Model judgments — opinions, recorded, never measurements">
+      <ul className="space-y-2 text-sm">
+        {items.map((j) => (
+          <li key={j.id}>
+            <span className="font-medium">{j.label}</span> <span className="text-xs text-stone-500">({j.source})</span>: {j.value}
+            {j.detail && <div className="break-words text-stone-600">{j.detail}</div>}
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+const CHANGE_TONE: Record<ScriptReviewChange['status'], string> = { ACCEPTED: 'bg-emerald-100 text-emerald-800', REJECTED: 'bg-red-100 text-red-800', SKIPPED: 'bg-stone-100 text-stone-600' };
+const REVIEWER_LABEL: Record<ScriptReviewChange['reviewer'], string> = { SCRIPT_EDITOR: 'Script editor', FACT_CHECKER: 'Fact checker', PERFORMANCE: 'Performance timing' };
+
+/** Every change the reviewers proposed in the run that made this version, judged one by one. */
+export function ReviewChangesSection({ changes }: { changes: ScriptReviewChange[] }) {
+  const n = (s: ScriptReviewChange['status']) => changes.filter((c) => c.status === s).length;
+  const reviewers = [...new Set(changes.map((c) => c.reviewer))];
+  return (
+    <Section title={`Reviewer changes — each judged on its own (${n('ACCEPTED')} kept, ${n('REJECTED')} rejected, ${n('SKIPPED')} skipped)`}>
+      <p className="mb-2 text-xs text-stone-500">A change is kept only if it weakens no invariant: evidence, claim links, information classes, fiction and real-person boundaries, quotations, uncertainty, the architecture, the runtime maximum. One rejected change never costs the others.</p>
+      {reviewers.map((r) => (
+        <div key={r} className="mb-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-stone-500">{REVIEWER_LABEL[r]}</h3>
+          <ul className="mt-1 space-y-1.5 text-sm">
+            {changes
+              .filter((c) => c.reviewer === r)
+              .map((c) => (
+                <li key={c.id} className="break-words">
+                  <span className={`${pill} ${CHANGE_TONE[c.status]}`}>{c.status.toLowerCase()}</span> <span className="font-mono text-xs text-stone-500">{c.id}</span> {c.type.toLowerCase()} {c.ref ?? ''}
+                  {c.savedRef && c.savedRef !== c.ref ? ` → ${c.savedRef}` : ''} — <span className="text-stone-700">{c.reason || 'no reason given'}</span>
+                  {c.rejectionReason && <div className="text-xs text-red-800">{c.rejectionReason}</div>}
+                  {c.status === 'ACCEPTED' && c.rulesImpacted.length > 0 && <div className="text-xs text-stone-500">{c.rulesImpacted.join(' · ')}</div>}
+                  {(c.originalText || c.proposedText) && (
+                    <details className="text-xs text-stone-600">
+                      <summary className="cursor-pointer">the change</summary>
+                      {c.originalText && <p className="text-red-800 line-through">{c.originalText}</p>}
+                      {c.proposedText && <p className="text-emerald-900">{c.proposedText}</p>}
+                    </details>
+                  )}
+                </li>
+              ))}
+          </ul>
+        </div>
+      ))}
     </Section>
   );
 }

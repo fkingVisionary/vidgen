@@ -86,12 +86,25 @@ export const CoherenceIssue = z.object({
 export type CoherenceIssue = z.infer<typeof CoherenceIssue>;
 
 /** ResearchDossier.qualityReport — the automated gate run before human review. */
+/** A deterministic measurement of a version: computed by code from the structured script, never estimated by a model. */
+export const QualityMeasurement = z.object({ id: z.string(), label: z.string(), value: z.string(), detail: z.string().nullable() });
+export type QualityMeasurement = z.infer<typeof QualityMeasurement>;
+
+/** A model's judgment of a version (a reviewer's verdict or score): an opinion, recorded, never a measurement. */
+export const QualityJudgment = z.object({ id: z.string(), label: z.string(), source: z.string(), value: z.string(), detail: z.string().nullable() });
+export type QualityJudgment = z.infer<typeof QualityJudgment>;
+
 export const QualityReport = z.object({
   passed: z.boolean(),
   generatedAt: z.string(),
+  /** Deterministic checks only: what the rules found. */
   checks: z.array(QualityCheck),
   /** Deterministic adjustments made before the checks (e.g. "C031 demoted to UNVERIFIED: no verified citation"). */
   normalizations: z.array(z.string()),
   coherenceIssues: z.array(CoherenceIssue),
+  /** Measured by code (words, runtime, pauses, claims, findings by kind) — kept apart from the models' judgments. */
+  measurements: z.array(QualityMeasurement).optional(),
+  /** The models' verdicts and scores: opinions, never presented as measurements. */
+  judgments: z.array(QualityJudgment).optional(),
 });
 export type QualityReport = z.infer<typeof QualityReport>;

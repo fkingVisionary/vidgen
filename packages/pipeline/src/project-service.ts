@@ -346,7 +346,7 @@ export class ProjectService {
     const input = GenerateScriptInput.parse(raw);
     return this.scriptJob(projectId, actor, 'Writing a script draft', async (tx) => {
       await this.requireApprovedArchitecture(tx, projectId);
-      return { ...(input.notes ? { notes: input.notes } : {}) };
+      return { ...(input.notes ? { notes: input.notes } : {}), ...(input.allowPerformanceOverMax ? { allowPerformanceOverMax: true } : {}) };
     });
   }
 
@@ -373,7 +373,7 @@ export class ProjectService {
         `${sections.length ? `Section${sections.length > 1 ? 's' : ''} ${sections.join(', ')}` : 'The whole script'} of v${base.version} to be rewritten: ${input.brief.length > 160 ? `${input.brief.slice(0, 159)}…` : input.brief}`,
         { actor, baseVersion: base.version, sections, brief: input.brief },
       );
-      return { notes: input.brief, revise: { baseVersion: base.version, sections } };
+      return { notes: input.brief, revise: { baseVersion: base.version, sections }, ...(input.allowPerformanceOverMax ? { allowPerformanceOverMax: true } : {}) };
     });
   }
 
@@ -400,7 +400,7 @@ export class ProjectService {
         `The narration of v${base.version} to be refined for the ear (story and evidence unchanged) — ${instructions ? `director's instructions: ${instructions.length > 160 ? `${instructions.slice(0, 159)}…` : instructions}` : 'the house style'}`,
         { actor, baseVersion: base.version, kind: 'REFINEMENT', instructions },
       );
-      return { ...(instructions ? { notes: instructions } : {}), revise: { baseVersion: base.version, sections: [], refine: true } };
+      return { ...(instructions ? { notes: instructions } : {}), revise: { baseVersion: base.version, sections: [], refine: true }, ...(input.allowPerformanceOverMax ? { allowPerformanceOverMax: true } : {}) };
     });
   }
 

@@ -10,7 +10,7 @@ import {
   type SectionReviewStatus,
 } from '@docengine/core';
 import { SECOND_PERSON, checkFigures, orderedKeys, wordTokens } from '@docengine/story/shared';
-import type { PerformanceOutput, ScriptPatch, WriterBlock, WriterOutput } from './schemas.ts';
+import type { PerformanceOutput, WriterBlock, WriterOutput } from './schemas.ts';
 import { fictionalCast, type ScriptScope } from './scope.ts';
 
 /**
@@ -214,80 +214,6 @@ export function markCentralQuestion(sections: DraftSection[], refs: { posedIn: s
   mark(refs.posedIn, 'POSED');
   mark(refs.answeredIn, 'ANSWERED');
   return sections;
-}
-
-/**
- * Apply a reviewer's patch to the sections it may change: edits, removals,
- * then insertions; blocks are renumbered afterwards. A reference that does not
- * resolve, or points outside `allowed`, is skipped with a note.
- */
-export function applyPatch(
-  draft: ScriptDraft,
-  patch: ScriptPatch,
-  scope: ScriptScope,
-  allowed: ReadonlySet<number>,
-  who: string,
-  notes: string[],
-): { draft: ScriptDraft; changed: number; keyMap: Map<string, string | null> } {
-  const sections = draft.sections.map((s) => ({ ...s, blocks: s.blocks.map((b) => ({ ...b })) }));
-  let changed = 0;
-  const find = (ref: string) => {
-    const r = parseRef(ref);
-    if (!r) return null;
-    const s = sections.find((x) => x.sequence === r.sequence);
-    if (!s || !allowed.has(s.sequence)) return null;
-    return { section: s, index: r.index, block: s.blocks[r.index] ?? null };
-  };
-  for (const e of patch.edits) {
-    const f = find(e.ref);
-    if (!f?.block) {
-      notes.push(`${who}: edit of ${e.ref} skipped (no such block it may change)`);
-      continue;
-    }
-    const text = clean(e.text) || f.block.text;
-    const raw: WriterBlock = {
-      text,
-      infoClass: e.infoClass ?? f.block.infoClass,
-      beatIds: e.beatIds ?? f.block.beatIds,
-      claimKeys: e.claimKeys ?? f.block.claimKeys,
-      speakerId: f.block.speakerId,
-      speechKind: f.block.speechKind,
-      visual: f.block.visual,
-    };
-    const fresh = normalizeBlock(raw, scope, notes, `${who} ${e.ref}`);
-    f.section.blocks[f.index] = derive({ ...fresh, key: f.block.key, generatedText: fresh.text, delivery: f.block.delivery, centralQuestion: f.block.centralQuestion }, scope);
-    changed++;
-  }
-  // Removals by reference to the blocks as they were shown (positions resolved before removing).
-  const removals = patch.removals.map((ref) => ({ ref, f: find(ref) })).filter((x) => {
-    if (!x.f?.block) notes.push(`${who}: removal of ${x.ref} skipped (no such block it may change)`);
-    return Boolean(x.f?.block);
-  });
-  const doomed = new Set(removals.map((x) => x.f!.block!));
-  for (const s of sections) s.blocks = s.blocks.filter((b) => !doomed.has(b));
-  changed += doomed.size;
-  // Insertions after a block as shown (or "<sequence>.0" for the start of a section).
-  for (const ins of patch.insertions) {
-    const r = parseRef(ins.after);
-    const s = r && sections.find((x) => x.sequence === r.sequence);
-    if (!r || !s || !allowed.has(s.sequence)) {
-      notes.push(`${who}: insertion after ${ins.after} skipped (no such place it may change)`);
-      continue;
-    }
-    const anchor = r.index < 0 ? null : (draft.sections.find((x) => x.sequence === r.sequence)?.blocks[r.index] ?? null);
-    const at = anchor ? s.blocks.findIndex((b) => b.key === anchor.key) + 1 : 0;
-    if (anchor && at === 0) {
-      notes.push(`${who}: insertion after ${ins.after} skipped (that block was removed)`);
-      continue;
-    }
-    s.blocks.splice(at, 0, normalizeBlock(ins.block, scope, notes, `${who} insertion after ${ins.after}`));
-    changed++;
-  }
-  // Where each block shown to the reviewer ended up ("3.4" → "3.3"; null if removed).
-  const keyMap = new Map<string, string | null>();
-  for (const b of allBlocks(draft)) keyMap.set(b.key, null);
-  for (const s of sections) s.blocks.forEach((b, i) => b.key && keyMap.set(b.key, `${s.sequence}.${i + 1}`));
-  return { draft: { ...draft, sections: sections.map(renumber) }, changed, keyMap };
 }
 
 /** Apply the performance pass: delivery for the listed blocks (others keep the default), and pronunciation notes. */

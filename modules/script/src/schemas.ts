@@ -80,20 +80,25 @@ export const PlannerOutput = z.object({
 });
 export type PlannerOutput = z.infer<typeof PlannerOutput>;
 
-/** A reviewer's targeted changes: replace, remove or insert blocks (never the whole script again). */
+/**
+ * A reviewer's targeted changes: replace, remove or insert blocks (never the
+ * whole script again). Each change carries its own reason: changes are judged
+ * one by one, so one that breaks a rule is rejected without losing the rest.
+ */
 const Patch = {
   edits: z.array(
     z.object({
       ref: z.string(),
+      reason: z.string(),
       text: z.string(),
       infoClass: z.enum(SCRIPT_BLOCK_CLASSES).nullable(),
       claimKeys: z.array(z.string()).nullable(),
       beatIds: z.array(z.string()).nullable(),
     }),
   ),
-  removals: z.array(z.string()),
+  removals: z.array(z.object({ ref: z.string(), reason: z.string() })),
   /** `after` is a block ref, or "<sequence>.0" for the start of a section. */
-  insertions: z.array(z.object({ after: z.string(), block: WriterBlock })),
+  insertions: z.array(z.object({ after: z.string(), reason: z.string(), block: WriterBlock })),
 };
 
 const Severity = z.enum(['CRITICAL', 'MAJOR', 'MINOR']);

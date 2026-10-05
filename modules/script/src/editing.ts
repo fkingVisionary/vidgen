@@ -82,7 +82,7 @@ export async function recheck(tx: Tx, scriptId: string, project: Project, scope:
   const blocks = allBlocks(draft);
   const timing = scriptTiming(blocks, target);
   const notes = ['Re-checked after the editor\'s change (rules only, no model calls)'];
-  const report = computeScriptReport({ findings, timing, content: content ?? { editor: null, factCheck: null }, notes });
+  const report = computeScriptReport({ findings, timing, content: content ?? { editor: null, factCheck: null }, notes, draft });
   await tx.script.update({
     where: { id: scriptId },
     data: { qualityReport: report as unknown as Prisma.InputJsonValue, qualityPassed: report.passed, wordCount: timing.words, estimatedDurationSec: Math.round(timing.totalSec) },
@@ -206,7 +206,7 @@ export class ScriptEditing {
       const languageVersionId = loaded.row.scenes[0]?.narrations[0]?.languageVersionId ?? (await tx.languageVersion.findFirstOrThrow({ where: { projectId, isMaster: true }, select: { id: true } })).id;
       const target = runtimeTarget(project);
       const findings = checkScript(loaded.draft, scope, { target, factIssues: content.factCheck?.issues });
-      const report = computeScriptReport({ findings, timing: scriptTiming(allBlocks(loaded.draft), target), content, notes: [`Restored from v${input.version} (no model calls)`] });
+      const report = computeScriptReport({ findings, timing: scriptTiming(allBlocks(loaded.draft), target), content, notes: [`Restored from v${input.version} (no model calls)`], draft: loaded.draft });
       const saved = await saveVersion(tx, {
         projectId,
         languageVersionId,

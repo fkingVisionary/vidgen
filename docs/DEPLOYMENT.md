@@ -221,6 +221,17 @@ script job's log now has a line *Script quality rules on vN* when it starts
 from a version, and *Script quality rules, vN → vM* before *saved for
 review*, with the full digest in the event's data.
 
+## Deploying granular review and the performance budget
+
+No migration, no new variables. The reviewer-change record, the report's
+measurements and judgments and the job option are new optional fields in JSON
+columns that already exist; older versions read as before. The script prompt
+version changed (`script-1.4-2026-10-05.1`), and the reviewers' patch format
+now carries a reason per change: a Retry of a script job started before the
+deploy starts its model calls again. The generate, revise and refine panels
+have an option, off by default, to let the performance pass run past the
+runtime maximum.
+
 ## Environment variables
 
 `✓` = read by V1 code. Planned variables are documented now so the shape is

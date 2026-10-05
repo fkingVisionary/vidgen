@@ -1076,7 +1076,7 @@ model's full 128k output budget: Tulip Mania's 15-minute draft used about
 46k output tokens with thinking, and a truncated output fails the job). Every call is a `provider_calls` row with its
 estimated cost; `SCRIPT_MAX_COST_USD` (default 15) stops a job (FAILED, not
 retried) once its recorded spend passes it. Each step is checkpointed
-(`PROMPT_VERSION` = `script-1.3-2026-10-05.1`): a retry resumes after the last
+(`PROMPT_VERSION` = `script-1.4-2026-10-05.1`): a retry resumes after the last
 completed call. A section rewrite makes 4 calls (rewrite, editor, fact
 checker, performance) over the chosen sections; a refinement 4 (refine,
 editor, fact checker, performance) over the whole script; a draft or whole
@@ -1103,16 +1103,16 @@ module names no documentary, person, place, date or claim.
 | Area | Findings | What is measured |
 |---|---|---|
 | Said once | RETOLD_CONTENT, RECAP_SECTION, CLAIM_RETOLD | A block whose content words — the film's subject words (in 30% of blocks or more) aside — were mostly said by an earlier block (60%, or 45% over the same claims or beats; at least 4 shared words); a section spending a quarter of its time retelling earlier ones; one claim explained again in three or more sections |
-| Deliberate repetition | REFRAIN_LOST; exempt from the rest | A refrain (a short line said again), a callback (a distinctive 3–8-word phrase that returns at the opening and the ending or at section edges, or echoes a short line — in blocks that do not otherwise retell each other or re-say a claim they share) and an escalation (short sentences opening the same way) are kept out of the redundancy and repetition checks and are never offered as cuts; a version that drops one, or says it only once, is warned |
-| Every fact earns its place | PASSENGER_FACT, SOURCE_CHATTER, NAME_LOAD | Two of: background claims only, a name never used again, an authority cited for its own sake, nobody in it, orientation only (never a block with a KEY claim); three or more authorities named once only to be cited; three or more new names in one block |
+| Deliberate repetition | REFRAIN_LOST; exempt from the rest | Repetition with a purpose. A refrain: a short line said again in a later section. A callback: a later passage that returns to an earlier section's material at a point that gives it meaning — the last section or the answer, a section's close, a turn, reveal or consequence, a bookend of the opening, or words that recall or reverse ("the same… that once… now") — either echoing a distinctive 3–8-word phrase or recalling the earlier idea in new words while mostly saying something new; its purpose is recorded (payoff, reversal, resolution, closure). Never a callback: uncertainty language ("historians disagree"), a recurring person, source, place or term (a phrase, or two content words of it, in three blocks or more), a repeat within one section, or blocks that otherwise retell each other or re-say a claim they share. An escalation: short sentences in a row opening the same way. Devices are kept out of the redundancy and repetition checks and never offered as cuts; a version that drops one, or says it once, is warned. A purposeful return that mostly says something new is good repetition, not a retelling; one that only says it again is not |
+| Every fact earns its place | PASSENGER_FACT, SOURCE_CHATTER, NAME_LOAD | A passenger candidate is a factual block that gives the viewer nothing the story needs — no story beat (beyond orientation or transition), no key claim or central question, nobody, no cause and effect, no open question, no deliberate repetition, and nothing a later section builds on (its claim, two of its distinctive words, a name or a figure coming back later). Flagged for the writer and the editor with what it lacks, never cut automatically; a minor-looking fact a later section relies on is not disposable. Three or more authorities named once only to be cited; three or more new names in one block |
 | Pacing | SECTION_OVER_BUDGET, ENDING_DRAG | Over the maximum: a section 15 s and 20% over its planned share of the maximum; an ending 1.5 times a typical section and 30% over its plan |
 | For the ear | WRITTEN_SYNTAX, LIST_SENTENCE, NUMBER_DENSE, NOUN_HEAVY, MONOTONOUS_RHYTHM | Colons, semicolons, parentheses, written-register words; four or more items in one breath (a triple is rhetoric); three numbers in a sentence (the day of a date is part of it); essay nominalisations; a section of eight or more sentences of nearly one length |
 | Meta-narration | META_NARRATION | The narrator talking about the film ("we're going to test", "as we'll see", "before we test it"); one framing line is allowed in the first section |
 | Introductions | PERSON_UNINTRODUCED, DEVICE_UNINTRODUCED, DEVICE_RELABELLED, DEVICE_LABEL_STACKED | A real person first named without what they do; a fictional device not introduced as invented where it first appears (in the narration or an on-screen label), labelled again later, or labelled several ways at once |
 | Assertion → evidence | **PERSON_WITHOUT_EVIDENCE** (blocking), PERSON_WITHOUT_EVIDENCE_SCENE, UNCITED_CLAIM_MATCH | Documented or uncertain narration naming a real person that cites no claim about them (in a reconstruction, a warning); a sentence that says most of what an uncited claim says |
-| Runtime | RUNTIME_PLAN | Over the maximum: a ranked cut plan — retellings and passengers first, then meta-narration, name load, uncited assertions, page syntax, background-only blocks and blocks of sections over budget — covering one and a half times the excess; and what never to cut: the central question and its answer, the turn and the reveals, recorded quotations, each cast member's first appearance, refrains, callbacks and escalations, lines a refinement kept on purpose, the only telling of a KEY claim |
+| Runtime | RUNTIME_PLAN | Over the maximum: a ranked cut plan — retellings and passengers first, then meta-narration, name load, uncited assertions, page syntax, background-only blocks and blocks of sections over budget — covering one and a half times the excess; a block a later section builds on is ranked down ("compress, don't cut"); and what never to cut: the central question and its answer, the turn and the reveals, recorded quotations, each cast member's first appearance, refrains, callbacks and escalations, lines a refinement kept on purpose, the only telling of a KEY claim |
 
-Names are runs of capitalised words ("Anne Goldgar" is one name); at the start
+Names are runs of capitalised words ("Ada Brennan" is one name); at the start
 of a sentence, a capital is a name only if the word is capitalised inside a
 sentence elsewhere, the run has two words, or it "says" something ("Lindqvist
 argues") and is never written in lower case.
@@ -1140,6 +1140,80 @@ person rests on a claim about them*, *said once*, *every fact earns its place*,
 plainly* and *if it runs long: where to cut first*; a check fails only on a
 blocking finding.
 
+**Granular review: every reviewer change judged on its own.** The script
+editor and the fact checker return patches of edits, removals and insertions,
+each with its reason. Each change gets an identity (E1, E2… for the script
+editor, F1… for the fact checker) and is tried on a copy of the script as it
+stands, with the changes kept so far; the rules run, and the change is kept
+only if it adds no blocking finding — compared by rule, block identity and
+wording, so renumbering cannot hide a new problem — and drops no claim link.
+A change that cannot apply (no such block, a block an earlier change removed,
+a section the run may not change, no change at all) is skipped. One bad
+change never costs the good ones; a final validation checks the kept changes
+together. Every change is recorded with the version (`content.reviewChanges`:
+id, reviewer, type, section, the block as seen and where it ended up, the
+original and proposed text, the reason, ACCEPTED / REJECTED / SKIPPED, the
+rules it resolved or broke, and why it was rejected or skipped) — "Violates
+uncertainty presentation — Block 3.1: I3 is PROBABLE but the narration does
+not hedge it [PROBABLE_UNHEDGED]". A reviewer's issue says whether its own
+change fixed it or was rejected, and why.
+
+*The invariants* no refinement, reviewer change or performance mark may
+weaken, each guarded by blocking rules: evidence traceability, factual
+defensibility, information-class integrity, claim relationships, fictional-
+character and real-person boundaries, recorded-quote integrity, uncertainty
+presentation, the architecture, the approved sequence, the central question —
+and the runtime maximum for performance timing. The prompts say it plainly:
+prefer slightly weaker prose with correct evidence over better prose that
+blurs the evidence.
+
+*Evidence beyond numbers* (blocking, `evidence.ts`): a sentence about a real
+person that says what a claim about them carries — an action, a detail, by
+word stem (bought / buy) — when the block does not cite that claim
+(ASSERTION_UNCITED); a sentence kept from the version a run started from
+(word for word, or 80% of its words) that no longer cites the claim behind it,
+whose words are still in it and in no claim the block now cites
+(CLAIM_LINK_LOST — also checked for every reviewer change against the script
+just before it); probability wording ("probably", "most likely", "what
+probably happened") for a myth, an unverified or disputed claim, a
+reconstruction or a framing statement, with no PROBABLE claim behind it — a
+truth status upgraded (UNCERTAINTY_UPGRADED; a question asks, it does not
+assert).
+
+*What the reviewers see.* The script editor and the fact checker see the
+version the run started from, the writer's change log (its own account — the
+measured figures are what count), the lines the writer removed on purpose (so
+a deliberate cut is not taken for an accident), the lines a refinement kept,
+and — for the fact checker — every change the script editor proposed and what
+became of it: an accepted change is not to be undone unless it broke the
+evidence, a rejected one not proposed again without fixing why.
+
+**The performance budget.** Before the performance pass the stage measures the
+narration with no performance timing in the sections it marks and gives the
+pass its budget: "the narration runs 14:31, so your pauses and slower delivery
+together may add at most 0:29". Whatever it marks is then held to the
+maximum: if the full runtime passes it, the least valuable timing goes first
+— rhythm, question and number pauses, then slower delivery, then transitions,
+emotional turns, impact and, last, reveals — a pause reduced a step at a time
+before it is removed; delivery is never sped up to make room. Each block whose
+timing was reduced or removed is recorded as a performance change (P1, P2…).
+Only the user lets a performance run past the maximum: the option on the
+generate, revise and refine panels (`allowPerformanceOverMax`), off by
+default. The runtime range is authoritative: the midpoint is a planning aid,
+and a script anywhere inside the range is valid.
+
+**Measured and judged.** The quality report keeps three things apart:
+*checks* — the deterministic rules (the gate); *measurements* — computed from
+the structured script, never estimated by a model: spoken words, the runtime
+with and without performance timing, pauses, claims cited, words by
+information class, assertions without the claim behind them, repeated
+material, passenger candidates, lines about the film, reviewer changes kept /
+rejected / skipped; and *judgments* — the script editor's verdict and scores,
+its refinement checklist, the fact checker's verdict: opinions, recorded,
+never presented as measurements and never failing the gate. The dashboard
+labels them that way, and scores in the comparison are marked as model
+judgments.
+
 **Limits (stated honestly).** The rules see words, not meaning: a fictional
 act phrased without one of the listed verbs, interiority without a listed
 mental verb, or a hedge that is technically present but misleading will pass
@@ -1151,6 +1225,13 @@ quality rules are heuristics over words and structure: a retelling in other
 words, a passenger with a person in it, or meta-narration in a phrase they do
 not list will pass them, and a deliberate echo they do not recognise can be
 reported as a retelling — they point; the reviewers and the editor judge.
+The fiction-act and interaction checks need the character's name next to the
+verb ("Mira hands…"), so an appositive between them ("Mira, a dock worker,
+hands…") passes them; assertion linking matches word stems, so a synonym
+("purchased" for "bought") passes it; a recall callback needs words such as
+"the same… that once… now"; a passenger is judged by its words, beats and
+claims, not by what it means — the fact checker and the editor remain the
+judges of meaning.
 
 ## 16. Decisions
 
@@ -1226,4 +1307,9 @@ reported as a retelling — they point; the reviewers and the editor judge.
 | D69 | Deliberate repetition is recognised and protected — refrains, callbacks, escalations — and a recap is not a callback | A redundancy rule that punished payoff lines would teach the writer to flatten them; an echo that re-says a shared claim, or a whole sentence, is a retelling | Treat all repetition alike |
 | D70 | Over the maximum: a ranked cut plan with protected blocks, not a word target | "Quality beats arbitrary runtime": the cuts that cost the story nothing come first, and what carries the story is never offered | A hard word budget per section |
 | D71 | Length is measured, never self-reported | The v2 refiner's change log claimed about 1,900 words for 2,319; the system measures and notes the difference | Trust the writer's account |
+| D72 | Reviewer changes are judged one by one against the invariants, and every change is recorded with the version | In the v3 run the blocking findings some changes introduced (six for the script editor's patch, one for the fact checker's) cost all twelve of the script editor's changes and both of the fact checker's fixes — including the one that corrected a dramatised account told as "what probably happened"; a ledger makes the friction between the rules and the reviewers visible | Accept or reject a reviewer's patch as a whole |
+| D73 | Three more evidence checks block: an assertion about a real person needs the claim it rests on; a kept sentence keeps its claim link; probability wording only for PROBABLE claims | A factual assertion need not contain a number to need a claim; a refinement must not drift a truth status or move a sentence away from its evidence | Rely on the fact checker alone |
+| D74 | Performance timing has a budget, and the maximum holds unless the user explicitly allows otherwise | The v3 performance pass took a 14:51 narration to 15:15; the pass now knows what it may spend, and the engine gives up the least valuable timing first, never speeding delivery up | Let the pass add what it likes; or speed delivery up to compensate |
+| D75 | A callback needs direction, purpose and distinctiveness; a passenger is judged by what it contributes and whether a later section builds on it, and is a candidate, never an automatic cut | In v3 repeated hedges and a recurring source name were protected as callbacks while the passenger rule found nothing; repetition is good when it pays off, bad when it only repeats | Phrase repetition as callbacks; deleting flagged passengers |
+| D76 | The quality report separates measurements from model judgments | Model judgments must never look like objective measurements; the gate stays deterministic | Reviewer verdicts as PASS/WARN checks beside the rules |
 | D65 | The writer step gets the model's full output budget | Measured: about 46k of 64k for a 15-minute draft, thinking included; a truncated script fails the job, an unused budget costs nothing | Keep 64k and risk a failed run |

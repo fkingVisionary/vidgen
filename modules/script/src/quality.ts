@@ -1,19 +1,23 @@
-import { SCRIPT_SCORES, fmtClock, fmtVariance, type CoherenceIssue, type QualityCheck, type QualityReport, type ScriptContent, type ScriptTiming } from '@docengine/core';
+import { SCRIPT_SCORES, SCRIPT_TIMING, fmtClock, fmtVariance, type CoherenceIssue, type QualityCheck, type QualityJudgment, type QualityMeasurement, type QualityReport, type ScriptContent, type ScriptTiming } from '@docengine/core';
+import { allBlocks, type ScriptDraft } from './draft.ts';
 import { SCRIPT_BLOCKING, type ScriptFinding, type ScriptFindingKind } from './rules.ts';
 
 /**
  * The script's quality gate: the rule findings grouped into checks. A FAIL
  * blocks approval of the version (the editor can fix it by editing, or
- * rewrite the section); WARNs are for the editor. The reviewers' verdicts are
- * recorded beside the checks; the script editor's never fails the gate.
+ * rewrite the section); WARNs are for the editor. Beside the checks, two
+ * things are kept apart on purpose: measurements, computed by code from the
+ * structured script (words, runtime, pauses, claims, findings by kind,
+ * reviewer changes), and judgments, the models' verdicts and scores — opinions,
+ * recorded, never presented as measurements and never failing the gate.
  */
 
 const GROUPS: { id: string; label: string; kinds: ScriptFindingKind[] }[] = [
   { id: 'evidence', label: 'Every fact traces to the approved architecture', kinds: ['CLAIM_OUTSIDE_ARCHITECTURE', 'NOT_IN_ARCHITECTURE', 'BLOCK_WITHOUT_EVIDENCE'] },
   { id: 'figures_names', label: 'Figures, dates and names come from the evidence', kinds: ['UNSUPPORTED_FIGURE', 'PERSON_OUTSIDE_ARCHITECTURE', 'UNKNOWN_NAME'] },
-  { id: 'assertions', label: 'What is said about a person rests on a claim about them', kinds: ['PERSON_WITHOUT_EVIDENCE', 'PERSON_WITHOUT_EVIDENCE_SCENE', 'UNCITED_CLAIM_MATCH'] },
+  { id: 'assertions', label: 'Every factual assertion rests on a claim the block cites', kinds: ['PERSON_WITHOUT_EVIDENCE', 'ASSERTION_UNCITED', 'CLAIM_LINK_LOST', 'PERSON_WITHOUT_EVIDENCE_SCENE', 'UNCITED_CLAIM_MATCH'] },
   { id: 'information_classes', label: 'Information classes are preserved', kinds: ['CLASS_MISMATCH', 'DOCUMENTED_NOT_ESTABLISHED', 'FRAMING_WITH_FACTS', 'FICTION_NOT_ALLOWED'] },
-  { id: 'uncertainty', label: 'Uncertain history is worded as uncertain', kinds: ['MYTH_AS_FACT', 'DISPUTED_AS_FACT', 'UNVERIFIED_AS_FACT', 'PROBABLE_UNHEDGED'] },
+  { id: 'uncertainty', label: 'Uncertain history is worded as uncertain, never upgraded', kinds: ['MYTH_AS_FACT', 'DISPUTED_AS_FACT', 'UNVERIFIED_AS_FACT', 'PROBABLE_UNHEDGED', 'UNCERTAINTY_UPGRADED'] },
   { id: 'fiction_boundary', label: 'Fiction stays fiction', kinds: ['FICTION_IN_DOCUMENTED', 'FICTION_REAL_INTERACTION', 'FICTION_DOCUMENTED_ACT', 'FICTION_WITH_FACTS'] },
   { id: 'speech', label: 'Real people speak only in recorded quotations', kinds: ['UNDECLARED_SPEAKER', 'REAL_PERSON_INVENTED_SPEECH', 'FICTIONAL_RECORDED_QUOTE', 'UNVERIFIED_RECORDED_QUOTE', 'FABRICATED_QUOTE'] },
   { id: 'structure', label: 'The architecture is told in full and its question answered', kinds: ['SEQUENCE_MISSING', 'CENTRAL_QUESTION_NOT_POSED', 'CENTRAL_QUESTION_ABANDONED'] },
@@ -39,12 +43,20 @@ const GROUPS: { id: string; label: string; kinds: ScriptFindingKind[] }[] = [
 
 const summarise = (fs: readonly ScriptFinding[], max = 6) => fs.slice(0, max).map((f) => f.detail).join('; ') + (fs.length > max ? `; (+${fs.length - max} more)` : '');
 
+const EVIDENCE_KINDS: ScriptFindingKind[] = ['BLOCK_WITHOUT_EVIDENCE', 'UNSUPPORTED_FIGURE', 'PERSON_WITHOUT_EVIDENCE', 'ASSERTION_UNCITED', 'CLAIM_LINK_LOST', 'UNCERTAINTY_UPGRADED', 'UNCITED_CLAIM_MATCH'];
+const refsOf = (fs: readonly ScriptFinding[], kinds: readonly ScriptFindingKind[]) => fs.filter((f) => kinds.includes(f.kind)).map((f) => f.ref ?? 'script');
+const listed = (refs: readonly string[]) => (refs.length ? `${refs.slice(0, 12).join(', ')}${refs.length > 12 ? ` (+${refs.length - 12})` : ''}` : null);
+
 export function computeScriptReport(args: {
   findings: readonly ScriptFinding[];
   timing: ScriptTiming;
-  content: Pick<ScriptContent, 'editor' | 'factCheck'>;
+  content: Pick<ScriptContent, 'editor' | 'factCheck'> & Partial<Pick<ScriptContent, 'reviewChanges'>>;
   notes: readonly string[];
   reviewers?: { editor: string | null; factCheck: string | null };
+  /** The script, for the measurements. */
+  draft?: ScriptDraft;
+  /** The runtime with no performance timing in the sections the run marked. */
+  narrationSec?: number | null;
 }): QualityReport {
   const { findings, timing, content } = args;
   const checks: QualityCheck[] = [];
@@ -66,31 +78,82 @@ export function computeScriptReport(args: {
     metric: timing.totalSec,
     threshold: timing.targetSec,
   });
-  // The reviewers, recorded.
-  const scores = content.editor ? SCRIPT_SCORES.flatMap((k) => (content.editor!.scores[k] ? [`${k.replace('_SCORE', '').toLowerCase().replace('_', ' ')} ${content.editor!.scores[k]!.score}`] : [])).join(', ') : '';
-  checks.push({
-    id: 'script_editor',
-    label: 'Script editor (craft; recorded, never blocking)',
-    status: content.editor ? 'PASS' : 'WARN',
-    detail: content.editor ? `${content.editor.verdict}${scores ? ` — ${scores}` : ''}` : (args.reviewers?.editor ?? 'The script editor did not review this version'),
-    metric: null,
-    threshold: null,
-  });
-  checks.push({
-    id: 'fact_checker',
-    label: 'Fact checker',
-    status: content.factCheck ? 'PASS' : 'WARN',
-    detail: content.factCheck ? `${content.factCheck.verdict} (${content.factCheck.issues.length} issue(s))` : (args.reviewers?.factCheck ?? 'The fact checker did not review this version'),
-    metric: content.factCheck?.issues.length ?? null,
-    threshold: null,
-  });
   const coherenceIssues: CoherenceIssue[] = [...(content.factCheck?.issues ?? []), ...(content.editor?.issues ?? [])].map((i) => ({
     severity: i.severity,
     description: `${i.ref ? `${i.ref}: ` : ''}[${i.kind}] ${i.note}`,
     claimKeys: [],
     resolution: i.resolution,
   }));
-  return { passed: checks.every((c) => c.status !== 'FAIL'), generatedAt: new Date().toISOString(), checks, normalizations: [...args.notes], coherenceIssues };
+  return {
+    passed: checks.every((c) => c.status !== 'FAIL'),
+    generatedAt: new Date().toISOString(),
+    checks,
+    normalizations: [...args.notes],
+    coherenceIssues,
+    measurements: measure(args),
+    judgments: judgments(args),
+  };
+}
+
+/** What code measured: never a model's estimate. */
+function measure(args: Parameters<typeof computeScriptReport>[0]): QualityMeasurement[] {
+  const { findings, timing, draft } = args;
+  const m = (id: string, label: string, value: string, detail: string | null = null): QualityMeasurement => ({ id, label, value, detail });
+  const out: QualityMeasurement[] = [
+    m('words', 'Spoken words', timing.words.toLocaleString('en'), `counted from the script at ${SCRIPT_TIMING.wordsPerMinute} words a minute`),
+    m('runtime', 'Runtime, with performance timing', fmtClock(timing.totalSec), `acceptable ${fmtClock(timing.minSec)}–${fmtClock(timing.maxSec)} · ${timing.totalSec > timing.maxSec ? `${fmtClock(timing.totalSec - timing.maxSec)} over the maximum` : timing.totalSec < timing.minSec ? `${fmtClock(timing.minSec - timing.totalSec)} under the minimum` : 'within the range'}`),
+  ];
+  if (args.narrationSec != null) out.push(m('narration', 'Runtime of the words alone', fmtClock(args.narrationSec), `performance timing (pauses, pace) adds ${Math.max(0, timing.totalSec - args.narrationSec).toFixed(1)} s`));
+  if (draft) {
+    const blocks = allBlocks(draft);
+    const pauses = blocks.flatMap((b) => [b.delivery.pauseBefore, b.delivery.pauseAfter]).filter((p) => p.length !== 'NONE');
+    const pauseSec = pauses.reduce((n, p) => n + SCRIPT_TIMING.pauseSec[p.length], 0);
+    const slow = blocks.filter((b) => b.delivery.pace === 'SLOW').length;
+    out.push(m('pauses', 'Pauses', `${pauses.length}`, `${pauseSec.toFixed(1)} s in all · ${slow} block(s) at a slow pace`));
+    const claims = new Set(blocks.flatMap((b) => b.claimKeys));
+    out.push(m('claims', 'Claims cited', `${claims.size}`, `across ${blocks.length} blocks`));
+    const words = new Map<string, number>();
+    for (const b of blocks) words.set(b.infoClass, (words.get(b.infoClass) ?? 0) + b.wordCount);
+    out.push(m('classes', 'Words by information class', [...words].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(' · ') || '—'));
+  }
+  const evidence = refsOf(findings, EVIDENCE_KINDS);
+  out.push(m('unsupported', 'Assertions without the claim behind them', `${evidence.length}`, listed(evidence)));
+  const retold = refsOf(findings, ['RETOLD_CONTENT', 'RECAP_SECTION', 'CLAIM_RETOLD']);
+  out.push(m('repeated', 'Repeated material (retellings, recap sections, claims explained again)', `${retold.length}`, listed(retold)));
+  const passengers = refsOf(findings, ['PASSENGER_FACT']);
+  out.push(m('passengers', 'Passenger candidates (for the editor to decide)', `${passengers.length}`, listed(passengers)));
+  const meta = refsOf(findings, ['META_NARRATION']);
+  out.push(m('meta', 'Lines about the film itself (one allowed in the opening)', `${meta.length}`, listed(meta)));
+  const changes = args.content.reviewChanges ?? [];
+  if (changes.length) {
+    const count = (who: string, s: string) => changes.filter((c) => c.reviewer === who && c.status === s).length;
+    const by = (who: string, label: string) => (changes.some((c) => c.reviewer === who) ? `${label} ${count(who, 'ACCEPTED')} kept / ${count(who, 'REJECTED')} rejected / ${count(who, 'SKIPPED')} skipped` : null);
+    out.push(
+      m(
+        'review_changes',
+        'Reviewer changes',
+        `${changes.filter((c) => c.status === 'ACCEPTED').length} kept, ${changes.filter((c) => c.status === 'REJECTED').length} rejected, ${changes.filter((c) => c.status === 'SKIPPED').length} skipped`,
+        [by('SCRIPT_EDITOR', 'script editor'), by('FACT_CHECKER', 'fact checker'), by('PERFORMANCE', 'performance timing')].filter(Boolean).join(' · '),
+      ),
+    );
+  }
+  return out;
+}
+
+/** What the models judged: recorded as opinions. */
+function judgments(args: Parameters<typeof computeScriptReport>[0]): QualityJudgment[] {
+  const { content } = args;
+  const j = (id: string, label: string, source: string, value: string, detail: string | null = null): QualityJudgment => ({ id, label, source, value, detail });
+  const out: QualityJudgment[] = [];
+  if (content.editor) {
+    const scores = SCRIPT_SCORES.flatMap((k) => (content.editor!.scores[k] ? [`${k.replace('_SCORE', '').toLowerCase().replace('_', ' ')} ${content.editor!.scores[k]!.score}`] : [])).join(', ');
+    out.push(j('script_editor', "Script editor's verdict and scores", 'script editor (model)', scores || '—', content.editor.verdict));
+    const a = content.editor.assessment ?? [];
+    if (a.length) out.push(j('checklist', 'Refinement checklist', 'script editor (model)', `${a.filter((x) => x.answer === 'YES').length} yes, ${a.filter((x) => x.answer === 'PARTLY').length} partly, ${a.filter((x) => x.answer === 'NO').length} no`, `${a.filter((x) => x.comparedToPrevious === 'WORSE').length} judged worse than the version before`));
+  } else out.push(j('script_editor', "Script editor's verdict and scores", 'script editor (model)', 'not reviewed', args.reviewers?.editor ?? 'The script editor did not review this version'));
+  if (content.factCheck) out.push(j('fact_checker', "Fact checker's verdict", 'fact checker (model)', `${content.factCheck.issues.length} issue(s)`, content.factCheck.verdict));
+  else out.push(j('fact_checker', "Fact checker's verdict", 'fact checker (model)', 'not reviewed', args.reviewers?.factCheck ?? 'The fact checker did not review this version'));
+  return out;
 }
 
 /** The blocking findings as the API shows them (why approval is refused). */
