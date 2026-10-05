@@ -55,6 +55,10 @@ export const WriterOutput = z.object({
 });
 export type WriterOutput = z.infer<typeof WriterOutput>;
 
+/** A narrative refinement: the whole script rewritten for the ear, and the strongest lines it kept word for word. */
+export const RefineOutput = WriterOutput.extend({ keptLines: z.array(z.string()) });
+export type RefineOutput = z.infer<typeof RefineOutput>;
+
 /** Stage A — the plan: what is said, what is shown, where tension, reveals and exposition go. */
 export const PlannerOutput = z.object({
   narrator: z.object({ persona: z.string(), tone: z.string(), approach: z.string() }),
@@ -112,11 +116,12 @@ export const EDITOR_ISSUE_KINDS = [
   'OTHER',
 ] as const;
 
-/** Stage C — the script editor: craft. */
+/** Stage C — the script editor: craft. `assessment` answers the refinement checklist (empty when there is none). */
 export const ScriptEditorOutput = z.object({
   verdict: z.string(),
   scores: z.object({ NARRATIVE_SCORE: Score, AUDIO_FLOW_SCORE: Score, CLARITY_SCORE: Score, EMOTIONAL_SCORE: Score, ENDING_SCORE: Score }),
   issues: z.array(z.object({ ref: z.string().nullable(), severity: Severity, kind: z.enum(EDITOR_ISSUE_KINDS), note: z.string() })),
+  assessment: z.array(z.object({ question: z.string(), answer: z.enum(['YES', 'PARTLY', 'NO']), comparedToPrevious: z.enum(['BETTER', 'SAME', 'WORSE']), note: z.string() })),
   ...Patch,
 });
 export type ScriptEditorOutput = z.infer<typeof ScriptEditorOutput>;

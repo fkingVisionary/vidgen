@@ -16,12 +16,13 @@ import { ProviderError } from '@docengine/providers';
 import { CostCeiling, EvidenceBase, StepCheckpoint } from '@docengine/story/shared';
 import { z } from 'zod';
 import { DEFAULT_SCRIPT_CONFIG, SCRIPT_STEPS, type ScriptConfig, type ScriptStep } from './config.ts';
+import { compareDrafts, evidenceChanges } from './compare.ts';
 import { allBlocks, applyPatch, applyPerformance, markCentralQuestion, mergePronunciations, sectionDurationSec, sectionWords, sectionsFromWriter, type ScriptDraft } from './draft.ts';
-import { PROMPT_VERSION, factCheckSystemPrompt, performanceSystemPrompt, plannerSystemPrompt, rewriteSystemPrompt, scriptEditorSystemPrompt, writerSystemPrompt } from './prompts.ts';
+import { PROMPT_VERSION, REFINEMENT_CHECKLIST, factCheckSystemPrompt, performanceSystemPrompt, plannerSystemPrompt, refineSystemPrompt, rewriteSystemPrompt, scriptEditorSystemPrompt, writerSystemPrompt } from './prompts.ts';
 import { computeScriptReport } from './quality.ts';
 import { renderArchitecture, renderEvidence, renderScript } from './render.ts';
 import { SCRIPT_BLOCKING, blockingCount, checkScript, type ScriptFinding } from './rules.ts';
-import { FactCheckOutput, PerformanceOutput, PlannerOutput, ScriptEditorOutput, WriterOutput, type ScriptPatch } from './schemas.ts';
+import { FactCheckOutput, PerformanceOutput, PlannerOutput, RefineOutput, ScriptEditorOutput, WriterOutput, type ScriptPatch } from './schemas.ts';
 import { buildScope, type ScriptScope } from './scope.ts';
 import { loadVersion, saveVersion, type LoadedScript } from './store.ts';
 
@@ -33,8 +34,12 @@ import { loadVersion, saveVersion, type LoadedScript } from './store.ts';
  *     → fact checker (+ patch) → rules → performance → gate → script vN
  *
  * A revision makes a new version from an earlier one: chosen sections are
- * rewritten (the others copied unchanged, no model calls for them), or the
- * whole script is rewritten from the editor's brief. Every version is kept.
+ * rewritten (the others copied unchanged, no model calls for them), the
+ * whole script is rewritten from the editor's brief, or — a narrative
+ * refinement — the whole script's telling is rewritten for the ear with its
+ * story, structure, classes and evidence unchanged (no planner; the script
+ * editor answers the refinement checklist against the version refined).
+ * Every version is kept.
  * The gate never stops a version reaching review: its blocking findings stop
  * approval until the editor fixes them. Nothing is approved here.
  */
@@ -48,7 +53,7 @@ const EditStep = z.union([ScriptEditorOutput, Unavailable]);
 const FactStep = z.union([FactCheckOutput, Unavailable]);
 const PerformStep = z.union([PerformanceOutput, Unavailable]);
 
-type Mode = 'DRAFT' | 'SECTIONS' | 'REVISION';
+type Mode = 'DRAFT' | 'SECTIONS' | 'REVISION' | 'REFINEMENT';
 
 interface Architecture {
   id: string;
@@ -84,7 +89,7 @@ class ScriptRun {
     const scope = buildScope({ architectureId: arch.id, architectureVersion: arch.version, architecture: arch.content, evidence });
     const target = runtimeTarget(ctx.project);
     const all = arch.content.sequences.map((s) => s.number);
-    const mode: Mode = !input.revise ? 'DRAFT' : input.revise.sections.length ? 'SECTIONS' : 'REVISION';
+    const mode: Mode = !input.revise ? 'DRAFT' : input.revise.refine ? 'REFINEMENT' : input.revise.sections.length ? 'SECTIONS' : 'REVISION';
     const written = mode === 'SECTIONS' ? input.revise!.sections : all;
     const unknown = written.filter((n) => !all.includes(n));
     if (unknown.length) throw new NonRetryableError(`Sections ${unknown.join(', ')} are not sequences of architecture v${arch.version}`);
@@ -95,14 +100,16 @@ class ScriptRun {
     await ctx.progress(
       mode === 'DRAFT'
         ? `Script draft from architecture v${arch.version}: ${all.length} sequences, ${scope.claims.length} claims; target ${fmtClock(target.targetSec)}`
-        : `${mode === 'SECTIONS' ? `Rewriting section${written.length > 1 ? 's' : ''} ${written.join(', ')}` : 'Revising the whole script'} of script v${base!.row.version} from the editor's brief: "${clip(brief ?? '', 140)}"`,
+        : mode === 'REFINEMENT'
+          ? `Refining the narration of script v${base!.row.version} for the ear (story, structure and evidence unchanged)${brief ? `; the editor's brief: "${clip(brief, 140)}"` : ''}`
+          : `${mode === 'SECTIONS' ? `Rewriting section${written.length > 1 ? 's' : ''} ${written.join(', ')}` : 'Revising the whole script'} of script v${base!.row.version} from the editor's brief: "${clip(brief ?? '', 140)}"`,
       { architectureVersion: arch.version, mode, sections: written, brief, target },
     );
 
-    // A. Plan (a section rewrite keeps the base version's plan).
+    // A. Plan (a section rewrite and a refinement keep the base version's plan).
     let plans = new Map<number, ScriptSectionPlan>(base ? base.draft.sections.flatMap((s) => (s.plan ? [[s.sequence, s.plan] as const] : [])) : []);
     let narrator = base?.content?.narrator ?? { persona: '', tone: '', approach: '' };
-    if (mode === 'SECTIONS') await this.steps.skip('plan');
+    if (mode === 'SECTIONS' || mode === 'REFINEMENT') await this.steps.skip('plan');
     else {
       await this.ceiling.check();
       const plan = await this.steps.step('plan', PlannerOutput, () => this.plan(scope, target, brief, base));
@@ -111,29 +118,39 @@ class ScriptRun {
       notes.push(...plan.notes.map((n) => `Planner: ${n}`));
     }
 
-    // B. Write (or rewrite the chosen sections; the others are copied unchanged).
+    // B. Write (or rewrite the chosen sections, the others copied unchanged; or refine the whole telling).
     await this.ceiling.check();
-    const writerOut = await this.steps.step('write', WriterOutput, () => (mode === 'SECTIONS' ? this.rewrite(scope, target, base!, written, brief, plans) : this.write(scope, target, brief, plans, narrator, base)));
-    let draft = this.assemble(writerOut, scope, base, written, plans, notes);
+    const writerOut: WriterOutput & { keptLines?: string[] } =
+      mode === 'REFINEMENT'
+        ? await this.steps.step('write', RefineOutput, () => this.refine(scope, target, base!, brief, plans))
+        : await this.steps.step('write', WriterOutput, () => (mode === 'SECTIONS' ? this.rewrite(scope, target, base!, written, brief, plans) : this.write(scope, target, brief, plans, narrator, base)));
+    let draft = this.assemble(writerOut, scope, base, written, plans, notes, mode === 'REFINEMENT');
     const draftFindings = checkScript(draft, scope, { target });
-    await ctx.progress(`Script ${mode === 'DRAFT' ? 'draft' : 'rewrite'}: ${allBlocks(draft).length} blocks, ${allBlocks(draft).reduce((n, b) => n + b.wordCount, 0)} words, ~${fmtClock(scriptTiming(allBlocks(draft), target).totalSec)}; ${blockingCount(draftFindings)} blocking findings`, {
+    await ctx.progress(`Script ${mode === 'DRAFT' ? 'draft' : mode === 'REFINEMENT' ? 'refinement' : 'rewrite'}: ${allBlocks(draft).length} blocks, ${allBlocks(draft).reduce((n, b) => n + b.wordCount, 0)} words, ~${fmtClock(scriptTiming(allBlocks(draft), target).totalSec)}; ${blockingCount(draftFindings)} blocking findings`, {
       findings: draftFindings.filter((f) => SCRIPT_BLOCKING.includes(f.kind)).map((f) => f.detail).slice(0, 30),
     });
 
     // C. Script editor (craft).
     await this.ceiling.check();
-    const edited = await this.steps.step('edit', EditStep, () => this.unavailableOnError(() => this.call('edit', 'script.edit', ScriptEditorOutput, 'ScriptEditorReview', scriptEditorSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief), (x) => ({ issues: x.issues.length, edits: x.edits.length }))));
+    const refined = mode === 'REFINEMENT' ? base! : null;
+    const edited = await this.steps.step('edit', EditStep, () =>
+      this.unavailableOnError(() =>
+        this.call('edit', 'script.edit', ScriptEditorOutput, 'ScriptEditorReview', scriptEditorSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { previous: refined, checklist: refined !== null }), (x) => ({ issues: x.issues.length, edits: x.edits.length, assessment: x.assessment.length })),
+      ),
+    );
     let editor: ScriptContent['editor'] = null;
     if ('unavailable' in edited) notes.push(`Script editor unavailable: ${edited.unavailable}`);
     else {
       const r = this.tryPatch(draft, edited, scope, target, allowed, 'Script editor', notes);
       draft = r.draft;
-      editor = { verdict: edited.verdict, scores: edited.scores, issues: edited.issues.map((i) => ({ ...i, ...resolve(i.ref, r) })) };
+      editor = { verdict: edited.verdict, scores: edited.scores, issues: edited.issues.map((i) => ({ ...i, ...resolve(i.ref, r) })), ...(refined ? { assessment: checklistAnswers(edited.assessment, notes) } : {}) };
     }
 
     // D. Fact checker (last word on facts).
     await this.ceiling.check();
-    const checked = await this.steps.step('factCheck', FactStep, () => this.unavailableOnError(() => this.call('factCheck', 'script.factCheck', FactCheckOutput, 'ScriptFactCheck', factCheckSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief), (x) => ({ issues: x.issues.length, edits: x.edits.length }))));
+    const checked = await this.steps.step('factCheck', FactStep, () =>
+      this.unavailableOnError(() => this.call('factCheck', 'script.factCheck', FactCheckOutput, 'ScriptFactCheck', factCheckSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { previous: null, checklist: false, refinementOf: refined?.row.version }), (x) => ({ issues: x.issues.length, edits: x.edits.length }))),
+    );
     let factCheck: ScriptContent['factCheck'] = null;
     if ('unavailable' in checked) notes.push(`Fact checker unavailable: ${checked.unavailable}`);
     else {
@@ -172,7 +189,7 @@ class ScriptRun {
         sections: written,
         brief,
         requestedBy: (await this.requester()) ?? null,
-        changeLog: writerOut.changeLog,
+        changeLog: mode === 'REFINEMENT' ? { ...writerOut.changeLog, kept: (writerOut.keptLines ?? []).map((l) => l.trim()).filter(Boolean) } : writerOut.changeLog,
       },
     };
     const findings = checkScript(draft, scope, { target, factIssues: factCheck?.issues });
@@ -224,6 +241,7 @@ class ScriptRun {
     const spend = await this.spent();
     const failed = report.checks.filter((c) => c.status === 'FAIL');
     const warned = report.checks.filter((c) => c.status === 'WARN');
+    const comparison = base && mode === 'REFINEMENT' ? refinementSummary(base, draft, content, spend) : null;
     await ctx.progress(
       `Script v${saved.version}${base ? ` (from v${base.row.version})` : ''} saved for review: ${draft.sections.length} sections, ${timing.words} words, ${fmtClock(timing.totalSec)} against a target of ${fmtClock(timing.targetSec)} (${fmtVariance(timing.varianceSec)}) — quality gate ${report.passed ? 'PASSED' : `FAILED (${failed.map((c) => c.id).join(', ')}): approval is blocked until fixed`}`,
       {
@@ -245,6 +263,7 @@ class ScriptRun {
         models: this.models,
         estimatedCostUsd: spend,
         resumedSteps: stats.resumedSteps,
+        ...(comparison ? { comparison } : {}),
       },
     );
     return { scriptId: saved.id, version: saved.version, qualityPassed: report.passed, words: timing.words, durationSec: timing.totalSec, sections: draft.sections.length, mode, ...(base ? { revisionOf: base.row.version } : {}), estimatedCostUsd: spend };
@@ -266,12 +285,21 @@ class ScriptRun {
     return { id: approved.id, version: approved.version, dossierId: approved.dossierId, content: content.data };
   }
 
-  /** Copy the base's sections that are not rewritten; take the rest from the writer. */
-  private assemble(out: WriterOutput, scope: ScriptScope, base: LoadedScript | null, written: readonly number[], plans: ReadonlyMap<number, ScriptSectionPlan>, notes: string[]): ScriptDraft {
+  /**
+   * Copy the base's sections that are not rewritten; take the rest from the
+   * writer. A refinement that returns a section empty keeps that section as
+   * it was (noted), rather than losing it.
+   */
+  private assemble(out: WriterOutput, scope: ScriptScope, base: LoadedScript | null, written: readonly number[], plans: ReadonlyMap<number, ScriptSectionPlan>, notes: string[], refinement = false): ScriptDraft {
     const fresh = sectionsFromWriter(out, scope, written, plans, notes);
     if (!base) return { sections: fresh, pronunciations: [] };
     const sections = scope.architecture.sequences.map((seq) => {
       const mine = fresh.find((s) => s.sequence === seq.number);
+      const kept = refinement && mine && mine.blocks.length === 0 ? base.draft.sections.find((s) => s.sequence === seq.number) : undefined;
+      if (kept?.blocks.length) {
+        notes.push(`The refinement returned section ${seq.number} empty; it is kept as it was in v${base.row.version}`);
+        return { ...kept, blocks: kept.blocks.map((b) => ({ ...b })), written: false };
+      }
       if (mine) return mine;
       const copied = base.draft.sections.find((s) => s.sequence === seq.number);
       return copied ? { ...copied, blocks: copied.blocks.map((b) => ({ ...b })), written: false } : { ...fresh[0]!, sequence: seq.number, blocks: [], written: false };
@@ -355,20 +383,86 @@ class ScriptRun {
     return this.call('write', 'script.rewrite', WriterOutput, 'DocumentaryScript', rewriteSystemPrompt(target), parts.join('\n'), summarizeWriter);
   }
 
-  /** What a reviewer sees: the script (the sections it may change in full), the rule findings, the architecture and the evidence. */
-  private reviewPrompt(draft: ScriptDraft, scope: ScriptScope, target: RuntimeTarget, allowed: ReadonlySet<number>, brief: string | null): string {
+  /**
+   * A narrative refinement: the whole script's telling rewritten for the ear
+   * from the base version, with what its reviewers and the rules said about
+   * it. The plan is the base's; the architecture and evidence are the bounds.
+   */
+  private async refine(scope: ScriptScope, target: RuntimeTarget, base: LoadedScript, brief: string | null, plans: ReadonlyMap<number, ScriptSectionPlan>): Promise<RefineOutput> {
+    const v = base.row.version;
+    const timing = scriptTiming(allBlocks(base.draft), target);
+    const sectionNotes = base.draft.sections.filter((s) => s.editorNotes || s.reviewStatus === 'REJECTED').map((s) => `- Section ${s.sequence}${s.reviewStatus === 'REJECTED' ? ' (rejected by the editor)' : ''}: ${s.editorNotes ?? 'no note'}`);
+    const editor = base.content?.editor;
+    const findings = checkScript(base.draft, scope, { target, factIssues: base.content?.factCheck?.issues });
+    const parts = [
+      this.header(target),
+      `Script v${v} runs ${fmtClock(timing.totalSec)} (${timing.words} spoken words).`,
+      '',
+      `# Refine the narration of script v${v} — every section; its story, order, evidence and information classes stay as they are`,
+      brief ? `The editor's brief for this refinement: ${brief}` : 'No brief beyond the principles: make it sound like a person telling a story.',
+      ...(sectionNotes.length ? ["The editor's notes on sections:", ...sectionNotes] : []),
+      ...(editor
+        ? [
+            '',
+            `# What the script editor said about v${v}`,
+            editor.verdict,
+            ...Object.entries(editor.scores).map(([k, x]) => `- ${k}: ${x!.score}/10 — ${x!.why}`),
+            ...editor.issues.map((i) => `- ${i.severity} ${i.kind}${i.ref ? ` at ${i.ref}` : ''}: ${i.note} [${i.resolution}]`),
+          ]
+        : []),
+      '',
+      `# What the automated checks flag in v${v} (${findings.length})`,
+      ...(findings.length ? findings.slice(0, 40).map((f) => `- ${SCRIPT_BLOCKING.includes(f.kind) ? 'BLOCKING' : 'warning'} ${f.kind}: ${f.detail}`) : ['- nothing']),
+      '',
+      `# Script v${v} — the text to refine (each block with its class, beats, claims and speaker)`,
+      renderScript(base.draft),
+      '',
+      this.renderPlan(plans, base.content?.narrator ?? { persona: '', tone: '', approach: '' }),
+      '',
+      renderArchitecture(scope),
+      '',
+      renderEvidence(scope),
+    ];
+    return this.call('write', 'script.refine', RefineOutput, 'RefinedScript', refineSystemPrompt(target), parts.join('\n'), (x) => ({ ...summarizeWriter(x), keptLines: x.keptLines.length }));
+  }
+
+  /**
+   * What a reviewer sees: the script (the sections it may change in full),
+   * the rule findings, the architecture and the evidence — and, for a
+   * refinement's script editor, the version refined and the checklist.
+   */
+  private reviewPrompt(
+    draft: ScriptDraft,
+    scope: ScriptScope,
+    target: RuntimeTarget,
+    allowed: ReadonlySet<number>,
+    brief: string | null,
+    opts: { previous?: LoadedScript | null; checklist?: boolean; refinementOf?: number } = {},
+  ): string {
     const only = allowed.size === scope.architecture.sequences.length ? undefined : allowed;
     const inScope = (f: ScriptFinding) => f.ref === null || only === undefined || [...only].some((n) => f.ref!.startsWith(`${n}.`) || f.ref === `S${n}`);
     const findings = checkScript(draft, scope, { target }).filter(inScope);
+    const timing = scriptTiming(allBlocks(draft), target);
+    const previous = opts.previous ?? null;
     return [
       this.header(target),
+      `This version runs ${fmtClock(timing.totalSec)} (${timing.words} spoken words).`,
       ...(brief ? ['', `# The editor's brief for this version\n${brief}`] : []),
+      ...(opts.refinementOf ? ['', `This version is a narrative refinement of v${opts.refinementOf}: rewording must not change what the evidence supports — hedges kept, numbers and dates unchanged, quotations exact, fiction still fiction.`] : []),
       '',
       `# The script${only ? ` — review and change only section${only.size > 1 ? 's' : ''} ${[...only].join(', ')}` : ''}`,
       renderScript(draft, { only }),
       '',
       `# What the automated rules found (${findings.length}; blocking ones must be fixed)`,
       ...(findings.length ? findings.slice(0, 60).map((f) => `- ${SCRIPT_BLOCKING.includes(f.kind) ? 'BLOCKING' : 'warning'} ${f.kind}: ${f.detail}`) : ['- nothing']),
+      ...(previous
+        ? [
+            '',
+            `# The previous version (v${previous.row.version}) this one refines — for comparison only; do not change it (${fmtClock(scriptTiming(allBlocks(previous.draft), target).totalSec)})`,
+            renderScript(previous.draft),
+          ]
+        : []),
+      ...(opts.checklist ? ['', `# Refinement checklist — answer every question, in this order, for this version against v${previous?.row.version ?? '?'}`, ...REFINEMENT_CHECKLIST.map((q, i) => `${i + 1}. ${q}`)] : []),
       '',
       renderArchitecture(scope),
       '',
@@ -462,5 +556,35 @@ function countBy(xs: readonly string[]): Record<string, number> {
 }
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/** The script editor's checklist answers, one per question in the checklist's order (its own wording of a question is replaced by ours). */
+function checklistAnswers(answers: ScriptEditorOutput['assessment'], notes: string[]): NonNullable<NonNullable<ScriptContent['editor']>['assessment']> {
+  if (answers.length !== REFINEMENT_CHECKLIST.length) notes.push(`Script editor: ${answers.length} checklist answer(s) for ${REFINEMENT_CHECKLIST.length} questions`);
+  return REFINEMENT_CHECKLIST.flatMap((question, i) => {
+    const a = answers[i];
+    return a ? [{ question, answer: a.answer, comparedToPrevious: a.comparedToPrevious, note: a.note.trim() }] : [];
+  });
+}
+
+/** A refinement against its base, for the job's final report: words, runtime, what changed, evidence, the checklist. */
+function refinementSummary(base: LoadedScript, draft: ScriptDraft, content: ScriptContent, spend: number) {
+  const cmp = compareDrafts(base.draft, draft);
+  const ev = evidenceChanges(base.draft, draft);
+  const assessment = content.editor?.assessment ?? [];
+  return {
+    base: { version: base.row.version, words: cmp.totals.wordsA, durationSec: cmp.totals.durationA },
+    refined: { words: cmp.totals.wordsB, durationSec: cmp.totals.durationB },
+    wordsRemoved: cmp.totals.wordsRemoved,
+    wordsAdded: cmp.totals.wordsAdded,
+    sectionsChanged: cmp.totals.sectionsChanged,
+    bySection: cmp.sections.map((x) => `${x.sequenceNumber}. ${x.title}: ${x.words.a} → ${x.words.b} words (−${x.words.removed} +${x.words.added}), ${fmtClock(x.durationSec.a)} → ${fmtClock(x.durationSec.b)}`),
+    evidence: ev,
+    keptLines: content.provenance.changeLog?.kept ?? [],
+    changeSummary: content.provenance.changeLog?.summary ?? null,
+    changes: (content.provenance.changeLog?.changes ?? []).map((c) => `${c.section ? `S${c.section} ` : ''}${c.what} — ${c.why}`),
+    checklist: assessment.map((a, i) => `${i + 1}. ${a.answer} (${a.comparedToPrevious.toLowerCase()} than v${base.row.version}) ${a.question} — ${a.note}`),
+    estimatedCostUsd: spend,
+  };
+}
 
 export type { ScriptFinding };

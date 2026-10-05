@@ -261,7 +261,7 @@ export const PRESENTATION_VERDICTS: readonly ClaimVerdict[] = ['PROBABLE', 'DISP
 
 /** Wording that reflects a PROBABLE claim's status ("records suggest", "contemporary accounts indicate", …). */
 export const HEDGE_PATTERN =
-  /\b(records? (?:suggests?|indicates?|imply|implies)|(?:contemporary |surviving )?accounts? (?:suggests?|indicates?|imply|implies|say)|evidence (?:suggests?|indicates?|points)|(?:most )?likely|probably|apparently|appears? to|seems? to|reportedly|it is (?:thought|believed|likely)|according to|historians (?:think|believe|suggest)|suggests?|indicates?|may have|might have|perhaps)\b/i;
+  /\b(records? (?:suggests?|indicates?|imply|implies)|(?:contemporary |surviving )?accounts? (?:suggests?|indicates?|imply|implies|say)|evidence (?:suggests?|indicates?|points)|(?:most )?likely|probably|apparently|appears? to|seems? to|it (?:seems|appears)|reportedly|it is (?:thought|believed|likely)|according to|historians (?:think|believe|suggest)|suggests?|indicates?|may have|might have|perhaps)\b/i;
 
 // ---------------------------------------------------------------------------
 // Story Engine 2.0: reconstruction budget, fiction limits, duration

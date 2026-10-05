@@ -13,6 +13,7 @@ import type {
   ResearchView,
   ReviseArchitectureInput,
   ReviewScriptSectionInput,
+  RefineScriptInput,
   ReviseScriptInput,
   RewindInput,
   ScriptCompareView,
@@ -83,6 +84,7 @@ export const api = {
   generateScript: (id: string, input: GenerateScriptInput = {}) => request<JobView>('POST', `/api/projects/${id}/script`, input),
   /** Rewrite chosen sections (or the whole script) of a version from a brief: a new version, every version kept. */
   reviseScript: (id: string, input: ReviseScriptInput) => request<JobView>('POST', `/api/projects/${id}/script/revise`, input),
+  refineScript: (id: string, input: RefineScriptInput) => request<JobView>('POST', `/api/projects/${id}/script/refine`, input),
   restoreScript: (id: string, version: number) => request<ScriptView>('POST', `/api/projects/${id}/script/restore`, { version }),
   compareScripts: (id: string, a: number, b: number) => request<ScriptCompareView>('GET', `/api/projects/${encodeURIComponent(id)}/script/compare?a=${a}&b=${b}`),
   voicePlan: (id: string, version?: number) => request<VoiceRenderPlan>('GET', `/api/projects/${encodeURIComponent(id)}/script/voice-plan${version ? `?version=${version}` : ''}`),

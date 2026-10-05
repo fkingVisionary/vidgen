@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diffBlocks } from './compare.ts';
+import { compareDrafts, diffBlocks, evidenceChanges, wordDiff } from './compare.ts';
 import { allBlocks, applyPatch, applyPerformance, mergePronunciations, sectionsFromWriter } from './draft.ts';
 import type { WriterBlock } from './schemas.ts';
 import { fixtureDraft, fixtureScope } from './testing.ts';
@@ -103,5 +103,21 @@ describe('comparing versions', () => {
       `added: The courts sent the contracts back to the towns.`,
       `removed: ${a[1]!.text}`,
     ]);
+  });
+
+  it('counts the words removed and added, and whether the evidence moved', () => {
+    expect(wordDiff('the court sent the contracts back'.split(' '), 'in the end the court sent them back'.split(' '))).toEqual({ removed: 2, added: 4 });
+    expect(wordDiff([], ['a', 'b'])).toEqual({ removed: 0, added: 2 });
+    const d = fixtureDraft(scope);
+    const refined = { ...d, sections: d.sections.map((s) => (s.sequence === 2 ? { ...s, blocks: [{ ...s.blocks[0]!, text: `${s.blocks[0]!.text} Plainly.` }, ...s.blocks.slice(1)] } : s)) };
+    const cmp = compareDrafts(d, refined);
+    expect(cmp.totals).toMatchObject({ sectionsChanged: 1, wordsRemoved: 0, wordsAdded: 1 });
+    expect(cmp.sections[1]!.words).toMatchObject({ removed: 0, added: 1 });
+    expect(evidenceChanges(d, refined)).toEqual({ claimsAdded: [], claimsRemoved: [], figuresAdded: [], figuresRemoved: [] });
+    // Section 2 replaced by one block citing a new claim and saying a new figure: what it dropped is listed too.
+    const moved = { ...d, sections: d.sections.map((s) => (s.sequence === 2 ? { ...s, blocks: [{ ...s.blocks[0]!, text: 'Some 7,123 people watched.', claimKeys: ['C999'] }] } : s)) };
+    const before = new Set(d.sections[1]!.blocks.flatMap((b) => b.claimKeys));
+    const elsewhere = new Set(d.sections.filter((s) => s.sequence !== 2).flatMap((s) => s.blocks.flatMap((b) => b.claimKeys)));
+    expect(evidenceChanges(d, moved)).toMatchObject({ claimsAdded: ['C999'], claimsRemoved: [...before].filter((k) => !elsewhere.has(k)).sort(), figuresAdded: ['7123'] });
   });
 });

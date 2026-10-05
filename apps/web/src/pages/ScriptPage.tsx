@@ -6,7 +6,7 @@ import { api } from '../api.ts';
 import { StatusBadge } from '../components/badges.tsx';
 import { QualityReportView, Section } from '../components/evidence.tsx';
 import { ProjectNav } from '../components/ProjectNav.tsx';
-import { SectionCard, TimingSummary, VersionsTab, VoiceTab, button, useScriptRequest } from '../components/script.tsx';
+import { AssessmentList, SectionCard, TimingSummary, VersionsTab, VoiceTab, button, useScriptRequest } from '../components/script.tsx';
 import { formatDate, formatUsd } from '../format.ts';
 
 type Tab = 'script' | 'quality' | 'voice' | 'versions' | 'runs';
@@ -166,13 +166,18 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
     setBrief('');
     onQueued();
   });
+  const [refineBrief, setRefineBrief] = useState('');
+  const refine = useScriptRequest(() => api.refineScript(p.id, { baseVersion: s!.version, ...(refineBrief.trim() ? { brief: refineBrief.trim() } : {}) }), () => {
+    setRefineBrief('');
+    onQueued();
+  });
   const decide = useScriptRequest((decision: ApprovalDecision) => api.approve(p.id, { gate: 'SCRIPT', decision, notes: gateNotes.trim() || undefined }), () => setGateNotes(''));
   const retry = useScriptRequest((jobId: string) => api.retryJob(jobId));
   const progress = p.events.find((e) => e.type === 'JOB_PROGRESS');
   const failed = p.status === 'FAILED' && p.failedFromStatus === 'SCRIPT_DRAFT';
   const failedJob = p.jobs.find((j) => j.type === 'SCRIPT' && j.status === 'FAILED');
   const underReview = v.scripts.find((x) => x.status === 'IN_REVIEW');
-  const error = generate.error ?? revise.error ?? decide.error ?? retry.error;
+  const error = generate.error ?? revise.error ?? refine.error ?? decide.error ?? retry.error;
 
   return (
     <section className="space-y-3 rounded-lg border border-stone-200 bg-white p-4">
@@ -180,7 +185,7 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
 
       {running && (
         <div className="rounded-md bg-sky-50 p-3 text-sm text-sky-900">
-          <p className="font-medium">Writing the script — planner, writer, script editor, fact checker, performance…</p>
+          <p className="font-medium">Working on the script — the writing, then the script editor, the fact checker and the performance pass…</p>
           {progress && <p className="mt-1 text-xs">Latest: {progress.message}</p>}
         </div>
       )}
@@ -241,6 +246,20 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
         </div>
       )}
 
+      {s && v.editorial.refine.allowed && !running && (
+        <details className="rounded-md border border-violet-200 bg-violet-50/40 p-3 text-sm">
+          <summary className="cursor-pointer font-medium text-violet-900">Refine the narration of v{s.version} (the writing only)…</summary>
+          <p className="mt-2 text-stone-700">
+            Rewrites how the whole script is told, for the ear: the same story, structure, information classes and evidence — no new facts. Strong lines are kept; signposting, restated explanations and essay-like passages go. The script editor then
+            judges it against v{s.version} with a checklist, the fact checker checks it and the performance is marked again (four model calls). v{s.version} is kept; compare them in Versions.
+          </p>
+          <textarea value={refineBrief} onChange={(e) => setRefineBrief(e.target.value)} rows={3} placeholder="What this film needs (optional) — lines to protect, what to watch for" className="mt-2 w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm" />
+          <button disabled={refine.isPending} onClick={() => refine.mutate(undefined)} className={`${button} mt-1 bg-violet-700 text-white hover:bg-violet-600`}>
+            Refine the narration
+          </button>
+        </details>
+      )}
+
       {s && v.editorial.revise.allowed && !running && (
         <details className="rounded-md border border-sky-200 bg-sky-50/50 p-3 text-sm">
           <summary className="cursor-pointer font-medium text-sky-900">Generate Revision of v{s.version} (the whole script)…</summary>
@@ -294,6 +313,16 @@ function ScriptTab({ projectId, view: v }: { projectId: string; view: ScriptView
               </li>
             ))}
           </ul>
+          {(s.content.provenance.changeLog.kept ?? []).length > 0 && (
+            <>
+              <p className="mt-2 font-medium text-stone-700">Kept word for word</p>
+              <ul className="mt-1 list-disc pl-5 text-stone-700">
+                {s.content.provenance.changeLog.kept!.map((l, i) => (
+                  <li key={i}>“{l}”</li>
+                ))}
+              </ul>
+            </>
+          )}
         </details>
       )}
       {s.sections.map((sec) => (
@@ -309,6 +338,7 @@ function QualityTab({ view: v }: { view: ScriptView }) {
   return (
     <div className="space-y-4">
       {s.qualityReport ? <QualityReportView report={s.qualityReport} claims={s.evidence.claims} reviewTitle="Reviewers' issues" /> : <p className="text-sm text-stone-500">No quality report.</p>}
+      {editor?.assessment && editor.assessment.length > 0 && <AssessmentList items={editor.assessment} against={s.revisionOfVersion} />}
       {editor && (
         <Section title="Script editor's scores (recorded, never blocking)">
           <p className="text-sm">{editor.verdict}</p>

@@ -1,4 +1,4 @@
-import { GenerateScriptInput, ReorderScriptBlocksInput, RestoreScriptInput, ReviewScriptSectionInput, ReviseScriptInput, UpdateScriptBlockInput } from '@docengine/core';
+import { GenerateScriptInput, RefineScriptInput, ReorderScriptBlocksInput, RestoreScriptInput, ReviewScriptSectionInput, ReviseScriptInput, UpdateScriptBlockInput } from '@docengine/core';
 import { ConflictError, NotFoundError } from '@docengine/pipeline';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -13,8 +13,9 @@ const Version = z.coerce.number().int().min(1);
 
 /**
  * The script: the read model, writing a draft, rewriting sections or the
- * whole script, the editor's edits (blocks, order, section decisions),
- * restoring an earlier version, comparing versions and the voice plan.
+ * whole script, refining the narration, the editor's edits (blocks, order,
+ * section decisions), restoring an earlier version, comparing versions and
+ * the voice plan.
  * Approval goes through the generic approvals route (gate SCRIPT).
  */
 export async function scriptRoutes(app: FastifyInstance, c: AppContainer): Promise<void> {
@@ -58,6 +59,15 @@ export async function scriptRoutes(app: FastifyInstance, c: AppContainer): Promi
     const input = ReviseScriptInput.parse(req.body ?? {});
     requireReal();
     const job = await c.projects.reviseScript(project.id, input, actorOf(req));
+    return reply.code(202).send(toJobView(job));
+  });
+
+  /** Refine the whole script's narration for the ear (story, classes and evidence unchanged): a new version. */
+  app.post('/api/projects/:id/script/refine', async (req, reply) => {
+    const project = await requireProject(req.params);
+    const input = RefineScriptInput.parse(req.body ?? {});
+    requireReal();
+    const job = await c.projects.refineScript(project.id, input, actorOf(req));
     return reply.code(202).send(toJobView(job));
   });
 

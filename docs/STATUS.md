@@ -1,10 +1,9 @@
 # Status — what exists, honestly
 
-Last updated: Script Engine 1.0 — built and tested locally with a scripted
-fake AI; the Tulip Mania acceptance script with the real model is the next
-step (2026-10-05). The editorial revision loop and alternative angles are
-deployed (`f2373d0`). Story Engine 2.0 is deployed and the editor reports a
-successful first acceptance run with the real model.
+Last updated: the narrative refinement pass — built and tested locally with a
+scripted fake AI; Tulip Mania script v1 → v2 with the real model is the next
+step (2026-10-05). Script Engine 1.0 is deployed (`41248ff`) and its first
+live run produced script v1 (below).
 
 ## IMPLEMENTED (real, tested)
 
@@ -43,10 +42,11 @@ successful first acceptance run with the real model.
 | **Script editing and versions** (SCR) | In SCRIPT_REVIEW, on the version under review only: edit a block (text, class, delivery, pauses, emphasis, visual intent; the generated text kept), reorder a section, approve / reject a section with notes — each change re-runs the rules (no model calls) and is logged with the before state. Regenerate chosen sections (others copied unchanged, no model calls for them), revise the whole script from a brief, restore an earlier version as a new one (no model calls); every version kept with its origin, base, brief, requester, change log, architecture version, models, cost; compare versions section by section. Approval at the SCRIPT gate refused while blocking findings or rejected sections remain; approving supersedes the earlier approved version | `script.int.test.ts`, `app.int.test.ts` (2: the full editor flow through the HTTP API; MOCK and no-architecture refusals) |
 | **Voice rendering adapter** (SCR) | Provider-neutral `VoiceScriptAdapter`; ElevenLabs first: requests per run of the same pace, speed per pace, break tags for semantic pauses (capped at 3 s), neighbouring text, a dictionary of confirmed pronunciations only, unsupported markup listed. `GET …/script/voice-plan` shows it; **no audio is generated** | `voice-render.test.ts` (2), `app.int.test.ts` |
 | **Script API + dashboard** (SCR) | `GET/POST /api/projects/:id/script`, `…/script/revise`, `…/script/restore`, `…/script/compare`, `…/script/voice-plan`, `PATCH /api/script-blocks/:id`, `PUT /api/script-sections/:id/order`, `PATCH /api/script-sections/:id`; approval through the SCRIPT gate. Script page: header (version, architecture version, runtime vs target with variance, words, status, gate, cost), sections with blocks coloured by class, claims, pause marks, emphasis, delivery chips, duration, visual intent, edit/reorder/approve/reject/note/regenerate controls; Quality gate, Pronunciation & voice, Versions (compare, restore) and Runs & cost tabs; linked from the overview, the Story page and the nav bar | `app.int.test.ts`; Playwright at 412 px and 1280 px on fake-AI data (see below) |
+| **Narrative refinement** (REF) | *Refine the narration*: a new version (origin REFINEMENT) whose telling is rewritten for the ear — no planner, the base's plan and narrator kept; a generic craft prompt (voice, meta-narration, strong lines kept as `keptLines`, information through story, no purple prose, rhythm, silence, natural uncertainty, legend as discovery, the companion as a lens, cuts only of what is weak, transitions, sources as detective work) with the base's reviewer verdicts, rule findings and section notes; then the script editor (shown the base) answers a 13-question checklist, the fact checker is told it is a refinement, the performance is marked again, the gate decides. A skipped section is kept as it was. Comparison of any two versions: words, runtime, blocks, gate, cost, scores, words by class, sections changed, words removed and added, claims and figures added or dropped, change log, kept lines, checklist, block diff. The wording checks accept natural uncertainty phrasing | `script.int.test.ts` (2: refinement v1 → v2 with v1 unchanged byte for byte, four calls and no planner, same beats/claims/classes, checklist recorded, comparison in the job report; a refinement that adds a figure or drops a hedge is stopped at the gate, a skipped section kept), `app.int.test.ts` (refine route and comparison), `prompts.test.ts` (3: no topic terms in any production prompt), `rules.test.ts`, `draft.test.ts`; Playwright at 412 px and 1280 px |
 | **Script boundary** (SCR) | Script code never writes research or story tables (static guard over the stage, the API and the read models) and does not use the research module; a draft leaves the research and story records unchanged | `boundaries.test.ts` (script), `script.int.test.ts` |
 | **Story API + dashboard** (M3) | `GET /api/projects/:id/story`, `PATCH /api/story-candidates/:id`, `POST …/story/mine`, `POST …/story/architecture` (selection checked first); Story page: ranked candidates with scores and the ranking formula, arcs, myth threads, evidence (claims, quotes, sources), editor controls (approve/reject/flag, in-the-documentary, priority, notes), selection vs AI proposal, architecture with sequences and per-sequence evidence, both gate reports, cost; approval panel (Approve / Reject → Rework / Flag). Project pages are linked by an Overview · Research dossier · Story bar; the Research and Story stage boxes open their pages; new pages open at the top; pages fit a phone screen | `app.int.test.ts`; Playwright run on fake-AI data (editor actions, selection limits, rejection) with no console errors; Playwright at a 412 px phone viewport: every route into the Story page, no horizontal overflow |
 
-Test counts at time of writing: **358 unit** (26 files) + **79 integration** (6 files), all passing.
+Test counts at time of writing: **363 unit** (27 files) + **82 integration** (6 files), all passing.
 
 ## FIRST LIVE RUN (Railway, 2026-10-04)
 
@@ -110,9 +110,14 @@ a retry two minutes later succeeded.
 
 ## NOT YET VERIFIED LIVE
 
-- **Script Engine 1.0**: no run with the real model yet (the Tulip Mania
-  acceptance script is the next step). Its real cost, timing and gate results
-  are not measured.
+- **Narrative refinement**: no run with the real model yet (Tulip Mania v1 →
+  v2 is the next step).
+- **Script Engine 1.0** first live run (Tulip Mania, 2026-10-05, architecture
+  v3): script v1, 7 sections, 75 blocks, 2,259 words, 15:26 against a 12:30
+  midpoint (10:00–15:00), quality gate passed (warnings: runtime near,
+  beats told in other sections, stretches of 79–91 s without a pause, section
+  7 long, 24 pronunciations to confirm, visual details without claims), five
+  calls ≈ $2.42 estimated, 12.5 minutes.
 - **The editorial revision loop and alternative angles**: no run with the real
   model yet. Everything above was tested with a scripted fake AI and synthetic
   data; how well the real model restructures from a brief, and how different

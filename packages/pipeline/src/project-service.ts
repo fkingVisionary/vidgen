@@ -5,6 +5,7 @@ import {
   GenerateScriptInput,
   ReorderSelectionInput,
   ReviseArchitectureInput,
+  RefineScriptInput,
   ReviseScriptInput,
   STATUS_DEFINITIONS,
   StoryExplorationContent,
@@ -373,6 +374,32 @@ export class ProjectService {
         { actor, baseVersion: base.version, sections, brief: input.brief },
       );
       return { notes: input.brief, revise: { baseVersion: base.version, sections } };
+    });
+  }
+
+  /**
+   * Refine the narration of a whole script version for the ear: a new
+   * version whose telling is rewritten while its story, structure,
+   * information classes and evidence stay (no planner; the script editor
+   * answers the refinement checklist against the version refined). The base
+   * is kept; every version is kept.
+   */
+  async refineScript(projectId: string, raw: RefineScriptInput, actor: Actor): Promise<Job> {
+    const input = RefineScriptInput.parse(raw);
+    const brief = input.brief?.trim() || null;
+    return this.scriptJob(projectId, actor, `Refining the narration of script v${input.baseVersion}`, async (tx) => {
+      const approved = await this.requireApprovedArchitecture(tx, projectId);
+      const base = await tx.script.findUnique({ where: { projectId_version: { projectId, version: input.baseVersion } }, select: { version: true, storyId: true } });
+      if (!base) throw new NotFoundError('Script', `v${input.baseVersion}`);
+      if (base.storyId !== approved.id) throw new ConflictError(`Script v${base.version} tells an architecture that is no longer the approved one (v${approved.version}): write a new draft instead`);
+      await this.event(
+        tx,
+        projectId,
+        EVENT.SCRIPT_REVISION_REQUESTED,
+        `The narration of v${base.version} to be refined for the ear (story and evidence unchanged)${brief ? `: ${brief.length > 160 ? `${brief.slice(0, 159)}…` : brief}` : ''}`,
+        { actor, baseVersion: base.version, kind: 'REFINEMENT', brief },
+      );
+      return { ...(brief ? { notes: brief } : {}), revise: { baseVersion: base.version, sections: [], refine: true } };
     });
   }
 

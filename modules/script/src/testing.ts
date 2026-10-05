@@ -3,7 +3,7 @@ import { ProviderError, type ObjectGenerationRequest, type ObjectGenerationResul
 import { EvidenceBase } from '@docengine/story/shared';
 import { FakeStoryAI, fakeEvidenceInput } from '@docengine/story/testing';
 import { derive, normalizeBlock, renumber, type DraftBlock, type DraftSection, type ScriptDraft } from './draft.ts';
-import type { FactCheckOutput, PerformanceOutput, PlannerOutput, ScriptEditorOutput, WriterBlock, WriterOutput } from './schemas.ts';
+import type { FactCheckOutput, PerformanceOutput, PlannerOutput, RefineOutput, ScriptEditorOutput, WriterBlock, WriterOutput } from './schemas.ts';
 import { buildScope, type ScriptScope } from './scope.ts';
 
 /**
@@ -149,6 +149,84 @@ export function parseScript(prompt: string): { ref: string; text: string; infoCl
   return out;
 }
 
+/** A block of the version to refine, as the refinement prompt renders it. */
+export interface FakeBaseBlock {
+  sequence: number;
+  ref: string;
+  text: string;
+  infoClass: WriterBlock['infoClass'];
+  beatIds: string[];
+  claimKeys: string[];
+  speakerId: string | null;
+  speechKind: WriterBlock['speechKind'];
+  centralQuestion: 'POSED' | 'ANSWERED' | null;
+}
+
+/** The base script in a refinement prompt (the part after "# Script vN — the text to refine"). */
+export function parseBaseScript(prompt: string): FakeBaseBlock[] {
+  const start = prompt.search(/^# Script v\d+ — the text to refine/m);
+  if (start < 0) return [];
+  const lines = prompt.slice(start).split('\n');
+  const out: FakeBaseBlock[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (/^# /.test(lines[i]!)) break;
+    const m = /^\[(\d+)\.(\d+)\] (\w+) · beats (.*?) · claims (.*?)(?: · speaker (\S+)(?: (\w+))?)?(?: · (POSED|ANSWERED) Q0)?$/.exec(lines[i]!);
+    if (!m) continue;
+    out.push({
+      sequence: Number(m[1]),
+      ref: `${m[1]}.${m[2]}`,
+      text: lines[i + 1] ?? '',
+      infoClass: m[3] as WriterBlock['infoClass'],
+      beatIds: list(m[4]!),
+      claimKeys: list(m[5]!),
+      speakerId: m[6] ?? null,
+      speechKind: (m[7] as WriterBlock['speechKind'] | undefined) ?? null,
+      centralQuestion: (m[8] as 'POSED' | 'ANSWERED' | undefined) ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * The fake refinement: every narrator line reworded ("(test)" → "(refined, test)"),
+ * the first line kept word for word (and listed as kept), speech untouched;
+ * beats, claims, classes and the central question carried over.
+ */
+export function fakeRefine(prompt: string): RefineOutput {
+  const base = parseBaseScript(prompt);
+  const numbers = [...new Set(base.map((b) => b.sequence))];
+  const first = base[0];
+  const sections = numbers.map((n) => ({
+    sequence: n,
+    blocks: base
+      .filter((b) => b.sequence === n)
+      .map((b) => ({
+        text: b === first || b.speakerId ? b.text : b.text.replace('(test)', '(refined, test)'),
+        infoClass: b.infoClass,
+        beatIds: b.beatIds,
+        claimKeys: b.claimKeys,
+        speakerId: b.speakerId,
+        speechKind: b.speechKind,
+        visual: b.infoClass === 'FRAMING' ? { ...visual('RECONSTRUCTION', []), intent: 'ON_SCREEN_TEXT' as const } : visual(b.infoClass, b.claimKeys),
+      })),
+  }));
+  const at = (what: 'POSED' | 'ANSWERED') => base.find((b) => b.centralQuestion === what)?.ref ?? null;
+  return {
+    sections,
+    centralQuestion: { posedIn: at('POSED'), answeredIn: at('ANSWERED') },
+    changeLog: { summary: 'Told for the ear: fewer signposts, the facts arrive through the scene (test).', changes: numbers.map((n) => ({ section: n, what: 'Reworded for the ear (test).', why: 'It read like an essay (test).' })) },
+    keptLines: first ? [first.text] : [],
+  };
+}
+
+/** The script editor's answers when the prompt has a refinement checklist (every question: YES, better). */
+export function fakeChecklist(prompt: string): ScriptEditorOutput['assessment'] {
+  const start = prompt.search(/^# Refinement checklist/m);
+  if (start < 0) return [];
+  const questions = [...prompt.slice(start).matchAll(/^\d+\. (.+)$/gm)].map((m) => m[1]!).slice(0, 13);
+  return questions.map((question) => ({ question, answer: 'YES' as const, comparedToPrevious: 'BETTER' as const, note: 'Reads as spoken (test).' }));
+}
+
 export function fakePerformance(prompt: string): PerformanceOutput {
   const blocks = parseScript(prompt);
   const firstOfSection = blocks.filter((b, i) => i === 0 || blocks[i - 1]!.ref.split('.')[0] !== b.ref.split('.')[0]);
@@ -179,8 +257,10 @@ export class FakeScriptAI extends FakeStoryAI {
   rewriteVariant = 'This time it is told more tightly (test).';
   /** Change the writer's output (e.g. to break a rule). */
   writerTransform: ((out: WriterOutput, task: string) => WriterOutput) | null = null;
-  /** The script editor's review (default: scores, no issues, no changes). */
-  editor: (prompt: string) => ScriptEditorOutput = () => ({ verdict: 'A solid draft (test).', scores: { NARRATIVE_SCORE: SCORE, AUDIO_FLOW_SCORE: SCORE, CLARITY_SCORE: SCORE, EMOTIONAL_SCORE: SCORE, ENDING_SCORE: SCORE }, issues: [], edits: [], removals: [], insertions: [] });
+  /** Change the refinement's output (e.g. to drop a hedge or a section). */
+  refineTransform: ((out: RefineOutput) => RefineOutput) | null = null;
+  /** The script editor's review (default: scores, no issues, no changes; the checklist answered when there is one). */
+  editor: (prompt: string) => ScriptEditorOutput = (prompt) => ({ verdict: 'A solid draft (test).', scores: { NARRATIVE_SCORE: SCORE, AUDIO_FLOW_SCORE: SCORE, CLARITY_SCORE: SCORE, EMOTIONAL_SCORE: SCORE, ENDING_SCORE: SCORE }, issues: [], assessment: fakeChecklist(prompt), edits: [], removals: [], insertions: [] });
   /** The fact checker's review (default: no issues). */
   factChecker: (prompt: string) => FactCheckOutput = () => ({ verdict: 'Every block matches its evidence (test).', issues: [], edits: [], removals: [], insertions: [] });
   performance: (prompt: string) => PerformanceOutput = fakePerformance;
@@ -214,6 +294,10 @@ export class FakeScriptAI extends FakeStoryAI {
         const only = /^# Rewrite sections? ([\d, ]+) of script/m.exec(user)?.[1]?.split(',').map((x) => Number(x.trim())) ?? [];
         const out = fakeWriter(user, only, this.rewriteVariant);
         return this.writerTransform ? this.writerTransform(out, task) : out;
+      }
+      case 'script.refine': {
+        const out = fakeRefine(user);
+        return this.refineTransform ? this.refineTransform(out) : out;
       }
       case 'script.edit':
         return this.editor(user);

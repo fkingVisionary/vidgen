@@ -154,7 +154,7 @@ describe('Story Engine 2.0 scoring', () => {
   it('maps every verdict but ESTABLISHED to a required presentation, and recognises hedge wording', () => {
     expect(PRESENTATION_FOR_VERDICT).toEqual({ ESTABLISHED: 'STATE', PROBABLE: 'HEDGE', DISPUTED: 'PRESENT_AS_DISPUTED', UNVERIFIED: 'PRESENT_AS_UNCONFIRMED', MYTH: 'INVESTIGATE_AS_MYTH' });
     expect(PRESENTATION_VERDICTS).toEqual(['PROBABLE', 'DISPUTED', 'UNVERIFIED', 'MYTH']);
-    for (const ok of ['Records suggest he refused to pay', 'Contemporary accounts indicate a crowd', 'He probably sold it', 'reportedly 40 bulbs']) expect(HEDGE_PATTERN.test(ok)).toBe(true);
+    for (const ok of ['Records suggest he refused to pay', 'Contemporary accounts indicate a crowd', 'He probably sold it', 'reportedly 40 bulbs', 'He refused, it seems, to pay', 'It appears the sale fell through']) expect(HEDGE_PATTERN.test(ok)).toBe(true);
     for (const bad of ['State it as fact', 'He sold it', 'This claim is probable']) expect(HEDGE_PATTERN.test(bad)).toBe(false);
   });
 

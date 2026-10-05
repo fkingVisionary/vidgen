@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { type DraftBlock, type ScriptDraft } from './draft.ts';
 import { computeScriptReport } from './quality.ts';
-import { SCRIPT_BLOCKING, checkScript, type ScriptFindingKind } from './rules.ts';
+import { DISPUTED_PATTERN, MYTH_PATTERN, SCRIPT_BLOCKING, UNVERIFIED_PATTERN, checkScript, type ScriptFindingKind } from './rules.ts';
 import { fixtureBlock, fixtureDraft, fixtureScope } from './testing.ts';
 import { allBlocks } from './draft.ts';
 import { scriptTiming } from '@docengine/core';
@@ -78,6 +78,24 @@ describe('the script rules', () => {
       const asFact = withBlock(3, 1, { text: 'A single bulb sold for 5,500 guilders.', infoClass: 'UNCERTAIN', beatIds: ['3.2'], claimKeys: ['C009'] });
       expect(kinds(asFact)).toContain('DISPUTED_AS_FACT');
     });
+  });
+
+  it('accepts the natural ways a narrator says a claim is probable, contested, unconfirmed or legend — and nothing less', () => {
+    const disputed = withBlock(3, 1, { text: "The accounts don't agree on the famous price: a single bulb, offered for 5,500 guilders.", infoClass: 'UNCERTAIN', beatIds: ['3.2'], claimKeys: ['C009'] });
+    expect(blocking(disputed)).toEqual([]);
+    const legend = withBlock(3, 0, { text: "As it's usually told, the trade ruined a nation.", infoClass: 'UNCERTAIN', beatIds: ['3.1'], claimKeys: ['C010'] });
+    expect(blocking(legend)).toEqual([]);
+    const probable = withBlock(2, 0, { text: 'Cornelis Proefman, it seems, refused the bulbs he had bought.', infoClass: 'UNCERTAIN', beatIds: ['2.1'], claimKeys: ['C008'] });
+    expect(blocking(probable)).toEqual([]);
+    for (const ok of ['The sources differ.', "It's not clear who paid.", 'No two accounts agree.', 'It depends on whom you believe.']) expect(DISPUTED_PATTERN.test(ok)).toBe(true);
+    for (const ok of ["There's no way to check it.", 'It comes from a single source.', 'So we need to be careful here.', 'Nothing else backs it up.', "We can't be sure."]) expect(UNVERIFIED_PATTERN.test(ok)).toBe(true);
+    for (const ok of ['You may have heard this one.', 'The famous version is simpler.', 'People still say the town was ruined.', "You've probably heard that men drowned."]) expect(MYTH_PATTERN.test(ok)).toBe(true);
+    // Near misses stay misses: agreeing, being careful with money, a famous painter, people buying.
+    for (const no of ['The buyers agreed to pay.', 'The price was clear.']) expect(DISPUTED_PATTERN.test(no)).toBe(false);
+    for (const no of ['He was careful with money.', 'The only buyer left.', 'A single bulb sold.']) expect(UNVERIFIED_PATTERN.test(no)).toBe(false);
+    for (const no of ['The famous painter arrived.', 'People bought bulbs.', 'The version printed that spring.']) expect(MYTH_PATTERN.test(no)).toBe(false);
+    // The legend told plainly still fails, however conversational.
+    expect(kinds(withBlock(3, 0, { text: 'And so the trade ruined a nation.', infoClass: 'UNCERTAIN', beatIds: ['3.1'], claimKeys: ['C010'] }))).toContain('MYTH_AS_FACT');
   });
 
   it('keeps every block inside the architecture and its evidence', () => {

@@ -3,6 +3,7 @@ import type {
   CastKind,
   ScriptBlockClass,
   ScriptOrigin,
+  ScriptScore,
   SectionReviewStatus,
   ApprovalGate,
   ArchitectureOrigin,
@@ -45,7 +46,7 @@ import type {
   StoryExplorationContent,
   StoryPackContent,
 } from './contracts/story.ts';
-import type { ScriptBlockContent, ScriptContent, ScriptSectionPlan } from './contracts/script.ts';
+import type { ScriptAssessmentItem, ScriptBlockContent, ScriptChangeLog, ScriptContent, ScriptSectionPlan } from './contracts/script.ts';
 import type { AvailableActions } from './pipeline.ts';
 import type { ScriptTiming } from './script.ts';
 import type { StageView } from './stages.ts';
@@ -551,6 +552,8 @@ export interface ScriptVersionView extends ScriptSummaryView {
 export interface ScriptEditorialActions {
   generate: { allowed: boolean; reason: string | null };
   revise: { allowed: boolean; reason: string | null };
+  /** Refine the shown version's narration (the whole script, story and evidence unchanged). */
+  refine: { allowed: boolean; reason: string | null };
   /** Edit blocks and review sections of the shown version. */
   edit: { allowed: boolean; reason: string | null };
   approve: { allowed: boolean; reason: string | null };
@@ -567,16 +570,38 @@ export interface ScriptView {
   realStage: boolean;
 }
 
+/** What a version is like, for comparing it with another. */
+export interface ScriptVersionFacts {
+  /** The gate as last computed: passed, and the ids of its FAIL and WARN checks. */
+  gate: { passed: boolean; failed: string[]; warned: string[] };
+  /** The job that wrote it (none for a restored copy). */
+  cost: ArtifactCostView;
+  /** The script editor's scores (0–10). */
+  scores: Partial<Record<ScriptScore, number>>;
+  /** Spoken words by information class. */
+  classWords: Partial<Record<ScriptBlockClass, number>>;
+  blocks: number;
+}
+
 export interface ScriptCompareView {
   a: ScriptSummaryView;
   b: ScriptSummaryView;
+  facts: { a: ScriptVersionFacts; b: ScriptVersionFacts };
   sections: {
     sequenceNumber: number | null;
     title: string;
     changed: boolean;
     durationSec: { a: number; b: number };
+    /** Spoken words in each version, and how many were removed from a and added in b (word-level diff). */
+    words: { a: number; b: number; removed: number; added: number };
     /** Block texts compared in order: unchanged, removed (only in a) or added (only in b). */
     diff: { op: 'same' | 'removed' | 'added'; text: string; infoClass: ScriptBlockClass }[];
   }[];
-  totals: { wordsA: number; wordsB: number; durationA: number; durationB: number; sectionsChanged: number };
+  totals: { wordsA: number; wordsB: number; durationA: number; durationB: number; sectionsChanged: number; wordsRemoved: number; wordsAdded: number };
+  /** What b changed and why (its writer's change log, with the lines a refinement kept). */
+  changeLog: ScriptChangeLog | null;
+  /** b's refinement checklist, answered by its script editor against the version it refined. */
+  assessment: ScriptAssessmentItem[];
+  /** Evidence from a to b: claims cited and figures said, added or dropped (a refinement should change neither). */
+  evidence: { claimsAdded: string[]; claimsRemoved: string[]; figuresAdded: string[]; figuresRemoved: string[] };
 }

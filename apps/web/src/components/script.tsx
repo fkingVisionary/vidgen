@@ -12,13 +12,17 @@ import {
   SCRIPT_BLOCK_CLASS_HELP,
   SCRIPT_BLOCK_CLASS_LABELS,
   SCRIPT_ORIGIN_LABELS,
+  SCRIPT_SCORES,
+  SCRIPT_SCORE_LABELS,
   SECTION_REVIEW_STATUS_LABELS,
   VISUAL_INTENTS,
   VISUAL_INTENT_LABELS,
   fmtClock,
   fmtVariance,
   type ClaimView,
+  type ScriptAssessmentItem,
   type ScriptBlockClass,
+  type ScriptCompareView,
   type ScriptBlockView,
   type ScriptDelivery,
   type ScriptPause,
@@ -32,6 +36,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { api } from '../api.ts';
+import { formatUsd } from '../format.ts';
 import { ClaimRefs, Section } from './evidence.tsx';
 
 /**
@@ -432,34 +437,126 @@ export function VersionsTab({ projectId, view: v, onVersion }: { projectId: stri
               </label>
             ))}
           </div>
-          {compare.data && (
-            <div className="mt-3 space-y-3">
-              <p className="text-sm text-stone-600">
-                {compare.data.totals.sectionsChanged} section(s) changed · {compare.data.totals.wordsA} → {compare.data.totals.wordsB} words · {fmtClock(compare.data.totals.durationA)} → {fmtClock(compare.data.totals.durationB)}
-              </p>
-              {compare.data.sections
-                .filter((x) => x.changed)
-                .map((x) => (
-                  <div key={x.sequenceNumber} className="rounded border border-stone-200 p-2 text-sm">
-                    <p className="font-medium">
-                      {x.sequenceNumber}. {x.title} <span className="text-xs font-normal text-stone-500">({fmtClock(x.durationSec.a)} → {fmtClock(x.durationSec.b)})</span>
-                    </p>
-                    <ul className="mt-1 space-y-1">
-                      {x.diff.map((d, i) => (
-                        <li key={i} className={d.op === 'added' ? 'bg-emerald-50 text-emerald-900' : d.op === 'removed' ? 'bg-red-50 text-red-800 line-through' : 'text-stone-500'}>
-                          <span className="mr-1 font-mono text-xs">{d.op === 'added' ? '+' : d.op === 'removed' ? '−' : ' '}</span>
-                          {d.text}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-            </div>
-          )}
+          {compare.data && <Comparison cmp={compare.data} />}
           {compare.error && <p className="text-sm text-red-700">{compare.error.message}</p>}
         </Section>
       )}
     </div>
+  );
+}
+
+const GATE_TONE = (passed: boolean) => (passed ? 'text-emerald-700' : 'text-red-700');
+const CLASS_ORDER: ScriptBlockClass[] = ['DOCUMENTED', 'RECONSTRUCTION', 'UNCERTAIN', 'FICTION', 'FRAMING'];
+
+/** Two versions side by side: the numbers, what changed and why, the evidence, the checklist, then the text. */
+function Comparison({ cmp }: { cmp: ScriptCompareView }) {
+  const { a, b, facts, totals, evidence } = cmp;
+  const ev = [...evidence.claimsAdded.map((k) => `+${k}`), ...evidence.claimsRemoved.map((k) => `−${k}`)];
+  const figs = [...evidence.figuresAdded.map((k) => `+${k}`), ...evidence.figuresRemoved.map((k) => `−${k}`)];
+  const row = (label: string, x: ReactNode, y: ReactNode) => (
+    <tr>
+      <th className="py-1 pr-3 text-left font-normal text-stone-500">{label}</th>
+      <td className="py-1 pr-3 tabular-nums">{x}</td>
+      <td className="py-1 tabular-nums">{y}</td>
+    </tr>
+  );
+  const gate = (f: typeof facts.a) => (
+    <span className={GATE_TONE(f.gate.passed)} title={[...f.gate.failed.map((c) => `FAIL ${c}`), ...f.gate.warned.map((c) => `WARN ${c}`)].join(', ')}>
+      {f.gate.passed ? 'passed' : `${f.gate.failed.length} blocking`}
+      {f.gate.warned.length ? <span className="text-stone-500"> · {f.gate.warned.length} warn</span> : null}
+    </span>
+  );
+  return (
+    <div className="mt-3 space-y-4 text-sm">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[18rem]">
+          <thead className="text-xs text-stone-500 uppercase">
+            <tr>
+              <th />
+              <th className="pb-1 text-left font-medium">
+                v{a.version} <span className="normal-case">{SCRIPT_ORIGIN_LABELS[a.origin].toLowerCase()}</span>
+              </th>
+              <th className="pb-1 text-left font-medium">
+                v{b.version} <span className="normal-case">{SCRIPT_ORIGIN_LABELS[b.origin].toLowerCase()}</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-100">
+            {row('Words', a.wordCount.toLocaleString(), b.wordCount.toLocaleString())}
+            {row('Runtime', fmtClock(a.estimatedDurationSec), fmtClock(b.estimatedDurationSec))}
+            {row('Blocks', facts.a.blocks, facts.b.blocks)}
+            {row('Quality gate', gate(facts.a), gate(facts.b))}
+            {row('Model cost', facts.a.cost.calls ? `${formatUsd(facts.a.cost.totalUsd)} · ${facts.a.cost.calls} calls` : '—', facts.b.cost.calls ? `${formatUsd(facts.b.cost.totalUsd)} · ${facts.b.cost.calls} calls` : '—')}
+            {SCRIPT_SCORES.filter((k) => facts.a.scores[k] !== undefined || facts.b.scores[k] !== undefined).map((k) => row(SCRIPT_SCORE_LABELS[k], facts.a.scores[k] ?? '—', facts.b.scores[k] ?? '—'))}
+            {CLASS_ORDER.filter((k) => facts.a.classWords[k] || facts.b.classWords[k]).map((k) => row(`${SCRIPT_BLOCK_CLASS_LABELS[k]} (words)`, facts.a.classWords[k] ?? 0, facts.b.classWords[k] ?? 0))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-stone-700">
+        {totals.sectionsChanged} section(s) changed · <span className={totals.wordsRemoved ? 'text-red-700' : ''}>{totals.wordsRemoved ? `−${totals.wordsRemoved.toLocaleString()}` : 'no'} words removed</span> ·{' '}
+        <span className={totals.wordsAdded ? 'text-emerald-700' : ''}>{totals.wordsAdded ? `+${totals.wordsAdded.toLocaleString()}` : 'none'} added</span>
+      </p>
+      <p className={ev.length || figs.length ? 'text-amber-800' : 'text-stone-600'}>
+        Evidence: {ev.length || figs.length ? [ev.length ? `claims ${ev.join(', ')}` : null, figs.length ? `figures ${figs.join(', ')}` : null].filter(Boolean).join(' · ') : 'the same claims cited and the same figures said.'}
+      </p>
+      {cmp.changeLog && (cmp.changeLog.summary || cmp.changeLog.changes.length > 0) && (
+        <div>
+          <p className="font-medium">What changed in v{b.version}, and why</p>
+          {cmp.changeLog.summary && <p className="mt-1 text-stone-700">{cmp.changeLog.summary}</p>}
+          <ul className="mt-1 list-disc pl-5 text-stone-700">
+            {cmp.changeLog.changes.map((c, i) => (
+              <li key={i}>
+                {c.section ? `Section ${c.section}: ` : ''}
+                {c.what} <span className="text-stone-500">— {c.why}</span>
+              </li>
+            ))}
+          </ul>
+          {(cmp.changeLog.kept ?? []).length > 0 && <p className="mt-1 text-stone-600">Kept word for word: {cmp.changeLog.kept!.map((l) => `“${l}”`).join(' · ')}</p>}
+        </div>
+      )}
+      {cmp.assessment.length > 0 && <AssessmentList items={cmp.assessment} against={a.version} />}
+      {cmp.sections.map((x) => (
+        <details key={x.sequenceNumber} className="rounded border border-stone-200 p-2">
+          <summary className="cursor-pointer">
+            <span className="font-medium">
+              {x.sequenceNumber}. {x.title}
+            </span>{' '}
+            <span className="text-xs text-stone-500 tabular-nums">
+              {x.changed ? `${x.words.a} → ${x.words.b} words (−${x.words.removed} +${x.words.added}) · ${fmtClock(x.durationSec.a)} → ${fmtClock(x.durationSec.b)}` : 'unchanged'}
+            </span>
+          </summary>
+          <ul className="mt-1 space-y-1">
+            {x.diff.map((d, i) => (
+              <li key={i} className={d.op === 'added' ? 'bg-emerald-50 text-emerald-900' : d.op === 'removed' ? 'bg-red-50 text-red-800 line-through' : 'text-stone-500'}>
+                <span className="mr-1 font-mono text-xs">{d.op === 'added' ? '+' : d.op === 'removed' ? '−' : ' '}</span>
+                {d.text}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ))}
+      <p className="text-xs text-stone-500">To use v{a.version} instead, open it above and make it current again — a new version; nothing is lost.</p>
+    </div>
+  );
+}
+
+const ANSWER_TONE: Record<ScriptAssessmentItem['answer'], string> = { YES: 'bg-emerald-100 text-emerald-800', PARTLY: 'bg-amber-100 text-amber-900', NO: 'bg-red-100 text-red-800' };
+
+/** The script editor's refinement checklist, answered against the version refined. */
+export function AssessmentList({ items, against }: { items: ScriptAssessmentItem[]; against: number | null }) {
+  return (
+    <Section title={`Refinement checklist — the script editor${against ? `, against v${against}` : ''}`}>
+      <ol className="space-y-1.5 text-sm">
+        {items.map((x, i) => (
+          <li key={i} className="flex flex-wrap items-baseline gap-x-2">
+            <span className={`${pill} ${ANSWER_TONE[x.answer]}`}>{x.answer.toLowerCase()}</span>
+            <span className="text-xs text-stone-500">{x.comparedToPrevious.toLowerCase()}</span>
+            <span className="font-medium">{x.question}</span>
+            <span className="basis-full text-stone-600 sm:basis-auto">{x.note}</span>
+          </li>
+        ))}
+      </ol>
+    </Section>
   );
 }
 

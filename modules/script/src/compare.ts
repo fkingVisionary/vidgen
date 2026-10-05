@@ -1,11 +1,14 @@
 import type { ScriptBlockClass } from '@docengine/core';
 import { voiceAdapterFor } from '@docengine/providers';
-import { sectionDurationSec, type DraftBlock, type ScriptDraft } from './draft.ts';
+import { extractFigures, wordTokens } from '@docengine/story/shared';
+import { allBlocks, sectionDurationSec, sectionWords, type DraftBlock, type ScriptDraft } from './draft.ts';
 
 /**
  * Comparing two script versions, section by section: which block texts are
  * the same, removed or added (a longest-common-subsequence diff over the
- * blocks' words). Read-only.
+ * blocks), how many words were removed and added (the same diff over the
+ * words), and whether the evidence moved (claims cited, figures said).
+ * Read-only.
  */
 
 export interface DiffLine {
@@ -40,23 +43,59 @@ export function diffBlocks(a: readonly DraftBlock[], b: readonly DraftBlock[]): 
   return out;
 }
 
+/** Words removed from `a` and added in `b`: what is left of each once their longest common run of words is taken out. */
+export function wordDiff(a: readonly string[], b: readonly string[]): { removed: number; added: number } {
+  let prev = new Array<number>(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = new Array<number>(b.length + 1).fill(0);
+    for (let j = 1; j <= b.length; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1]! + 1 : Math.max(prev[j]!, cur[j - 1]!);
+    prev = cur;
+  }
+  const common = prev[b.length]!;
+  return { removed: a.length - common, added: b.length - common };
+}
+
+const textWords = (blocks: readonly DraftBlock[]) => blocks.flatMap((b) => wordTokens(b.text));
+
 export function compareDrafts(a: ScriptDraft, b: ScriptDraft) {
   const numbers = [...new Set([...a.sections.map((s) => s.sequence), ...b.sections.map((s) => s.sequence)])].sort((x, y) => x - y);
   const sections = numbers.map((n) => {
     const sa = a.sections.find((s) => s.sequence === n);
     const sb = b.sections.find((s) => s.sequence === n);
     const diff = diffBlocks(sa?.blocks ?? [], sb?.blocks ?? []);
+    const moved = wordDiff(textWords(sa?.blocks ?? []), textWords(sb?.blocks ?? []));
     return {
       sequenceNumber: n,
       title: sb?.title ?? sa?.title ?? `Section ${n}`,
       changed: diff.some((d) => d.op !== 'same'),
       durationSec: { a: sa ? sectionDurationSec(sa) : 0, b: sb ? sectionDurationSec(sb) : 0 },
+      words: { a: sa ? sectionWords(sa) : 0, b: sb ? sectionWords(sb) : 0, ...moved },
       diff,
     };
   });
   const words = (d: ScriptDraft) => d.sections.reduce((n, s) => n + s.blocks.reduce((m, x) => m + x.wordCount, 0), 0);
   const duration = (d: ScriptDraft) => Math.round(d.sections.reduce((n, s) => n + sectionDurationSec(s), 0) * 10) / 10;
-  return { sections, totals: { wordsA: words(a), wordsB: words(b), durationA: duration(a), durationB: duration(b), sectionsChanged: sections.filter((s) => s.changed).length } };
+  return {
+    sections,
+    totals: {
+      wordsA: words(a),
+      wordsB: words(b),
+      durationA: duration(a),
+      durationB: duration(b),
+      sectionsChanged: sections.filter((s) => s.changed).length,
+      wordsRemoved: sections.reduce((n, s) => n + s.words.removed, 0),
+      wordsAdded: sections.reduce((n, s) => n + s.words.added, 0),
+    },
+  };
+}
+
+/** Evidence from `a` to `b`: claims cited and figures said that one has and the other does not. */
+export function evidenceChanges(a: ScriptDraft, b: ScriptDraft) {
+  const claims = (d: ScriptDraft) => new Set(allBlocks(d).flatMap((x) => x.claimKeys));
+  const figures = (d: ScriptDraft) => new Set(allBlocks(d).flatMap((x) => extractFigures(x.text)));
+  const minus = (x: Set<string>, y: Set<string>) => [...x].filter((k) => !y.has(k)).sort((p, q) => p.localeCompare(q, 'en', { numeric: true }));
+  const [ca, cb, fa, fb] = [claims(a), claims(b), figures(a), figures(b)];
+  return { claimsAdded: minus(cb, ca), claimsRemoved: minus(ca, cb), figuresAdded: minus(fb, fa), figuresRemoved: minus(fa, fb) };
 }
 
 /** What the planned voice provider would receive for a version (no audio is generated). */

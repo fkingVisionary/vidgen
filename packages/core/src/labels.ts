@@ -393,6 +393,7 @@ export const SCRIPT_ORIGIN_LABELS: Record<ScriptOrigin, string> = {
   SECTIONS: 'Sections rewritten',
   REVISION: 'Revision',
   RESTORE: 'Restored',
+  REFINEMENT: 'Narrative refinement',
 };
 
 export const SCRIPT_SCORE_LABELS: Record<ScriptScore, string> = {

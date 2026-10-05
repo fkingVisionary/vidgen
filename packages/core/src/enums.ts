@@ -410,6 +410,7 @@ export const SCRIPT_ORIGINS = [
   'SECTIONS', // a version with some sections rewritten (the rest copied unchanged)
   'REVISION', // the whole script rewritten from the editor's brief
   'RESTORE', // a copy of an earlier version, made current again (no model calls)
+  'REFINEMENT', // the whole script's narration rewritten for the ear; story, structure and evidence unchanged
 ] as const;
 export type ScriptOrigin = (typeof SCRIPT_ORIGINS)[number];
 

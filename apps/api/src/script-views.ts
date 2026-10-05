@@ -4,7 +4,11 @@ import {
   StoryArchitectureContentV2,
   runtimeTarget,
   scriptTiming,
+  type ArtifactCostView,
   type ProjectStatus,
+  type ScriptBlockClass,
+  type ScriptScore,
+  type ScriptVersionFacts,
   type ScriptCompareView,
   type ScriptEditorialActions,
   type ScriptSectionView,
@@ -14,7 +18,7 @@ import {
   type VoiceRenderPlan,
 } from '@docengine/core';
 import type { Database } from '@docengine/database';
-import { SCRIPT_INCLUDE, blockingDetails, compareDrafts, toDraft, voicePlan, type ScriptRow } from '@docengine/script';
+import { SCRIPT_INCLUDE, blockingDetails, compareDrafts, evidenceChanges, toDraft, voicePlan, type ScriptDraft, type ScriptRow } from '@docengine/script';
 import { jobCost } from './research-views.ts';
 import { evidenceFor } from './story-views.ts';
 
@@ -156,9 +160,29 @@ function editorialActions(project: Project, shown: ScriptVersionView | null, app
   return {
     generate: { allowed: base === null, reason: base },
     revise: { allowed: reviseReason === null, reason: reviseReason },
+    refine: { allowed: reviseReason === null, reason: reviseReason },
     edit: { allowed: editReason === null, reason: editReason },
     approve: { allowed: approveReason === null, reason: approveReason },
     restore: { allowed: restoreReason === null, reason: restoreReason },
+  };
+}
+
+/** What a version is like next to another: its gate, cost, the script editor's scores, words by class. */
+async function versionFacts(db: Database, row: ScriptRow, draft: ScriptDraft, content: ScriptContent | null): Promise<ScriptVersionFacts> {
+  const report = QualityReport.safeParse(row.qualityReport);
+  const checks = report.success ? report.data.checks : [];
+  const cost: ArtifactCostView = await jobCost(db, row.jobId);
+  const blocks = draft.sections.flatMap((s) => s.blocks);
+  const classWords: Partial<Record<ScriptBlockClass, number>> = {};
+  for (const b of blocks) classWords[b.infoClass] = (classWords[b.infoClass] ?? 0) + b.wordCount;
+  const scores: Partial<Record<ScriptScore, number>> = {};
+  for (const [k, v] of Object.entries(content?.editor?.scores ?? {})) if (v) scores[k as ScriptScore] = v.score;
+  return {
+    gate: { passed: row.qualityPassed, failed: checks.filter((c) => c.status === 'FAIL').map((c) => c.id), warned: checks.filter((c) => c.status === 'WARN').map((c) => c.id) },
+    cost,
+    scores,
+    classWords,
+    blocks: blocks.length,
   };
 }
 
@@ -168,8 +192,18 @@ export async function loadScriptCompare(db: Database, projectId: string, a: numb
     db.script.findUnique({ where: { projectId_version: { projectId, version: b } }, include: { ...SCRIPT_INCLUDE, ...SUMMARY_INCLUDE } }),
   ]);
   if (!ra || !rb) return null;
-  const cmp = compareDrafts(toDraft(ra).draft, toDraft(rb).draft);
-  return { a: summary(ra), b: summary(rb), ...cmp };
+  const [la, lb] = [toDraft(ra), toDraft(rb)];
+  const cmp = compareDrafts(la.draft, lb.draft);
+  const [fa, fb] = await Promise.all([versionFacts(db, ra, la.draft, la.content), versionFacts(db, rb, lb.draft, lb.content)]);
+  return {
+    a: summary(ra),
+    b: summary(rb),
+    facts: { a: fa, b: fb },
+    ...cmp,
+    changeLog: lb.content?.provenance.changeLog ?? null,
+    assessment: lb.content?.editor?.assessment ?? [],
+    evidence: evidenceChanges(la.draft, lb.draft),
+  };
 }
 
 export async function loadVoicePlan(db: Database, projectId: string, version: number | undefined): Promise<VoiceRenderPlan | null> {

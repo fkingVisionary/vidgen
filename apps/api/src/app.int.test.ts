@@ -659,6 +659,38 @@ describe('script API', () => {
     expect((await app.inject({ method: 'GET', url: `/api/projects/${id}/script?version=9` })).statusCode).toBe(404);
   });
 
+  it('refines the narration into a new version and compares it with the one it refined', async () => {
+    const { app, c } = await start({}, { fakeScript: true });
+    const id = await approvedArchitecture(app, c);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script`, payload: {} })).statusCode).toBe(202);
+    await c.runner.drain();
+    let view = await script(app, id);
+    expect(view.editorial.refine).toEqual({ allowed: true, reason: null });
+
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/refine`, payload: { baseVersion: 9 } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/refine`, payload: { baseVersion: 'one' } })).statusCode).toBe(400);
+    const res = await app.inject({ method: 'POST', url: `/api/projects/${id}/script/refine`, payload: { baseVersion: 1, brief: 'Keep the first line as it is (test).' } });
+    expect(res.statusCode).toBe(202);
+    expect(res.json<JobView>()).toMatchObject({ type: 'SCRIPT', status: 'QUEUED' });
+    await c.runner.drain();
+    view = await script(app, id);
+    expect(view.scripts.map(line)).toEqual(['v2 IN_REVIEW REFINEMENT of v1', 'v1 SUPERSEDED DRAFT']);
+    expect(view.script).toMatchObject({ version: 2, origin: 'REFINEMENT', qualityPassed: true, notes: 'Keep the first line as it is (test).', cost: { calls: 4 } });
+    expect(view.script!.content!.editor!.assessment).toHaveLength(13);
+    expect(view.script!.content!.provenance.changeLog!.kept).toHaveLength(1);
+
+    const cmp = (await app.inject({ method: 'GET', url: `/api/projects/${id}/script/compare?a=1&b=2` })).json<ScriptCompareView>();
+    expect(cmp.totals).toMatchObject({ sectionsChanged: 6, wordsRemoved: 0 });
+    expect(cmp.totals.wordsAdded).toBeGreaterThan(0);
+    expect(cmp.facts.a).toMatchObject({ gate: { passed: true, failed: [] }, cost: { calls: 5 }, scores: { NARRATIVE_SCORE: 7 } });
+    expect(cmp.facts.b).toMatchObject({ gate: { passed: true, failed: [] }, cost: { calls: 4 }, blocks: cmp.facts.a.blocks });
+    expect(cmp.facts.b.classWords.DOCUMENTED).toBeGreaterThan(0);
+    expect(cmp.evidence).toEqual({ claimsAdded: [], claimsRemoved: [], figuresAdded: [], figuresRemoved: [] });
+    expect(cmp.assessment.map((x) => x.answer)).toEqual(new Array(13).fill('YES'));
+    expect(cmp.changeLog).toMatchObject({ summary: expect.any(String), kept: [expect.any(String)] });
+    expect(cmp.sections[0]).toMatchObject({ changed: true, words: { removed: 0 } });
+  });
+
   it('refuses to write a script where the script stage is a MOCK, or before an architecture is approved', async () => {
     const { app } = await start();
     const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
@@ -667,7 +699,8 @@ describe('script API', () => {
     expect(mock.statusCode).toBe(409);
     expect(mock.json().message).toMatch(/MOCK/);
     expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/script/revise`, payload: { baseVersion: 1, brief: BRIEF } })).statusCode).toBe(409);
-    expect(await script(app, p.id)).toMatchObject({ realStage: false, script: null, editorial: { generate: { allowed: false, reason: expect.stringMatching(/MOCK/) } } });
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/script/refine`, payload: { baseVersion: 1 } })).statusCode).toBe(409);
+    expect(await script(app, p.id)).toMatchObject({ realStage: false, script: null, editorial: { generate: { allowed: false, reason: expect.stringMatching(/MOCK/) }, refine: { allowed: false } } });
 
     const { app: real } = await start({}, { fakeScript: true });
     const q = (await real.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();

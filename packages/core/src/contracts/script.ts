@@ -145,6 +145,8 @@ export type ScriptIssue = z.infer<typeof ScriptIssue>;
 export const ScriptChangeLog = z.object({
   summary: z.string(),
   changes: z.array(z.object({ section: z.number().int().nullable(), what: z.string(), why: z.string() })),
+  /** A narrative refinement: the strongest lines it kept word for word. */
+  kept: z.array(z.string()).optional(),
 });
 export type ScriptChangeLog = z.infer<typeof ScriptChangeLog>;
 
@@ -163,6 +165,15 @@ export const ScriptProvenance = z.object({
 });
 export type ScriptProvenance = z.infer<typeof ScriptProvenance>;
 
+/** The script editor's answer to one question of the refinement checklist, judged against the version refined. */
+export const ScriptAssessmentItem = z.object({
+  question: z.string(),
+  answer: z.enum(['YES', 'PARTLY', 'NO']),
+  comparedToPrevious: z.enum(['BETTER', 'SAME', 'WORSE']),
+  note: z.string(),
+});
+export type ScriptAssessmentItem = z.infer<typeof ScriptAssessmentItem>;
+
 /** Script.content: everything about a version that is not a section or a block. */
 export const ScriptContent = z.object({
   engineVersion: z.literal(1),
@@ -174,7 +185,15 @@ export const ScriptContent = z.object({
   pronunciations: z.array(Pronunciation),
   performanceNotes: z.array(z.string()),
   /** The script editor's verdict (craft), recorded; it never fails the gate. */
-  editor: z.object({ verdict: z.string(), scores: z.partialRecord(z.enum(SCRIPT_SCORES), ScriptScoreEntry), issues: z.array(ScriptIssue) }).nullable(),
+  editor: z
+    .object({
+      verdict: z.string(),
+      scores: z.partialRecord(z.enum(SCRIPT_SCORES), ScriptScoreEntry),
+      issues: z.array(ScriptIssue),
+      /** A narrative refinement: the refinement checklist, answered against the version refined. */
+      assessment: z.array(ScriptAssessmentItem).optional(),
+    })
+    .nullable(),
   /** The fact checker's issues (evidence). */
   factCheck: z.object({ verdict: z.string(), issues: z.array(ScriptIssue) }).nullable(),
   provenance: ScriptProvenance,

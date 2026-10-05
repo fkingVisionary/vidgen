@@ -877,6 +877,7 @@ POST /api/projects/:id/script { notes? }            (STORY_APPROVED → SCRIPT_D
 
 POST /api/projects/:id/script/revise { baseVersion, sections: [3], brief }   one section (or several)
 POST /api/projects/:id/script/revise { baseVersion, brief }                  the whole script
+POST /api/projects/:id/script/refine { baseVersion, brief? }                 the narration refined, story unchanged
 POST /api/projects/:id/script/restore { version }                            an earlier version, as a new one
 PATCH /api/script-blocks/:id · PUT /api/script-sections/:id/order · PATCH /api/script-sections/:id
 GET  /api/projects/:id/script[?version=N] · …/script/compare?a=&b= · …/script/voice-plan[?version=N]
@@ -990,6 +991,47 @@ architecture: a script of an earlier architecture can be read and restored
 only if that architecture is still the approved one, otherwise a new draft
 is needed.
 
+**Narrative refinement.** A script can be structurally right and still read
+like an essay. "Refine the narration" makes a new version (origin
+REFINEMENT) whose *telling* is rewritten for the ear while everything the
+architecture decides stays: the story, angle, people, central question,
+fictional companion, sequence order, every block's information class, beats
+and claims, recorded quotations. It skips the planner (the base's plan and
+narrator are kept) and calls `script.refine` with its own prompt — the voice
+(one intelligent viewer, a confident, curious, restrained narrator), and the
+craft: cut meta-narration that talks about the film, protect the strongest
+lines word for word (returned as `keptLines`), information through story
+(situation → curiosity → fact → consequence), no purple prose, trust the
+viewer, rhythm, room for silence, facts with consequences, uncertainty said
+naturally, the legend met first and overturned by the record, a fictional
+companion as a lens, cuts only of what is weak, transitions through
+consequence, sources as detective work; the runtime follows the story within
+the acceptable range, never padded. The prompt also carries the base's
+script-editor verdict and issues, the rules' findings on the base, and the
+editor's section notes. The examples in it are generic, like every
+production prompt (a test checks for topic terms). Then the usual chain: the
+script editor — shown the base for comparison — answers a fixed 13-question
+refinement checklist (`REFINEMENT_CHECKLIST`: curiosity in 30 seconds, the
+companion useful, every section advancing, facts that matter, an earned
+turning point, momentum, a person speaking, no needless explanation, strong
+lines kept, the ending answering the question, legend versus record,
+historically defensible, runtime in range — each YES / PARTLY / NO and
+BETTER / SAME / WORSE than the base, with a note; recorded, never
+blocking); the fact checker is told the version is a refinement (hedges,
+numbers, quotations and fiction must not move); the performance pass marks
+every block again; the gate decides as for any version. A section the
+refinement returns empty is kept as it was (noted). Four model calls.
+
+**Comparing versions** (`GET …/script/compare?a=&b=`): words and runtime;
+blocks; each version's gate (FAIL and WARN checks), the cost of the job that
+wrote it, the script editor's scores and the spoken words by information
+class; sections changed; words removed and added (a longest-common-
+subsequence diff over the words, per section); the evidence that moved —
+claims cited and figures said that one version has and the other does not (a
+refinement should show none); the newer version's change log and kept lines;
+its refinement checklist; then the block diff per section. Choosing the
+older version means restoring it (a new version; nothing is lost).
+
 **Voice handoff (no audio).** The script is provider-neutral. A
 `VoiceScriptAdapter` turns it into requests; `ElevenLabsScriptAdapter` is the
 first: one request per run of blocks with the same pace in a section, speed
@@ -1010,12 +1052,24 @@ marked fictional.
 **Models, cost, checkpoints.** The model is the AI provider's default
 (`AI_MODEL`) unless `SCRIPT_MODELS` names one per step
 (`perform=…,edit=…`); per-step effort and token limits are in
-`DEFAULT_SCRIPT_CONFIG`. Every call is a `provider_calls` row with its
+`DEFAULT_SCRIPT_CONFIG` (the writer, which returns the whole script, has the
+model's full 128k output budget: Tulip Mania's 15-minute draft used about
+46k output tokens with thinking, and a truncated output fails the job). Every call is a `provider_calls` row with its
 estimated cost; `SCRIPT_MAX_COST_USD` (default 15) stops a job (FAILED, not
 retried) once its recorded spend passes it. Each step is checkpointed
-(`PROMPT_VERSION` = `script-1.0-2026-10-05.1`): a retry resumes after the last
+(`PROMPT_VERSION` = `script-1.1-2026-10-05.1`): a retry resumes after the last
 completed call. A section rewrite makes 4 calls (rewrite, editor, fact
-checker, performance) over the chosen sections; a draft or whole revision 5.
+checker, performance) over the chosen sections; a refinement 4 (refine,
+editor, fact checker, performance) over the whole script; a draft or whole
+revision 5.
+
+**Uncertainty, said naturally.** The wording checks accept the ways a
+narrator actually says a claim is uncertain — "it seems", "the accounts don't
+agree", "the sources differ", "it's not clear", "there's no way to check",
+"it comes from a single source", "we need to be careful here", "the famous
+version", "you may have heard", "as it's usually told" — as well as the
+formal ones; the hedge must still be in the block that tells the claim, and a
+myth told plainly still fails.
 
 **Limits (stated honestly).** The rules see words, not meaning: a fictional
 act phrased without one of the listed verbs, interiority without a listed
@@ -1090,3 +1144,7 @@ Timing is an estimate from word counts, not a measurement of a voice.
 | D59 | Timing from words, pace and pauses (150 wpm) | Deterministic, explainable and good enough to steer; a real voice measurement replaces it at the voice stage | Per-voice calibration now |
 | D60 | An open CRITICAL fact-checker issue blocks approval until its block is changed | The fact checker has the last word on facts; an issue its own patch could not fix must not slip through unread | Record it only |
 | D61 | Model per step is configuration (`SCRIPT_MODELS`), never code | "Keep model configuration external"; a cheaper model for the performance pass is a decision to make with real runs | Hard-coded models |
+| D62 | Narrative refinement is a mode of the SCRIPT job (no planner, the base's plan kept, its own prompt), not a new stage | It improves how the story is told, not what it is: keeping the plan and the architecture fixed, and running the same reviewers, rules and gate, means a refinement cannot skip a check or quietly restructure | A whole-script revision from a style brief (re-plans; may restructure) |
+| D63 | The script editor answers a fixed 13-question checklist against the base, recorded with the version, never blocking | The brief's quality test, asked the same way every time, makes versions comparable; craft is a judgement for the human, the gate stays about evidence | A free-form verdict only |
+| D64 | The wording checks accept natural uncertainty phrasing | "Don't make uncertainty sound like a database warning": the rules still require the signal in the same block, they just recognise how people say it | Formulaic hedges only |
+| D65 | The writer step gets the model's full output budget | Measured: about 46k of 64k for a 15-minute draft, thinking included; a truncated script fails the job, an unused budget costs nothing | Keep 64k and risk a failed run |

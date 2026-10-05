@@ -179,6 +179,8 @@ export const ScriptJobInput = z.object({
     .object({
       baseVersion: z.number().int().min(1),
       sections: z.array(z.number().int().min(1)).max(60).default([]),
+      /** A narrative refinement of the whole script: the telling rewritten, the story and evidence unchanged. */
+      refine: z.boolean().default(false),
     })
     .optional(),
 });
@@ -200,6 +202,17 @@ export const ReviseScriptInput = z.object({
 });
 // The request shape (`sections` may be left out); the service parses it.
 export type ReviseScriptInput = z.input<typeof ReviseScriptInput>;
+
+/**
+ * Refine the narration of a whole script version for the ear: the story,
+ * structure, information classes and evidence stay; the writing changes. An
+ * optional brief adds what this film needs (lines to protect, what to watch).
+ */
+export const RefineScriptInput = z.object({
+  baseVersion: z.number().int().min(1),
+  brief: z.string().trim().max(5000).optional(),
+});
+export type RefineScriptInput = z.input<typeof RefineScriptInput>;
 
 /** The editor's change to one narration block (the version under review only). */
 export const UpdateScriptBlockInput = z

@@ -5,11 +5,12 @@ import { createStoryArchitectureStage, createStoryMiningStage } from '@docengine
 import { seedFakeDossier } from '@docengine/story/testing';
 import { describe, expect, it } from 'vitest';
 import { tulipInput, useTestDatabase } from '../../../test/helpers.ts';
-import { compareDrafts } from './compare.ts';
+import { compareDrafts, evidenceChanges } from './compare.ts';
 import type { ScriptConfig } from './config.ts';
 import { ScriptEditing } from './editing.ts';
 import { createScriptStage } from './stage.ts';
 import { loadVersion } from './store.ts';
+import { REFINEMENT_CHECKLIST } from './prompts.ts';
 import { FakeScriptAI } from './testing.ts';
 
 const db = useTestDatabase();
@@ -238,6 +239,116 @@ describe('script engine (fake AI, real database)', () => {
     expect((await version(projectId, 2)).row.status).toBe('SUPERSEDED');
     expect(JSON.stringify(s.ai.calls)).toBe(calls);
     await expect(s.editing.restore(projectId, { version: 3 }, 'editor')).rejects.toThrow(/already the version under review/);
+  });
+
+  it('refines the narration of a version into a new one: story, classes and evidence kept, no planner, the checklist answered, the change measured', async () => {
+    const s = setup();
+    const projectId = await scripted(s);
+    // The editor's work on v1: an edit (its hedge kept) and a note; both reach the refinement.
+    const target = await blockAt(projectId, 1, '2.1');
+    const editedText = target.text.replace('(test)', '(edited, test)');
+    await s.editing.editBlock(target.id, { text: editedText }, 'editor');
+    await s.editing.reviewSection((await sectionAt(projectId, 1, 4)).id, { editorNotes: 'Too much signposting here (test).' }, 'editor');
+    const v1 = await snapshot(projectId, 1);
+    const callsBefore = { ...s.ai.calls };
+
+    const job = await s.projects.refineScript(projectId, { baseVersion: 1, brief: 'Protect the opening line; less signposting (test).' }, 'editor');
+    expect(await statusOf(projectId)).toBe('SCRIPT_DRAFT');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
+    expect(await statusOf(projectId)).toBe('SCRIPT_REVIEW');
+
+    // v1 kept exactly as it was (superseded); v2 is the refinement, under review.
+    expect(await snapshot(projectId, 1)).toEqual(v1);
+    expect((await version(projectId, 1)).row.status).toBe('SUPERSEDED');
+    const before = await version(projectId, 1);
+    const v2 = await version(projectId, 2);
+    expect(v2.row).toMatchObject({ status: 'IN_REVIEW', qualityPassed: true, revisionOfId: before.row.id, notes: 'Protect the opening line; less signposting (test).' });
+    const content = ScriptContent.parse(v2.row.content);
+    const first = before.draft.sections[0]!.blocks[0]!.text;
+    expect(content.provenance).toMatchObject({ origin: 'REFINEMENT', baseVersion: 1, sections: [1, 2, 3, 4, 5, 6], requestedBy: 'editor', changeLog: { kept: [first] } });
+    expect(content.narrator).toEqual(ScriptContent.parse(before.row.content).narrator);
+    // The script editor answered the checklist, in order, against v1.
+    expect(content.editor!.assessment!.map((a) => a.question)).toEqual([...REFINEMENT_CHECKLIST]);
+    expect(content.editor!.assessment!.every((a) => a.answer === 'YES' && a.comparedToPrevious === 'BETTER')).toBe(true);
+
+    // Same story, same evidence: block for block, the same beats, claims, classes and speakers; the narration reworded.
+    const shape = (v: typeof v2) => v.draft.sections.map((x) => x.blocks.map((b) => [b.infoClass, b.beatIds.join(','), b.claimKeys.join(','), b.speakerId]));
+    expect(shape(v2)).toEqual(shape(before));
+    expect(v2.draft.sections[0]!.blocks[0]!.text).toBe(first);
+    expect(v2.draft.sections[1]!.blocks[0]!.text).toBe(editedText);
+    expect(v2.draft.sections[2]!.blocks.every((b) => b.speakerId !== null || b.text.includes('(refined, test)'))).toBe(true);
+    expect(v2.draft.sections.flatMap((x) => x.blocks).find((b) => b.centralQuestion === 'ANSWERED')).toBeDefined();
+    // Plans are the base's; every section is new and pending review.
+    expect(v2.draft.sections.map((x) => x.plan)).toEqual(before.draft.sections.map((x) => x.plan));
+    expect(v2.draft.sections.every((x) => x.reviewStatus === 'PENDING')).toBe(true);
+
+    // Four calls: the refinement, both reviewers, the performance — no planner.
+    const delta = Object.fromEntries(Object.entries(s.ai.calls).map(([k, n]) => [k, n - (callsBefore[k] ?? 0)]).filter(([, n]) => n !== 0));
+    expect(delta).toEqual({ 'script.refine': 1, 'script.edit': 1, 'script.factCheck': 1, 'script.perform': 1 });
+    const prompt = s.ai.prompts['script.refine']![0]!;
+    for (const part of [
+      '# Refine the narration of script v1 — every section; its story, order, evidence and information classes stay as they are',
+      "The editor's brief for this refinement: Protect the opening line; less signposting (test).",
+      '- Section 4: Too much signposting here (test).',
+      '# What the script editor said about v1',
+      '# What the automated checks flag in v1',
+      '# Script v1 — the text to refine (each block with its class, beats, claims and speaker)',
+      editedText,
+    ])
+      expect(prompt).toContain(part);
+    expect(prompt).toMatch(/^# The approved story architecture \(v\d+\)$/m);
+    expect(prompt).toMatch(/^# Evidence: the \d+ claims the architecture cites/m);
+    const editorPrompt = s.ai.prompts['script.edit']!.at(-1)!;
+    expect(editorPrompt).toContain('# The previous version (v1) this one refines — for comparison only; do not change it');
+    expect(editorPrompt).toContain(`# Refinement checklist — answer every question, in this order, for this version against v1\n1. ${REFINEMENT_CHECKLIST[0]}`);
+    expect(s.ai.prompts['script.factCheck']!.at(-1)).toContain('This version is a narrative refinement of v1');
+    expect(s.ai.prompts['script.factCheck']!.at(-1)).not.toContain('# Refinement checklist');
+
+    // Measured: every section changed, words added (no facts moved), and the job's report says so.
+    const cmp = compareDrafts(before.draft, v2.draft);
+    expect(cmp.totals.sectionsChanged).toBe(6);
+    expect(cmp.totals.wordsRemoved).toBe(0);
+    expect(cmp.totals.wordsAdded).toBeGreaterThan(10);
+    expect(evidenceChanges(before.draft, v2.draft)).toEqual({ claimsAdded: [], claimsRemoved: [], figuresAdded: [], figuresRemoved: [] });
+    const final = await db.projectEvent.findFirstOrThrow({ where: { projectId, type: 'JOB_PROGRESS', jobId: job.id }, orderBy: { createdAt: 'desc' } });
+    expect(final.message).toMatch(/^Script v2 \(from v1\) saved for review: 6 sections/);
+    expect(final.data).toMatchObject({ comparison: { base: { version: 1 }, wordsRemoved: 0, wordsAdded: cmp.totals.wordsAdded, sectionsChanged: 6, evidence: { claimsAdded: [], figuresAdded: [] }, keptLines: [first] } });
+    expect((final.data as { comparison: { checklist: string[] } }).comparison.checklist).toHaveLength(13);
+    expect(await db.projectEvent.findFirstOrThrow({ where: { projectId, type: 'SCRIPT_REVISION_REQUESTED' } })).toMatchObject({ data: { kind: 'REFINEMENT', baseVersion: 1 } });
+  });
+
+  it('holds a refinement to the same rules: a dropped hedge or a new figure stops approval, a skipped section is kept as it was', async () => {
+    const s = setup();
+    const projectId = await scripted(s);
+    s.ai.refineTransform = (out) => {
+      // An unsupported figure, a PROBABLE claim with its hedge removed, and section 6 left out.
+      out.sections = out.sections.filter((x) => x.sequence !== 6);
+      const blocks = out.sections.flatMap((x) => x.blocks);
+      const b = blocks.find((x) => x.speakerId === null && x.infoClass === 'DOCUMENTED')!;
+      b.text = `${b.text} Some 9,999 people watched (test).`;
+      const hedged = blocks.find((x) => /^Records suggest that [a-z]/.test(x.text))!;
+      hedged.text = hedged.text.replace('Records suggest that ', '').replace(/^./, (c) => c.toUpperCase());
+      return out;
+    };
+    const job = await s.projects.refineScript(projectId, { baseVersion: 1 }, 'editor');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
+    const v2 = await version(projectId, 2);
+    // It reaches review — the editor sees what went wrong — but cannot be approved.
+    expect(v2.row).toMatchObject({ status: 'IN_REVIEW', qualityPassed: false, notes: null });
+    const report = QualityReport.parse(v2.row.qualityReport);
+    expect(report.checks.find((c) => c.id === 'figures_names')).toMatchObject({ status: 'FAIL', detail: expect.stringContaining('9999 is in no claim of the approved architecture') });
+    expect(report.checks.find((c) => c.id === 'uncertainty')).toMatchObject({ status: 'FAIL', detail: expect.stringContaining('is PROBABLE but the narration does not hedge it') });
+    expect(report.normalizations).toContain('The refinement returned section 6 empty; it is kept as it was in v1');
+    expect(v2.draft.sections[5]!.blocks.map((b) => b.text)).toEqual((await version(projectId, 1)).draft.sections[5]!.blocks.map((b) => b.text));
+    expect(evidenceChanges((await version(projectId, 1)).draft, v2.draft).figuresAdded).toEqual(['9999']);
+    await expect(s.projects.recordApproval(projectId, { gate: 'SCRIPT', decision: 'APPROVED' }, 'editor')).rejects.toThrow(/blocking quality findings/);
+    // The version it refined is untouched and can be made current again.
+    await s.editing.restore(projectId, { version: 1 }, 'editor');
+    expect((await version(projectId, 3)).row).toMatchObject({ status: 'IN_REVIEW', qualityPassed: true });
+    // A refinement needs a version that tells the approved architecture.
+    await expect(s.projects.refineScript(projectId, { baseVersion: 7 }, 'editor')).rejects.toThrow(/Script v7 not found/);
   });
 
   it('lets a version with blocking findings reach review, and keeps a fact checker’s fix only when it helps', async () => {

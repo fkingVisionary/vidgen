@@ -21,7 +21,9 @@ export interface ScriptConfig {
 export const DEFAULT_SCRIPT_CONFIG: ScriptConfig = {
   maxCostUsd: 15,
   effort: { plan: 'high', write: 'high', edit: 'high', factCheck: 'high', perform: 'medium' },
-  maxTokens: { plan: 24_000, write: 64_000, edit: 48_000, factCheck: 48_000, perform: 32_000 },
+  // The writer returns the whole script (a refinement also reads one): a 12–15 minute script took about 46k
+  // output tokens with thinking, so it gets the model's full output budget rather than risk a truncated job.
+  maxTokens: { plan: 24_000, write: 128_000, edit: 48_000, factCheck: 48_000, perform: 32_000 },
   models: {},
 };
 

@@ -216,11 +216,18 @@ Once the story architecture is approved (Story Engine 2.0), the project's
 3. **Edit** a block (text, class, delivery, pauses, emphasis, visual
    intent), reorder blocks (▲▼), **Approve section**, **Reject**, **Add
    note**. Each change re-runs the rules at once; the generated text is kept.
-4. **Regenerate section…** with a brief: a new version where only that
+4. **Refine the narration…** (optional brief): a new version whose writing
+   is rewritten for the ear — meta-narration cut, strong lines kept, facts
+   arriving through the story, uncertainty said naturally — with the story,
+   structure, information classes and evidence unchanged. The script editor
+   answers a 13-question checklist against the version refined.
+   **Regenerate section…** with a brief: a new version where only that
    section is rewritten (and reviewed); the others are copied unchanged, with
    no model calls. **Generate Revision** rewrites the whole script from a
-   brief. **Versions** tab: every version, **compare** two section by
-   section, or make an earlier one current again.
+   brief. **Versions** tab: every version, **compare** two (words, runtime,
+   gate, cost, scores, words removed and added, evidence that moved, what
+   changed and why, the checklist, the text), or make an earlier one current
+   again.
 5. **Approve Entire Script** — refused while the gate has blocking findings
    (fiction presented as documented fact, invented words for a real person,
    an unsupported figure, a myth told as fact, a missing sequence…) or a

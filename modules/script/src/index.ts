@@ -1,8 +1,8 @@
 export { createScriptStage } from './stage.ts';
 export { DEFAULT_SCRIPT_CONFIG, SCRIPT_STEPS, parseScriptModels, type ScriptConfig, type ScriptStep } from './config.ts';
-export { PROMPT_VERSION } from './prompts.ts';
+export { PROMPT_VERSION, REFINEMENT_CHECKLIST } from './prompts.ts';
 export { ScriptEditing, scopeFor, recheck } from './editing.ts';
-export { compareDrafts, diffBlocks, voicePlan } from './compare.ts';
+export { compareDrafts, diffBlocks, evidenceChanges, voicePlan, wordDiff } from './compare.ts';
 export { SCRIPT_INCLUDE, loadById, loadVersion, toDraft, type LoadedScript, type ScriptRow } from './store.ts';
 export { SCRIPT_BLOCKING, SCRIPT_FINDING_KINDS, SCRIPT_WARNINGS, checkScript, type ScriptFinding, type ScriptFindingKind } from './rules.ts';
 export { blockingDetails, computeScriptReport } from './quality.ts';
