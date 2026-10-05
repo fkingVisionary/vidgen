@@ -209,6 +209,18 @@ the model's full 128k tokens (a model with a smaller output limit set for the
 `write` step through `SCRIPT_MODELS` would be refused by the provider). A
 refinement makes four model calls.
 
+## Deploying the Script Quality Rules
+
+No migration, no new variables, no new model calls. The script prompt version
+changed (`script-1.3-2026-10-05.1`): a Retry of a script job started before the
+deploy starts its model calls again. Saved versions keep the quality report
+they were made with; the new rules apply to new versions and to a version
+re-checked by an edit — where one new rule blocks approval (a documented or
+uncertain block naming a real person that cites no claim about them). A
+script job's log now has a line *Script quality rules on vN* when it starts
+from a version, and *Script quality rules, vN → vM* before *saved for
+review*, with the full digest in the event's data.
+
 ## Environment variables
 
 `✓` = read by V1 code. Planned variables are documented now so the shape is

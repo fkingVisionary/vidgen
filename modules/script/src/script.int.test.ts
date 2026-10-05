@@ -354,7 +354,9 @@ describe('script engine (fake AI, real database)', () => {
       '13. Cut only what is weak',
       '14. Transitions through consequence',
       '15. Sources as detective work',
-      'A version slightly over the range is acceptable when the story needs it.',
+      'STORY ECONOMY',
+      'Make those cuts first: they cost the story nothing',
+      'Slightly over the range is acceptable only when what remains is strong.',
     ])
       expect(system).toContain(rule);
     const prompt = s.ai.prompts['script.refine']![0]!;
@@ -375,6 +377,58 @@ describe('script engine (fake AI, real database)', () => {
     expect(s.ai.systems['script.refine']![1]).toBe(system);
     expect(s.ai.prompts['script.refine']![1]!.trimEnd().endsWith("never parts 1 and 3)\nDrier humour in the opening (test).")).toBe(true);
     expect((await version(projectId, 3)).row).toMatchObject({ notes: 'Drier humour in the opening (test).' });
+  });
+
+  it('shows the quality rules to the refiner and every reviewer, plans the cuts when a version runs long, and logs the rules for each version', async () => {
+    const s = setup();
+    const projectId = await scripted(s);
+    // A tighter runtime (1:00–2:00), and an editor's addition that takes v1 over it.
+    await db.project.update({ where: { id: projectId }, data: { targetMinutesMin: 1, targetMinutesMax: 2 } });
+    const longer = (await version(projectId, 1)).draft.sections.flatMap((x) => x.blocks).find((b) => b.infoClass === 'DOCUMENTED' && !b.speakerId && !b.centralQuestion)!;
+    await s.editing.editBlock((await blockAt(projectId, 1, longer.key)).id, { text: `${longer.text} It was a long winter for everyone in the town (test).` }, 'editor');
+
+    const job = await s.projects.refineScript(projectId, { baseVersion: 1 }, 'editor');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
+    const log = await db.projectEvent.findMany({ where: { projectId, type: 'JOB_PROGRESS', jobId: job.id }, orderBy: { createdAt: 'asc' } });
+    // The run opens with what the rules find in the version it refines…
+    expect(log[1]).toMatchObject({
+      message: expect.stringMatching(/^Script quality rules on v1: \d+ words, 2:\d\d \(0:\d\d over the maximum\); RETOLD_CONTENT \d+/),
+      data: { version: 1, rules: { overMax: expect.any(String), counts: expect.objectContaining({ RETOLD_CONTENT: expect.any(Number), PASSENGER_FACT: expect.any(Number) }) } },
+    });
+    // …the refiner reads them — story-level rules first, a kind found everywhere summarised — with the repetition to keep and where to cut.
+    const refine = s.ai.prompts['script.refine']!.at(-1)!;
+    expect(refine).toMatch(/## The automated checks \(\d+; the script quality rules among them point at the weak material to cut or rework\)/);
+    expect(refine.indexOf('warning RETOLD_CONTENT')).toBeLessThan(refine.indexOf('warning WRITTEN_SYNTAX'));
+    expect(refine).toMatch(/- warning WRITTEN_SYNTAX: the same in \d+ more place\(s\): \d\.\d/);
+    expect(refine).toContain('## Deliberate repetition in v1 — keep it: it is not redundancy\n- refrain "the record shows what happened next test"');
+    expect(refine).toMatch(/## The runtime — v1 runs over its maximum: bring it inside, cutting from this plan first and never what it protects\nThis version runs 2:\d\d, 0:\d\d over the acceptable maximum of 2:00/);
+    expect(refine).toContain('Never cut: 1.1 (poses the central question)');
+    // …so do the script editor, with the cut plan and the lines kept, and the performance pass; the fact checker gets no cut plan.
+    const editor = s.ai.prompts['script.edit']!.at(-1)!;
+    expect(editor).toContain('# This version runs over its maximum — where to cut (ranked by the rules): make the cuts the story can afford, in this order, until it fits; never a protected block');
+    expect(editor).toContain('Cut or compress first (ranked by the rules):');
+    expect(editor).toMatch(/# Lines the refinement says it kept word for word \(1\)\n- "/);
+    expect(s.ai.prompts['script.factCheck']!.at(-1)).not.toContain('where to cut');
+    expect(s.ai.prompts['script.perform']!.at(-1)).toMatch(/^Runtime: 2:\d\d of narration \(acceptable 1:00–2:00\)\. It already runs over its maximum: add no pause the story does not need\.$/m);
+    // The log closes with the rules on both versions, then the version saved.
+    expect(log.at(-2)!.message).toMatch(/^Script quality rules, v1 → v2: \d+ → \d+ words, 2:\d\d → 2:\d\d \(0:\d\d over the maximum\); /);
+    expect(Object.keys((log.at(-2)!.data as { rules: object }).rules)).toEqual(['v1', 'v2']);
+    expect(log.at(-1)!.message).toMatch(/^Script v2 \(from v1\) saved for review/);
+
+    // Refining v1 again replaces v2: the log covers all three. A change log that misstates the length is corrected by the measurement.
+    s.ai.refineTransform = (out) => {
+      const words = out.sections.flatMap((x) => x.blocks).reduce((n, b) => n + b.text.split(/\s+/).length, 0);
+      return { ...out, changeLog: { ...out.changeLog, summary: `Tighter for the ear: about ${Math.round(words * 0.6)} words now (test).` } };
+    };
+    const again = await s.projects.refineScript(projectId, { baseVersion: 1 }, 'editor');
+    await s.runner.drain();
+    const log3 = await db.projectEvent.findMany({ where: { projectId, type: 'JOB_PROGRESS', jobId: again.id }, orderBy: { createdAt: 'asc' } });
+    expect(log3.at(-2)!.message).toMatch(/^Script quality rules, v1 → v3: /);
+    expect(Object.keys((log3.at(-2)!.data as { rules: object }).rules)).toEqual(['v1', 'v2', 'v3']);
+    expect(QualityReport.parse((await version(projectId, 3)).row.qualityReport).normalizations).toContainEqual(
+      expect.stringMatching(/^Length: The writer's change log claims [\d,]+ words; measured: [\d,]+ words, 2:\d\d — the measured length is the one that counts$/),
+    );
   });
 
   it('holds a refinement to the same rules, whatever the director asks: a dropped hedge or a new figure stops approval; a skipped section is kept', async () => {

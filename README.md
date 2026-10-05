@@ -30,8 +30,13 @@ turns the approved architecture into a structured spoken script — sections of
 narration blocks, each with its information class, the claims behind it,
 delivery, semantic pauses, emphasis, pronunciation notes and visual intent —
 reviewed by a script editor and a fact checker and checked by deterministic
-rules; the editor edits, approves or rejects sections, regenerates single
-sections and approves the whole script. Every later stage (voice, visuals,
+rules — including generic Script Quality Rules for the craft of a told story
+(said once, facts that earn their place, pacing, speech rather than page,
+no meta-narration, people and devices introduced plainly, what is said about
+a person resting on a claim about them, deliberate repetition kept, where to
+cut when it runs long); the editor edits, approves or rejects sections,
+regenerates single sections, refines the narration and approves the whole
+script. Every later stage (voice, visuals,
 edit, publish) is still a clearly labelled **MOCK**. First test
 episode: *Tulip Mania — The Bubble That Became a Legend*.
 

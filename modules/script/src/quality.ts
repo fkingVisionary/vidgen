@@ -11,6 +11,7 @@ import { SCRIPT_BLOCKING, type ScriptFinding, type ScriptFindingKind } from './r
 const GROUPS: { id: string; label: string; kinds: ScriptFindingKind[] }[] = [
   { id: 'evidence', label: 'Every fact traces to the approved architecture', kinds: ['CLAIM_OUTSIDE_ARCHITECTURE', 'NOT_IN_ARCHITECTURE', 'BLOCK_WITHOUT_EVIDENCE'] },
   { id: 'figures_names', label: 'Figures, dates and names come from the evidence', kinds: ['UNSUPPORTED_FIGURE', 'PERSON_OUTSIDE_ARCHITECTURE', 'UNKNOWN_NAME'] },
+  { id: 'assertions', label: 'What is said about a person rests on a claim about them', kinds: ['PERSON_WITHOUT_EVIDENCE', 'PERSON_WITHOUT_EVIDENCE_SCENE', 'UNCITED_CLAIM_MATCH'] },
   { id: 'information_classes', label: 'Information classes are preserved', kinds: ['CLASS_MISMATCH', 'DOCUMENTED_NOT_ESTABLISHED', 'FRAMING_WITH_FACTS', 'FICTION_NOT_ALLOWED'] },
   { id: 'uncertainty', label: 'Uncertain history is worded as uncertain', kinds: ['MYTH_AS_FACT', 'DISPUTED_AS_FACT', 'UNVERIFIED_AS_FACT', 'PROBABLE_UNHEDGED'] },
   { id: 'fiction_boundary', label: 'Fiction stays fiction', kinds: ['FICTION_IN_DOCUMENTED', 'FICTION_REAL_INTERACTION', 'FICTION_DOCUMENTED_ACT', 'FICTION_WITH_FACTS'] },
@@ -18,15 +19,20 @@ const GROUPS: { id: string; label: string; kinds: ScriptFindingKind[] }[] = [
   { id: 'structure', label: 'The architecture is told in full and its question answered', kinds: ['SEQUENCE_MISSING', 'CENTRAL_QUESTION_NOT_POSED', 'CENTRAL_QUESTION_ABANDONED'] },
   { id: 'fact_check', label: "The fact checker's critical issues are fixed", kinds: ['OPEN_CRITICAL_FACT_ISSUE'] },
   { id: 'story_shape', label: 'A story, not a lecture', kinds: ['CONSECUTIVE_FACTS', 'EXPOSITION_HEAVY', 'LOW_HUMAN_PRESENCE', 'QUESTION_POSED_LATE', 'BEAT_FROM_OTHER_SEQUENCE'] },
+  { id: 'redundancy', label: 'Said once (deliberate echoes aside)', kinds: ['RETOLD_CONTENT', 'RECAP_SECTION', 'CLAIM_RETOLD', 'REFRAIN_LOST'] },
+  { id: 'exposition', label: 'Every fact earns its place', kinds: ['PASSENGER_FACT', 'SOURCE_CHATTER', 'NAME_LOAD'] },
+  { id: 'meta_narration', label: 'The story, not the film about it', kinds: ['META_NARRATION'] },
+  { id: 'introductions', label: 'People and devices introduced once, plainly', kinds: ['DEVICE_RELABELLED', 'DEVICE_LABEL_STACKED', 'DEVICE_UNINTRODUCED', 'PERSON_UNINTRODUCED'] },
   { id: 'reconstruction_budget', label: 'Reconstruction and fiction within budget', kinds: ['RECONSTRUCTION_BUDGET'] },
   { id: 'real_people', label: 'Real people are not given invented thoughts', kinds: ['REAL_INTERIORITY'] },
   {
     id: 'spoken_language',
     label: 'Written for the ear',
-    kinds: ['LONG_SENTENCES', 'LONG_BLOCK', 'LONG_UNBROKEN_NARRATION', 'REPETITIVE_OPENINGS', 'REPEATED_PHRASES', 'AI_PHRASES', 'RHETORICAL_QUESTIONS', 'FORMULAIC_TRANSITIONS', 'UNSPOKEN_SYMBOLS'],
+    kinds: ['LONG_SENTENCES', 'LONG_BLOCK', 'LONG_UNBROKEN_NARRATION', 'REPETITIVE_OPENINGS', 'REPEATED_PHRASES', 'AI_PHRASES', 'RHETORICAL_QUESTIONS', 'FORMULAIC_TRANSITIONS', 'UNSPOKEN_SYMBOLS', 'WRITTEN_SYNTAX', 'LIST_SENTENCE', 'NUMBER_DENSE', 'MONOTONOUS_RHYTHM', 'NOUN_HEAVY'],
   },
   { id: 'performance', label: 'Pauses and emphasis with restraint', kinds: ['PAUSE_OVERUSE', 'EMPHASIS_OVERUSE'] },
-  { id: 'runtime_balance', label: 'Sections near their planned length', kinds: ['RUNTIME_BALANCE'] },
+  { id: 'runtime_balance', label: 'Sections paced to the story', kinds: ['RUNTIME_BALANCE', 'SECTION_OVER_BUDGET', 'ENDING_DRAG'] },
+  { id: 'runtime_plan', label: 'If it runs long: where to cut first', kinds: ['RUNTIME_PLAN'] },
   { id: 'pronunciation', label: 'Pronunciations confirmed', kinds: ['PRONUNCIATION_REVIEW', 'NAME_WITHOUT_PRONUNCIATION'] },
   { id: 'visual_handoff', label: 'Visual details carry their evidence', kinds: ['VISUAL_WITHOUT_EVIDENCE'] },
 ];
@@ -44,13 +50,15 @@ export function computeScriptReport(args: {
   const checks: QualityCheck[] = [];
   for (const g of GROUPS) {
     const fs = findings.filter((f) => g.kinds.includes(f.kind));
-    const blocking = g.kinds.some((k) => SCRIPT_BLOCKING.includes(k));
-    checks.push({ id: g.id, label: g.label, status: fs.length === 0 ? 'PASS' : blocking ? 'FAIL' : 'WARN', detail: fs.length ? summarise(fs) : 'No findings', metric: fs.length, threshold: 0 });
+    // A group fails on a blocking finding, never on a warning that shares its group.
+    const failing = fs.filter((f) => SCRIPT_BLOCKING.includes(f.kind));
+    const shown = [...failing, ...fs.filter((f) => !failing.includes(f))];
+    checks.push({ id: g.id, label: g.label, status: fs.length === 0 ? 'PASS' : failing.length ? 'FAIL' : 'WARN', detail: fs.length ? summarise(shown) : 'No findings', metric: fs.length, threshold: 0 });
   }
   // Runtime, with its numbers.
   const off = findings.some((f) => f.kind === 'RUNTIME_OFF');
   const near = findings.some((f) => f.kind === 'RUNTIME_NEAR');
-  checks.splice(8, 0, {
+  checks.splice(checks.findIndex((c) => c.id === 'fact_check') + 1, 0, {
     id: 'runtime',
     label: 'Estimated voice runtime',
     status: off ? 'FAIL' : near ? 'WARN' : 'PASS',

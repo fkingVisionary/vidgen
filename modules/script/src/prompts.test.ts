@@ -39,12 +39,12 @@ describe('script prompts', () => {
     expect(parts.map((x) => r.indexOf(x)).every((i, n, all) => i > 0 && (n === 0 || i > all[n - 1]!))).toBe(true);
     expect(r.indexOf('THE EVIDENCE BOUNDARY')).toBeGreaterThan(r.indexOf(parts[0]!));
     expect(r.indexOf('THE EVIDENCE BOUNDARY')).toBeLessThan(r.indexOf(parts[1]!));
-    for (const rule of ['Earn the turning point', 'A version slightly over the range is acceptable when the story needs it.', "including any director's instruction you could not follow, and why"]) expect(r).toContain(rule);
+    for (const rule of ['Earn the turning point', 'Slightly over the range is acceptable only when what remains is strong.', "including any director's instruction you could not follow, and why"]) expect(r).toContain(rule);
   });
 
   it('ask a refinement to change the telling only, within the same bounds as the draft', () => {
     const r = prompts.refine;
-    for (const rule of ['Meta-narration', 'Protect what is strong', 'keptLines', 'No purple prose', 'Trust the viewer', 'Legend as discovery', 'Cut only what is weak', 'No new facts, no new claims, no new people', 'Every block keeps its information class', 'never inside a documented event', 'is a planning midpoint, not a target. Never pad.'])
+    for (const rule of ['Meta-narration', 'Protect what is strong', 'keptLines', 'No purple prose', 'Trust the viewer', 'Legend as discovery', 'Cut only what is weak', 'No new facts, no new claims, no new people', 'Every block keeps its information class', 'never inside a documented event', 'is a planning midpoint, not a target. Never pad, and never cut fascinating, useful material just to approach a number.'])
       expect(r).toContain(rule);
     expect(r).toContain('The acceptable range is 10:00–15:00');
     // The hard rules are the draft's own.
@@ -53,6 +53,19 @@ describe('script prompts', () => {
     expect(r).toContain('REAL PEOPLE');
     expect(prompts.editor).toContain('REFINEMENT CHECKLIST');
     expect(prompts.performance).toContain('it never makes up for it');
+  });
+
+  it('teach the story economy the checks enforce — to the writer, a rewrite, the refinement and the script editor', () => {
+    const rules = ['STORY ECONOMY', 'Say it once.', 'is a passenger', 'Introduce a real person by what they do', 'At most one line about the film itself', 'rests on a claim about them', 'Speech, not page', 'Deliberate repetition is not redundancy'];
+    for (const name of ['writer', 'rewrite', 'refine', 'editor'] as const) for (const rule of rules) expect([name, rule, prompts[name].includes(rule)]).toEqual([name, rule, true]);
+    // Runtime: the weak material goes first, nothing protected goes, and nobody estimates length — it is measured.
+    expect(prompts.refine).toContain('Make those cuts first: they cost the story nothing');
+    expect(prompts.refine).toContain('Never cut what the plan protects.');
+    expect(prompts.refine).toContain('Do not state the word count or the runtime in the changeLog: the system measures them.');
+    expect(prompts.writer).toContain('Do not state the word count or the runtime: the system measures them.');
+    expect(prompts.editor).toContain('WHEN IT RUNS LONG — only when the prompt gives a cut plan');
+    expect(prompts.factCheck).toContain('Start with what the automated rules flag about evidence: PERSON_WITHOUT_EVIDENCE');
+    expect(prompts.performance).toContain('Pauses cost time');
   });
 
   it('give the script editor thirteen yes-is-good questions', () => {

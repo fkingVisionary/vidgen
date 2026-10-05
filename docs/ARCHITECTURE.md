@@ -932,7 +932,7 @@ after every human edit and on the final version. *Blocking* findings:
 
 | Area | Findings |
 |---|---|
-| Evidence | a claim the architecture does not cite; narration that realises no beat; documented / uncertain / reconstructed narration citing no claim; a figure or year in none of the block's claims (or the architecture's, which are then linked); a dossier person the architecture does not cite; a name nobody knows |
+| Evidence | a claim the architecture does not cite; narration that realises no beat; documented / uncertain / reconstructed narration citing no claim; a figure or year in none of the block's claims (or the architecture's, which are then linked); a dossier person the architecture does not cite; a name nobody knows; documented or uncertain narration naming a real person that cites no claim about them (§15, Script Quality Rules) |
 | Classes | a class that does not match the beats; DOCUMENTED resting on claims that are not ESTABLISHED; framing with facts; fiction where none was planned |
 | Uncertainty | MYTH told as fact or outside uncertain narration; DISPUTED / UNVERIFIED without words saying so; PROBABLE without a hedge |
 | Fiction | a fictional device in documented narration; fiction speaking to, touching or trading with a real person; fiction performing a documented or dated act (a year or calendar date in the same sentence); fiction carrying figures or dates |
@@ -948,9 +948,11 @@ change, repetitive openings, repeated phrases, stock AI phrases, rhetorical
 questions, formulaic transitions, symbols a narrator cannot read); pause and
 emphasis overuse; runtime near the edge; sections far from their planned
 length; pronunciations to confirm or missing for a name; a visual detail to
-show without its claims. The wording, subject–verb and speech patterns are
-heuristics and are documented as such: they catch the common cases, the two
-reviewers and the editor the rest.
+show without its claims; and the Script Quality Rules below (retellings and
+recaps, passenger facts, pacing, page syntax, meta-narration, introductions,
+uncited assertions, where to cut). The wording, subject–verb and speech
+patterns are heuristics and are documented as such: they catch the common
+cases, the two reviewers and the editor the rest.
 
 **The gate blocks approval, not review.** A script job that produces a script
 always saves it IN_REVIEW and moves the project to SCRIPT_REVIEW, so the editor
@@ -1006,8 +1008,10 @@ viewer, rhythm, room for silence, facts with consequences, uncertainty said
 naturally, the legend met first and overturned by the record, a fictional
 companion as a lens, cuts only of what is weak, transitions through
 consequence, sources as detective work, an earned turning point; the runtime
-follows the story within the acceptable range (slightly over is acceptable
-when the story needs it), never padded. **This house style is built in**: a
+follows the story within the acceptable range, never padded — weak material
+(retellings, recaps, passengers) is cut before anything is added, over the
+maximum the ranked cuts come first, and slightly over is acceptable only when
+what remains is strong (see Script Quality Rules). **This house style is built in**: a
 refinement with no instructions gets all of it. The system prompt ranks what
 the model follows — (1) evidence and safety, non-overridable; (2) the
 refinement style, the defaults; (3) the architecture and the script's
@@ -1072,7 +1076,7 @@ model's full 128k output budget: Tulip Mania's 15-minute draft used about
 46k output tokens with thinking, and a truncated output fails the job). Every call is a `provider_calls` row with its
 estimated cost; `SCRIPT_MAX_COST_USD` (default 15) stops a job (FAILED, not
 retried) once its recorded spend passes it. Each step is checkpointed
-(`PROMPT_VERSION` = `script-1.2-2026-10-05.1`): a retry resumes after the last
+(`PROMPT_VERSION` = `script-1.3-2026-10-05.1`): a retry resumes after the last
 completed call. A section rewrite makes 4 calls (rewrite, editor, fact
 checker, performance) over the chosen sections; a refinement 4 (refine,
 editor, fact checker, performance) over the whole script; a draft or whole
@@ -1086,13 +1090,67 @@ version", "you may have heard", "as it's usually told" — as well as the
 formal ones; the hedge must still be in the block that tells the claim, and a
 myth told plainly still fails.
 
+**Script Quality Rules** (`craft.ts`; deterministic; any subject). The first
+live refinement (Tulip Mania v1 → v2) read better, but it kept weaknesses no
+rule measured: an ending that recapped earlier sections, facts along for the
+ride, a fictional companion labelled clumsily, colon lists, a line about the
+film itself, a runtime that grew past the maximum, and a change log that
+misstated its own length. Rather than fix that film, the engine measures each
+weakness for any documentary. The tests use synthetic films from five domains
+(a start-up, a comet, a siege, a composer, a harbour fire), and one checks the
+module names no documentary, person, place, date or claim.
+
+| Area | Findings | What is measured |
+|---|---|---|
+| Said once | RETOLD_CONTENT, RECAP_SECTION, CLAIM_RETOLD | A block whose content words — the film's subject words (in 30% of blocks or more) aside — were mostly said by an earlier block (60%, or 45% over the same claims or beats; at least 4 shared words); a section spending a quarter of its time retelling earlier ones; one claim explained again in three or more sections |
+| Deliberate repetition | REFRAIN_LOST; exempt from the rest | A refrain (a short line said again), a callback (a distinctive 3–8-word phrase that returns at the opening and the ending or at section edges, or echoes a short line — in blocks that do not otherwise retell each other or re-say a claim they share) and an escalation (short sentences opening the same way) are kept out of the redundancy and repetition checks and are never offered as cuts; a version that drops one, or says it only once, is warned |
+| Every fact earns its place | PASSENGER_FACT, SOURCE_CHATTER, NAME_LOAD | Two of: background claims only, a name never used again, an authority cited for its own sake, nobody in it, orientation only (never a block with a KEY claim); three or more authorities named once only to be cited; three or more new names in one block |
+| Pacing | SECTION_OVER_BUDGET, ENDING_DRAG | Over the maximum: a section 15 s and 20% over its planned share of the maximum; an ending 1.5 times a typical section and 30% over its plan |
+| For the ear | WRITTEN_SYNTAX, LIST_SENTENCE, NUMBER_DENSE, NOUN_HEAVY, MONOTONOUS_RHYTHM | Colons, semicolons, parentheses, written-register words; four or more items in one breath (a triple is rhetoric); three numbers in a sentence (the day of a date is part of it); essay nominalisations; a section of eight or more sentences of nearly one length |
+| Meta-narration | META_NARRATION | The narrator talking about the film ("we're going to test", "as we'll see", "before we test it"); one framing line is allowed in the first section |
+| Introductions | PERSON_UNINTRODUCED, DEVICE_UNINTRODUCED, DEVICE_RELABELLED, DEVICE_LABEL_STACKED | A real person first named without what they do; a fictional device not introduced as invented where it first appears (in the narration or an on-screen label), labelled again later, or labelled several ways at once |
+| Assertion → evidence | **PERSON_WITHOUT_EVIDENCE** (blocking), PERSON_WITHOUT_EVIDENCE_SCENE, UNCITED_CLAIM_MATCH | Documented or uncertain narration naming a real person that cites no claim about them (in a reconstruction, a warning); a sentence that says most of what an uncited claim says |
+| Runtime | RUNTIME_PLAN | Over the maximum: a ranked cut plan — retellings and passengers first, then meta-narration, name load, uncited assertions, page syntax, background-only blocks and blocks of sections over budget — covering one and a half times the excess; and what never to cut: the central question and its answer, the turn and the reveals, recorded quotations, each cast member's first appearance, refrains, callbacks and escalations, lines a refinement kept on purpose, the only telling of a KEY claim |
+
+Names are runs of capitalised words ("Anne Goldgar" is one name); at the start
+of a sentence, a capital is a name only if the word is capitalised inside a
+sentence elsewhere, the run has two words, or it "says" something ("Lindqvist
+argues") and is never written in lower case.
+
+*How the stage uses them.* The writer, a rewrite, the refinement and the script
+editor carry the same STORY ECONOMY rules in their system prompts. Every
+reviewer sees the findings — blocking ones first, then the story-level rules,
+then the sentence-level warnings, a kind found in many places shown four times
+and then listed — with the deliberate repetition to keep. The refiner sees them
+for the base, with the base's cut plan when it runs long; the script editor
+gets the cut plan when its version runs long (make the cuts the story can
+afford, never a protected block); the fact checker starts with the evidence
+rules; the performance pass is told the measured runtime and adds no pause the
+story does not need when it already runs long. Models misjudge their own
+length, so the writer no longer states it, and a change log that does — more
+than a tenth off the measured whole-film words or runtime — is noted in the
+report ("Length: …"). The job log records a digest of the rules (words,
+runtime, findings by kind and where, the repetition kept, the cut plan) for
+the version a run starts from, the versions it replaces and the one it makes —
+"Script quality rules, v1 → v3: RETOLD_CONTENT 6 → 1, …" — so a version can be
+judged against the one before it. A human edit is re-checked against the same
+base and kept lines. In the gate the rules add the checks *what is said about a
+person rests on a claim about them*, *said once*, *every fact earns its place*,
+*the story, not the film about it*, *people and devices introduced once,
+plainly* and *if it runs long: where to cut first*; a check fails only on a
+blocking finding.
+
 **Limits (stated honestly).** The rules see words, not meaning: a fictional
 act phrased without one of the listed verbs, interiority without a listed
 mental verb, or a hedge that is technically present but misleading will pass
 them — the reviewers and the editor are the check. Pronunciations come from
 the model and are never trusted until a person confirms them; confirming them
 in the dashboard is not built yet (the voice plan lists them as pending).
-Timing is an estimate from word counts, not a measurement of a voice.
+Timing is an estimate from word counts, not a measurement of a voice. The
+quality rules are heuristics over words and structure: a retelling in other
+words, a passenger with a person in it, or meta-narration in a phrase they do
+not list will pass them, and a deliberate echo they do not recognise can be
+reported as a retelling — they point; the reviewers and the editor judge.
 
 ## 16. Decisions
 
@@ -1163,4 +1221,9 @@ Timing is an estimate from word counts, not a measurement of a voice.
 | D63 | The script editor answers a fixed 13-question checklist against the base, recorded with the version, never blocking | The brief's quality test, asked the same way every time, makes versions comparable; craft is a judgement for the human, the gate stays about evidence | A free-form verdict only |
 | D64 | The wording checks accept natural uncertainty phrasing | "Don't make uncertainty sound like a database warning": the rules still require the signal in the same block, they just recognise how people say it | Formulaic hedges only |
 | D66 | The refinement's house style is the system prompt's default; director's instructions rank last and steer style only | The intended behaviour must not depend on someone pasting a brief; a director still needs a way to steer tone, emphasis and pacing for one film — but never the evidence, which the rules enforce regardless | Behaviour from a pasted brief; no director control |
+| D67 | The weaknesses one live run showed become generic, deterministic Script Quality Rules — not fixes to that film | A rule that measures a weakness improves every documentary and makes a refinement checkable against the version before it; tuning the prompts to one script would overfit it and hide the same weakness in the next | Refine Tulip Mania again with a more specific brief |
+| D68 | Of the quality rules, only a named real person with no claim about them blocks | The evidence boundary forbids people the cited evidence does not name; redundancy, passengers, pacing and syntax are judgements — warnings that point, for the reviewers and the editor | Block on craft findings |
+| D69 | Deliberate repetition is recognised and protected — refrains, callbacks, escalations — and a recap is not a callback | A redundancy rule that punished payoff lines would teach the writer to flatten them; an echo that re-says a shared claim, or a whole sentence, is a retelling | Treat all repetition alike |
+| D70 | Over the maximum: a ranked cut plan with protected blocks, not a word target | "Quality beats arbitrary runtime": the cuts that cost the story nothing come first, and what carries the story is never offered | A hard word budget per section |
+| D71 | Length is measured, never self-reported | The v2 refiner's change log claimed about 1,900 words for 2,319; the system measures and notes the difference | Trust the writer's account |
 | D65 | The writer step gets the model's full output budget | Measured: about 46k of 64k for a 15-minute draft, thinking included; a truncated script fails the job, an unused budget costs nothing | Keep 64k and risk a failed run |

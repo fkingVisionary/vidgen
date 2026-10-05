@@ -14,6 +14,7 @@ import {
   unknownProperNouns,
   wordTokens,
 } from '@docengine/story/shared';
+import { craftFindings, humanIn, inEscalation, partOfRefrain, protectedBlocks, renderTrimPlan, trimPlan, type Refrain, type TrimPlan } from './craft.ts';
 import { allBlocks, fictionalMentions, sectionDurationSec, type DraftBlock, type DraftSection, type ScriptDraft } from './draft.ts';
 import { beatClasses, fictionalCast, realCast, type ScriptScope } from './scope.ts';
 
@@ -36,6 +37,7 @@ export const SCRIPT_FINDING_KINDS = [
   'BLOCK_WITHOUT_EVIDENCE', // documented, uncertain or reconstructed narration that cites no claim
   'UNSUPPORTED_FIGURE', // a figure or year in no claim of the architecture
   'PERSON_OUTSIDE_ARCHITECTURE', // a dossier person the architecture does not cite
+  'PERSON_WITHOUT_EVIDENCE', // documented or uncertain narration naming a real person none of its claims mentions
   'UNKNOWN_NAME', // a name the evidence and the cast do not know
   // Information classes
   'CLASS_MISMATCH', // the block's class does not match the beats it realises
@@ -88,6 +90,29 @@ export const SCRIPT_FINDING_KINDS = [
   'PRONUNCIATION_REVIEW', // pronunciation notes still to be confirmed
   'NAME_WITHOUT_PRONUNCIATION', // a name in the script without a pronunciation note
   'VISUAL_WITHOUT_EVIDENCE', // a historical detail to show, without its claims
+  // Script quality rules (craft.ts): warnings
+  'RETOLD_CONTENT', // a block that says again what an earlier block said
+  'RECAP_SECTION', // a section that spends a large share of its time retelling earlier sections
+  'CLAIM_RETOLD', // the same claim explained in three or more sections
+  'REFRAIN_LOST', // a refrain or callback of the version refined, gone
+  'PASSENGER_FACT', // a fact along for the ride
+  'SOURCE_CHATTER', // authorities named once, only to be cited
+  'NAME_LOAD', // several new names in one block
+  'SECTION_OVER_BUDGET', // over the maximum: a section far over its planned share
+  'ENDING_DRAG', // an ending much longer than a typical section and its plan
+  'WRITTEN_SYNTAX', // colons, semicolons, parentheses, written-register words
+  'LIST_SENTENCE', // four or more items in one sentence
+  'NUMBER_DENSE', // three or more numbers in one sentence
+  'MONOTONOUS_RHYTHM', // a section of sentences of nearly the same length
+  'NOUN_HEAVY', // essay prose: abstract nouns instead of people and verbs
+  'META_NARRATION', // the narrator talking about the film
+  'DEVICE_RELABELLED', // a fictional device labelled as invented again and again
+  'DEVICE_LABEL_STACKED', // a fictional device labelled several ways at once
+  'DEVICE_UNINTRODUCED', // a fictional device first seen without being introduced as one
+  'PERSON_UNINTRODUCED', // a real person named without saying who they are
+  'PERSON_WITHOUT_EVIDENCE_SCENE', // a reconstructed scene naming a real person none of its claims mentions
+  'UNCITED_CLAIM_MATCH', // a sentence that says what an uncited claim says
+  'RUNTIME_PLAN', // over the maximum: where to cut first
 ] as const;
 export type ScriptFindingKind = (typeof SCRIPT_FINDING_KINDS)[number];
 
@@ -102,6 +127,7 @@ export interface ScriptFinding {
 }
 
 export const isBlocking = (f: ScriptFinding) => SCRIPT_BLOCKING.includes(f.kind);
+const clock = (s: number) => `${Math.floor(Math.round(s) / 60)}:${String(Math.round(s) % 60).padStart(2, '0')}`;
 export const blockingCount = (fs: readonly ScriptFinding[]) => fs.filter(isBlocking).length;
 
 // ── Wording patterns (heuristics) ────────────────────────────────────────────
@@ -134,13 +160,6 @@ const ACTION_VERBS = new Set([
 const MONTHS = 'January|February|March|April|May|June|July|August|September|October|November|December';
 /** A year or a calendar date ("1637", "14 January", "January 14th"): a fictional act with one becomes a dated historical claim. */
 const DATE_PATTERN = new RegExp(`\\b(?:1[0-9]{3}|20[0-9]{2})\\b|\\b(?:${MONTHS})\\s+\\d{1,2}(?:st|nd|rd|th)?\\b|\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?(?:${MONTHS})\\b`, 'i');
-
-/** Generic words for people, to measure how much narration has someone in it. */
-const HUMAN_WORDS = new Set(
-  'he she him her his hers they them their theirs we us our i me my man men woman women people person family families child children boy girl son sons daughter daughters father mother parents wife husband widow brother sister friend friends neighbour neighbours neighbor neighbors someone somebody everyone everybody nobody anyone crowd crowds stranger strangers citizens owner owners worker workers'.split(
-    ' ',
-  ),
-);
 
 /** Stock phrases that make narration sound machine-written. */
 const AI_PHRASES = [
@@ -314,6 +333,10 @@ export interface CheckOptions {
   target: RuntimeTarget;
   /** The fact checker's issues on this version (open CRITICAL ones on a block block approval until fixed). */
   factIssues?: readonly ScriptIssue[];
+  /** The version this one refines: its refrains and callbacks must survive. */
+  previous?: ScriptDraft | null;
+  /** Lines kept on purpose (a refinement's kept lines): never cut candidates. */
+  kept?: readonly string[];
 }
 
 /** All findings for a script version, in script order. */
@@ -343,7 +366,6 @@ export function checkScript(draft: ScriptDraft, scope: ScriptScope, opts: CheckO
   }
 
   // Runtime.
-  const clock = (s: number) => `${Math.floor(Math.round(s) / 60)}:${String(Math.round(s) % 60).padStart(2, '0')}`;
   const runtime = `script ${clock(timing.totalSec)} against a target of ${clock(timing.targetSec)} (${clock(timing.minSec)}–${clock(timing.maxSec)})`;
   if (timing.fit === 'OFF') out.push({ kind: 'RUNTIME_OFF', ref: null, detail: `Runtime far from the target: ${runtime}` });
   else if (timing.fit === 'NEAR') out.push({ kind: 'RUNTIME_NEAR', ref: null, detail: `Runtime outside the target range: ${runtime}` });
@@ -362,17 +384,70 @@ export function checkScript(draft: ScriptDraft, scope: ScriptScope, opts: CheckO
     if (b && !b.editedAt) out.push({ kind: 'OPEN_CRITICAL_FACT_ISSUE', ref: b.key, detail: `Block ${b.key}: the fact checker found "${i.note}" and it is not fixed; edit the block or rewrite its section` });
   }
 
+  // The script quality rules, then (over the maximum) where to cut.
+  const craft = craftFindings(draft, scope, timing, { previous: opts.previous });
   storyShape(draft, scope, out);
-  spokenLanguage(draft, timing.totalSec, out);
+  spokenLanguage(draft, timing.totalSec, craft.refrains, out);
   performance(draft, out);
   pronunciation(draft, scope, out);
+  out.push(...craft.findings);
+  const plan = trimPlan(draft, timing, out, protectedBlocks(draft, scope, craft.refrains, opts.kept), scope);
+  if (plan) out.push({ kind: 'RUNTIME_PLAN', ref: null, detail: `Over the ${clock(plan.maxSec)} maximum by ${clock(plan.overMaxSec)}: cut or compress first ${plan.candidates.slice(0, 8).map((c) => `${c.ref} (${c.reasons.join(', ')})`).join('; ') || '(no obvious candidate)'}` });
   return out;
 }
 
-function humanIn(b: DraftBlock, scope: ScriptScope): boolean {
-  const words = wordTokens(b.text);
-  const cast = [...scope.cast.values()].flatMap((c) => c.tokens);
-  return words.some((w) => HUMAN_WORDS.has(w) || cast.includes(w));
+/** Where to cut, and what never to cut, for a version over its maximum (null when it fits). */
+export function cutPlan(draft: ScriptDraft, scope: ScriptScope, opts: CheckOptions): { plan: TrimPlan | null; text: string | null; refrains: Refrain[] } {
+  const timing = scriptTiming(allBlocks(draft), opts.target);
+  const craft = craftFindings(draft, scope, timing, { previous: opts.previous });
+  const plan = trimPlan(draft, timing, [...checkScript(draft, scope, opts)], protectedBlocks(draft, scope, craft.refrains, opts.kept), scope);
+  return { plan, text: plan ? renderTrimPlan(plan) : null, refrains: craft.refrains };
+}
+
+/** The kinds the script quality rules report (craft.ts): one blocking, the rest warnings. */
+export const CRAFT_KINDS: readonly ScriptFindingKind[] = ['PERSON_WITHOUT_EVIDENCE', ...SCRIPT_FINDING_KINDS.slice(SCRIPT_FINDING_KINDS.indexOf('RETOLD_CONTENT'))];
+
+export interface RuleDigest {
+  words: number;
+  runtime: string;
+  /** How far over the acceptable maximum it runs (null within it). */
+  overMax: string | null;
+  /** The quality rules' findings by kind: how many, and where. */
+  counts: Partial<Record<ScriptFindingKind, number>>;
+  where: Partial<Record<ScriptFindingKind, string>>;
+  /** The findings themselves (the first 80). */
+  details: string[];
+  /** Deliberate repetition the rules recognised, and leave alone. */
+  repetition: string[];
+  /** Over the maximum: the blocks to cut or compress first, ranked. */
+  cutFirst: string[];
+}
+
+/**
+ * A version as the script quality rules see it, compactly — for the job log,
+ * so a run shows what the rules find in the version it starts from, the
+ * versions it replaces and the one it makes.
+ */
+export function ruleDigest(draft: ScriptDraft, scope: ScriptScope, opts: CheckOptions): RuleDigest {
+  const timing = scriptTiming(allBlocks(draft), opts.target);
+  const found = checkScript(draft, scope, opts).filter((f) => CRAFT_KINDS.includes(f.kind) && f.kind !== 'RUNTIME_PLAN');
+  const { plan, refrains } = cutPlan(draft, scope, opts);
+  const counts: Partial<Record<ScriptFindingKind, number>> = {};
+  const where: Partial<Record<ScriptFindingKind, string[]>> = {};
+  for (const f of found) {
+    counts[f.kind] = (counts[f.kind] ?? 0) + 1;
+    (where[f.kind] ??= []).push(f.ref ?? 'script');
+  }
+  return {
+    words: timing.words,
+    runtime: clock(timing.totalSec),
+    overMax: timing.totalSec > timing.maxSec ? clock(timing.totalSec - timing.maxSec) : null,
+    counts,
+    where: Object.fromEntries(Object.entries(where).map(([k, refs]) => [k, refs.join(', ')])),
+    details: found.slice(0, 80).map((f) => f.detail),
+    repetition: refrains.map((r) => (r.kind === 'ESCALATION' ? `escalation in ${r.refs.join(', ')}` : `${r.kind.toLowerCase()} "${r.phrase}" (${r.refs.join(', ')})`)),
+    cutFirst: plan?.candidates.map((c) => `${c.ref} (${c.sec.toFixed(1)} s): ${c.reasons.join('; ')}`) ?? [],
+  };
 }
 
 function storyShape(draft: ScriptDraft, scope: ScriptScope, out: ScriptFinding[]): void {
@@ -406,9 +481,11 @@ function storyShape(draft: ScriptDraft, scope: ScriptScope, out: ScriptFinding[]
   }
 }
 
-function spokenLanguage(draft: ScriptDraft, totalSec: number, out: ScriptFinding[]): void {
+function spokenLanguage(draft: ScriptDraft, totalSec: number, refrains: readonly Refrain[], out: ScriptFinding[]): void {
   const narration = allBlocks(draft).filter((b) => !b.speakerId);
   const all = narration.flatMap((b) => sentences(b.text).map((s) => ({ s, key: b.key })));
+  // Openings counted without escalation runs ("Not one. Not ten.") — they repeat on purpose.
+  const counted = narration.filter((b) => !inEscalation(b, refrains)).flatMap((b) => sentences(b.text).map((s) => ({ s, key: b.key })));
   const lengths = all.map((x) => wordTokens(x.s).length);
   const long = all.filter((_, i) => lengths[i]! > 32);
   const avg = lengths.length ? lengths.reduce((a, b) => a + b, 0) / lengths.length : 0;
@@ -416,12 +493,12 @@ function spokenLanguage(draft: ScriptDraft, totalSec: number, out: ScriptFinding
     out.push({ kind: 'LONG_SENTENCES', ref: long[0]?.key ?? null, detail: `${long.length} sentences over 32 words${long.length ? ` (first in ${long[0]!.key})` : ''}; average ${avg.toFixed(1)} words` });
   }
   // Openings.
-  const firsts = all.map((x) => wordTokens(x.s)[0] ?? '').filter(Boolean);
+  const firsts = counted.map((x) => wordTokens(x.s)[0] ?? '').filter(Boolean);
   const counts = new Map<string, number>();
   for (const w of firsts) counts.set(w, (counts.get(w) ?? 0) + 1);
   const [topWord, topCount] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] ?? ['', 0];
   const pairs = new Map<string, number>();
-  for (const x of all) {
+  for (const x of counted) {
     const p = wordTokens(x.s).slice(0, 2).join(' ');
     if (p.includes(' ')) pairs.set(p, (pairs.get(p) ?? 0) + 1);
   }
@@ -440,7 +517,8 @@ function spokenLanguage(draft: ScriptDraft, totalSec: number, out: ScriptFinding
       grams.set(k, (grams.get(k) ?? 0) + 1);
     }
   }
-  const repeated = [...grams.entries()].filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]);
+  // A refrain or callback repeats on purpose: not a repeated phrase.
+  const repeated = [...grams.entries()].filter(([g, n]) => n >= 3 && !partOfRefrain(g, refrains)).sort((a, b) => b[1] - a[1]);
   if (repeated.length) out.push({ kind: 'REPEATED_PHRASES', ref: null, detail: repeated.slice(0, 3).map(([g, n]) => `"${g}" ×${n}`).join(', ') });
   // Stock phrases.
   const stock = narration.flatMap((b) => AI_PHRASES.filter((p) => b.text.toLowerCase().includes(p)).map((p) => `"${p}" (${b.key})`));

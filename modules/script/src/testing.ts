@@ -1,4 +1,4 @@
-import { StoryArchitectureContentV2, type ClaimVerdict, type InformationClass } from '@docengine/core';
+import { StoryArchitectureContentV2, type BeatFunction, type CastKind, type ClaimImportance, type ClaimVerdict, type InformationClass, type ResearchDossierContent } from '@docengine/core';
 import { ProviderError, type ObjectGenerationRequest, type ObjectGenerationResult } from '@docengine/providers';
 import { EvidenceBase } from '@docengine/story/shared';
 import { FakeStoryAI, fakeEvidenceInput } from '@docengine/story/testing';
@@ -475,3 +475,102 @@ export function fixtureDraft(scope: ScriptScope = fixtureScope()): ScriptDraft {
   ];
   return { sections: sections.map(renumber), pronunciations: [] };
 }
+
+// ── Synthetic scopes for any subject (the script quality rules' tests) ───────
+
+export interface SyntheticSpec {
+  question: string;
+  claims: { key: string; statement: string; verdict?: ClaimVerdict; importance?: ClaimImportance; quote?: string }[];
+  cast?: { id: string; name: string; kind: CastKind; description: string; claimKeys?: string[] }[];
+  sequences: { title: string; seconds?: number; beats: { id: string; basis: InformationClass; function?: BeatFunction; claimKeys?: string[]; castIds?: string[]; description?: string }[] }[];
+}
+
+const EMPTY_CONTENT: ResearchDossierContent = {
+  questions: [],
+  timeline: [],
+  keyFigures: [],
+  priceEvidence: [],
+  myths: [],
+  interpretations: [],
+  bubbleAssessment: { summary: '', argumentsFor: [], argumentsAgainst: [], claimKeys: [] },
+  narrativeHistory: { summary: '', milestones: [], claimKeys: [] },
+  openQuestions: [],
+  missingEvidence: [],
+};
+
+/** An approved architecture and its evidence for any subject, from a compact spec (every claim has a verified quote: its statement). */
+export function syntheticScope(spec: SyntheticSpec): ScriptScope {
+  const evidence = new EvidenceBase({
+    dossierId: 'synthetic',
+    dossierVersion: 1,
+    summary: null,
+    content: EMPTY_CONTENT,
+    sources: [{ id: 'src-1', title: 'A synthetic source', sourceType: 'PRIMARY', author: null, publishedDate: null, domain: 'example.org', retrieved: true, duplicateOfId: null }],
+    claims: spec.claims.map((c) => ({
+      id: `claim-${c.key}`,
+      key: c.key,
+      statement: c.statement,
+      claimType: 'EVENT' as const,
+      importance: c.importance ?? 'SUPPORTING',
+      verdict: c.verdict ?? 'ESTABLISHED',
+      confidence: 'HIGH' as const,
+      popularVersion: null,
+      notes: null,
+      citations: [{ sourceId: 'src-1', stance: 'SUPPORTS' as const, quote: c.quote ?? c.statement, quoteVerified: true }],
+    })),
+  });
+  const n = spec.sequences.length;
+  const architecture = StoryArchitectureContentV2.parse({
+    engineVersion: 2,
+    logline: 'A synthetic story (test).',
+    centralQuestion: spec.question,
+    centralHumanStakes: 'What the people stand to lose (test).',
+    narrativeMode: 'INVESTIGATION',
+    secondaryModes: [],
+    povStrategy: { type: spec.cast?.some((m) => m.kind === 'FICTIONAL_COMPOSITE') ? 'COMPANION' : 'NARRATOR', description: '' },
+    cast: (spec.cast ?? []).map((m) => ({ id: m.id, name: m.name, kind: m.kind, description: m.description, claimKeys: m.claimKeys ?? [], justification: m.kind === 'FICTIONAL_COMPOSITE' ? 'A way in (test).' : '' })),
+    thesis: 'A synthetic thesis (test).',
+    narrativeSpine: 'From the start to the end (test).',
+    resolution: 'The record answers the question (test).',
+    orderNote: '',
+    sequences: spec.sequences.map((q, i) => {
+      const beats = q.beats.map((b) => ({ id: b.id, function: b.function ?? 'ORIENTATION', basis: b.basis, description: b.description ?? `Beat ${b.id} (test).`, claimKeys: b.claimKeys ?? [], castIds: b.castIds ?? [], speech: [] }));
+      const s = seq(i + 1, q.title, beats);
+      return {
+        ...s,
+        estimatedDurationSec: q.seconds ?? 60,
+        continuity: { carriesIn: [], carriesOut: [], opens: i === 0 ? [{ id: 'Q0', question: spec.question }] : [], resolves: i === n - 1 ? ['Q0'] : [], timeJump: 'NONE' as const },
+      };
+    }),
+    unusedCandidates: [],
+    reconstruction: { level: 'LOW', beats: spec.sequences.reduce((x, q) => x + q.beats.length, 0), shares: { DOCUMENTED: 0.7, RECONSTRUCTION: 0.1, UNCERTAIN: 0.1, FICTION: 0.1 } },
+  });
+  return buildScope({ architectureId: 'synthetic', architectureVersion: 1, architecture, evidence });
+}
+
+type SyntheticBlock = Partial<WriterBlock> & Pick<WriterBlock, 'text' | 'infoClass'> & { extra?: Partial<DraftBlock> };
+
+/** A draft of a synthetic scope: sections in order (planned at the sequence's seconds), blocks normalized like the writer's. */
+export function syntheticDraft(scope: ScriptScope, sections: SyntheticBlock[][]): ScriptDraft {
+  const seqs = scope.architecture.sequences;
+  return {
+    pronunciations: [],
+    sections: sections.map((blocks, i) => {
+      const sq = seqs[i]!;
+      return renumber({
+        sequence: sq.number,
+        key: `SC${String(sq.number).padStart(2, '0')}`,
+        title: sq.title,
+        plan: { purpose: '', approach: '', showNotSay: [], exposition: [], tension: '', reveal: '', sparse: false, targetSec: sq.estimatedDurationSec },
+        reviewStatus: 'PENDING',
+        editorNotes: null,
+        reviewedBy: null,
+        reviewedAt: null,
+        targetDurationSec: sq.estimatedDurationSec,
+        written: true,
+        blocks: blocks.map(({ extra, ...raw }) => fixtureBlock(scope, raw, extra ?? {})),
+      });
+    }),
+  };
+}
+

@@ -19,9 +19,10 @@ import { DEFAULT_SCRIPT_CONFIG, SCRIPT_STEPS, type ScriptConfig, type ScriptStep
 import { compareDrafts, evidenceChanges } from './compare.ts';
 import { allBlocks, applyPatch, applyPerformance, markCentralQuestion, mergePronunciations, sectionDurationSec, sectionWords, sectionsFromWriter, type ScriptDraft } from './draft.ts';
 import { PROMPT_VERSION, REFINEMENT_CHECKLIST, factCheckSystemPrompt, performanceSystemPrompt, plannerSystemPrompt, refineSystemPrompt, rewriteSystemPrompt, scriptEditorSystemPrompt, writerSystemPrompt } from './prompts.ts';
+import { renderTrimPlan, selfReportMismatch, type Refrain } from './craft.ts';
 import { computeScriptReport } from './quality.ts';
 import { renderArchitecture, renderEvidence, renderScript } from './render.ts';
-import { SCRIPT_BLOCKING, blockingCount, checkScript, type ScriptFinding } from './rules.ts';
+import { CRAFT_KINDS, blockingCount, checkScript, cutPlan, isBlocking, ruleDigest, type RuleDigest, type ScriptFinding, type ScriptFindingKind } from './rules.ts';
 import { FactCheckOutput, PerformanceOutput, PlannerOutput, RefineOutput, ScriptEditorOutput, WriterOutput, type ScriptPatch } from './schemas.ts';
 import { buildScope, type ScriptScope } from './scope.ts';
 import { loadVersion, saveVersion, type LoadedScript } from './store.ts';
@@ -40,6 +41,12 @@ import { loadVersion, saveVersion, type LoadedScript } from './store.ts';
  * story, structure, classes and evidence unchanged (no planner; the script
  * editor answers the refinement checklist against the version refined).
  * Every version is kept.
+ * The script quality rules (craft.ts) — redundancy, passenger facts, pacing,
+ * spoken syntax, meta-narration, introductions, evidence for what is said
+ * about a person, deliberate repetition — are shown to the refiner and every
+ * reviewer; a version over its maximum comes with a ranked cut plan for the
+ * script editor. The job log records what the rules find in the version a
+ * run starts from, the versions it replaces and the one it makes.
  * The gate never stops a version reaching review: its blocking findings stop
  * approval until the editor fixes them. Nothing is approved here.
  */
@@ -105,6 +112,8 @@ class ScriptRun {
           : `${mode === 'SECTIONS' ? `Rewriting section${written.length > 1 ? 's' : ''} ${written.join(', ')}` : 'Revising the whole script'} of script v${base!.row.version} from the editor's brief: "${clip(brief ?? '', 140)}"`,
       { architectureVersion: arch.version, mode, sections: written, brief, target },
     );
+    const baseDigest = base ? ruleDigest(base.draft, scope, { target }) : null;
+    if (base && baseDigest) await ctx.progress(`Script quality rules on v${base.row.version}: ${digestLine(baseDigest)}`, { version: base.row.version, rules: baseDigest });
 
     // A. Plan (a section rewrite and a refinement keep the base version's plan).
     let plans = new Map<number, ScriptSectionPlan>(base ? base.draft.sections.flatMap((s) => (s.plan ? [[s.sequence, s.plan] as const] : [])) : []);
@@ -125,9 +134,13 @@ class ScriptRun {
         ? await this.steps.step('write', RefineOutput, () => this.refine(scope, target, base!, brief, plans))
         : await this.steps.step('write', WriterOutput, () => (mode === 'SECTIONS' ? this.rewrite(scope, target, base!, written, brief, plans) : this.write(scope, target, brief, plans, narrator, base)));
     let draft = this.assemble(writerOut, scope, base, written, plans, notes, mode === 'REFINEMENT');
+    const keptLines = mode === 'REFINEMENT' ? (writerOut.keptLines ?? []).map((l) => l.trim()).filter(Boolean) : [];
+    // Models misjudge the length of what they wrote: the system measures it, and says so when the change log is wrong.
+    const misstated = writerOut.changeLog ? selfReportMismatch([writerOut.changeLog.summary, ...writerOut.changeLog.changes.map((c) => `${c.what} ${c.why}`)].join('\n'), scriptTiming(allBlocks(draft), target)) : null;
+    if (misstated) notes.push(`Length: ${misstated} — the measured length is the one that counts`);
     const draftFindings = checkScript(draft, scope, { target });
     await ctx.progress(`Script ${mode === 'DRAFT' ? 'draft' : mode === 'REFINEMENT' ? 'refinement' : 'rewrite'}: ${allBlocks(draft).length} blocks, ${allBlocks(draft).reduce((n, b) => n + b.wordCount, 0)} words, ~${fmtClock(scriptTiming(allBlocks(draft), target).totalSec)}; ${blockingCount(draftFindings)} blocking findings`, {
-      findings: draftFindings.filter((f) => SCRIPT_BLOCKING.includes(f.kind)).map((f) => f.detail).slice(0, 30),
+      findings: draftFindings.filter(isBlocking).map((f) => f.detail).slice(0, 30),
     });
 
     // C. Script editor (craft).
@@ -135,7 +148,7 @@ class ScriptRun {
     const refined = mode === 'REFINEMENT' ? base! : null;
     const edited = await this.steps.step('edit', EditStep, () =>
       this.unavailableOnError(() =>
-        this.call('edit', 'script.edit', ScriptEditorOutput, 'ScriptEditorReview', scriptEditorSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { previous: refined, checklist: refined !== null }), (x) => ({ issues: x.issues.length, edits: x.edits.length, assessment: x.assessment.length })),
+        this.call('edit', 'script.edit', ScriptEditorOutput, 'ScriptEditorReview', scriptEditorSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { previous: refined, base: base?.draft ?? null, checklist: refined !== null, cuts: true, kept: keptLines }), (x) => ({ issues: x.issues.length, edits: x.edits.length, assessment: x.assessment.length })),
       ),
     );
     let editor: ScriptContent['editor'] = null;
@@ -163,7 +176,7 @@ class ScriptRun {
 
     // E. Performance: delivery where it matters, pauses with a reason, pronunciation.
     await this.ceiling.check();
-    const perf = await this.steps.step('perform', PerformStep, () => this.unavailableOnError(() => this.perform(draft, scope, allowed)));
+    const perf = await this.steps.step('perform', PerformStep, () => this.unavailableOnError(() => this.perform(draft, scope, allowed, target)));
     if ('unavailable' in perf) notes.push(`Performance pass unavailable: ${perf.unavailable}`);
     else {
       draft = applyPerformance(draft, perf, scope, allowed, notes);
@@ -189,10 +202,10 @@ class ScriptRun {
         sections: written,
         brief,
         requestedBy: (await this.requester()) ?? null,
-        changeLog: mode === 'REFINEMENT' ? { ...writerOut.changeLog, kept: (writerOut.keptLines ?? []).map((l) => l.trim()).filter(Boolean) } : writerOut.changeLog,
+        changeLog: mode === 'REFINEMENT' ? { ...writerOut.changeLog, kept: keptLines } : writerOut.changeLog,
       },
     };
-    const findings = checkScript(draft, scope, { target, factIssues: factCheck?.issues });
+    const findings = checkScript(draft, scope, { target, factIssues: factCheck?.issues, previous: base?.draft ?? null, kept: keptLines });
     const timing = scriptTiming(allBlocks(draft), target);
     const report = computeScriptReport({ findings, timing, content, notes, reviewers: { editor: 'unavailable' in edited ? edited.unavailable : null, factCheck: 'unavailable' in checked ? checked.unavailable : null } });
     const stats = {
@@ -238,6 +251,19 @@ class ScriptRun {
     );
     await this.steps.clear();
 
+    // The quality rules on the version made, the version it came from and the versions it replaces.
+    const digests: Record<string, RuleDigest> = {};
+    if (base && baseDigest) digests[`v${base.row.version}`] = baseDigest;
+    for (const v of saved.superseded.filter((x) => x !== base?.row.version)) {
+      const old = await loadVersion(ctx.db, ctx.project.id, v);
+      if (old?.content?.architecture.id === arch.id) digests[`v${v}`] = ruleDigest(old.draft, scope, { target });
+    }
+    const made = ruleDigest(draft, scope, { target, previous: base?.draft ?? null, kept: keptLines });
+    digests[`v${saved.version}`] = made;
+    await ctx.progress(
+      base && baseDigest ? `Script quality rules, v${base.row.version} → v${saved.version}: ${digestChange(baseDigest, made)}` : `Script quality rules on v${saved.version}: ${digestLine(made)}`,
+      { rules: digests },
+    );
     const spend = await this.spent();
     const failed = report.checks.filter((c) => c.status === 'FAIL');
     const warned = report.checks.filter((c) => c.status === 'WARN');
@@ -398,7 +424,8 @@ class ScriptRun {
     const sectionNotes = base.draft.sections.filter((s) => s.editorNotes || s.reviewStatus === 'REJECTED').map((s) => `- Section ${s.sequence}${s.reviewStatus === 'REJECTED' ? ' (rejected by the editor)' : ''}: ${s.editorNotes ?? 'no note'}`);
     const editor = base.content?.editor;
     const factCheck = base.content?.factCheck;
-    const findings = checkScript(base.draft, scope, { target, factIssues: factCheck?.issues });
+    const findings = checkScript(base.draft, scope, { target, factIssues: factCheck?.issues }).filter((f) => f.kind !== 'RUNTIME_PLAN');
+    const { text: cuts, refrains } = cutPlan(base.draft, scope, { target, kept: base.content?.provenance.changeLog?.kept ?? [] });
     const parts = [
       this.header(target),
       `Script v${v} runs ${fmtClock(timing.totalSec)} (${timing.words} spoken words).`,
@@ -415,8 +442,10 @@ class ScriptRun {
           ]
         : ['## The script editor', 'No review.']),
       ...(factCheck ? ['## The fact checker (do not reintroduce what it fixed)', factCheck.verdict, ...factCheck.issues.map((i) => `- ${i.severity} ${i.kind}${i.ref ? ` at ${i.ref}` : ''}: ${i.note} [${i.resolution}]`)] : ['## The fact checker', 'No review.']),
-      `## The automated checks (${findings.length})`,
-      ...(findings.length ? findings.slice(0, 40).map((f) => `- ${SCRIPT_BLOCKING.includes(f.kind) ? 'BLOCKING' : 'warning'} ${f.kind}: ${f.detail}`) : ['- nothing']),
+      `## The automated checks (${findings.length}; the script quality rules among them point at the weak material to cut or rework)`,
+      ...renderFindings(findings, 90),
+      ...(refrains.length ? [`## Deliberate repetition in v${v} — keep it: it is not redundancy`, ...renderRepetition(refrains)] : []),
+      cuts ? `## The runtime — v${v} runs over its maximum: bring it inside, cutting from this plan first and never what it protects\n${cuts}` : `## The runtime — v${v} is within the acceptable range (${fmtClock(target.minSec)}–${fmtClock(target.maxSec)}): keep it there`,
       '',
       `# Script v${v} — the text to refine (each block with its class, beats, claims and speaker)`,
       renderScript(base.draft),
@@ -445,13 +474,17 @@ class ScriptRun {
     target: RuntimeTarget,
     allowed: ReadonlySet<number>,
     brief: string | null,
-    opts: { previous?: LoadedScript | null; checklist?: boolean; refinementOf?: number } = {},
+    opts: { previous?: LoadedScript | null; base?: ScriptDraft | null; checklist?: boolean; refinementOf?: number; cuts?: boolean; kept?: readonly string[] } = {},
   ): string {
     const only = allowed.size === scope.architecture.sequences.length ? undefined : allowed;
-    const inScope = (f: ScriptFinding) => f.ref === null || only === undefined || [...only].some((n) => f.ref!.startsWith(`${n}.`) || f.ref === `S${n}`);
-    const findings = checkScript(draft, scope, { target }).filter(inScope);
-    const timing = scriptTiming(allBlocks(draft), target);
+    const inSections = (ref: string | null) => ref === null || only === undefined || [...only].some((n) => ref.startsWith(`${n}.`) || ref === `S${n}`);
     const previous = opts.previous ?? null;
+    // Checked against the version it was made from (its refrains must survive), shown in full only to a refinement's editor.
+    const checks = { target, previous: opts.base ?? previous?.draft ?? null, kept: opts.kept ?? [] };
+    const findings = checkScript(draft, scope, checks).filter((f) => inSections(f.ref) && f.kind !== 'RUNTIME_PLAN');
+    const timing = scriptTiming(allBlocks(draft), target);
+    const { plan, refrains } = opts.cuts ? cutPlan(draft, scope, checks) : { plan: null, refrains: [] as Refrain[] };
+    const cuts = plan ? renderTrimPlan({ ...plan, candidates: plan.candidates.filter((c) => inSections(c.ref)) }) : null;
     return [
       this.header(target),
       `This version runs ${fmtClock(timing.totalSec)} (${timing.words} spoken words).`,
@@ -462,7 +495,16 @@ class ScriptRun {
       renderScript(draft, { only }),
       '',
       `# What the automated rules found (${findings.length}; blocking ones must be fixed)`,
-      ...(findings.length ? findings.slice(0, 60).map((f) => `- ${SCRIPT_BLOCKING.includes(f.kind) ? 'BLOCKING' : 'warning'} ${f.kind}: ${f.detail}`) : ['- nothing']),
+      ...renderFindings(findings, 90),
+      ...(opts.cuts
+        ? [
+            '',
+            cuts
+              ? `# This version runs over its maximum — where to cut (ranked by the rules): make the cuts the story can afford, in this order, until it fits; never a protected block\n${cuts}`
+              : `# Runtime: ${fmtClock(timing.totalSec)}, within the acceptable range (${fmtClock(target.minSec)}–${fmtClock(target.maxSec)}): do not cut for length`,
+            ...(refrains.length ? ['', '# Deliberate repetition — keep it: it is not redundancy', ...renderRepetition(refrains)] : []),
+          ]
+        : []),
       ...(previous
         ? [
             '',
@@ -470,6 +512,7 @@ class ScriptRun {
             renderScript(previous.draft),
           ]
         : []),
+      ...(opts.kept?.length ? ['', `# Lines the refinement says it kept word for word (${opts.kept.length})`, ...opts.kept.map((l) => `- "${l}"`)] : []),
       ...(opts.checklist ? ['', `# Refinement checklist — answer every question, in this order, for this version against v${previous?.row.version ?? '?'}`, ...REFINEMENT_CHECKLIST.map((q, i) => `${i + 1}. ${q}`)] : []),
       '',
       renderArchitecture(scope),
@@ -488,10 +531,12 @@ class ScriptRun {
     }
   }
 
-  private async perform(draft: ScriptDraft, scope: ScriptScope, allowed: ReadonlySet<number>): Promise<PerformanceOutput> {
+  private async perform(draft: ScriptDraft, scope: ScriptScope, allowed: ReadonlySet<number>, target: RuntimeTarget): Promise<PerformanceOutput> {
     const only = allowed.size === scope.architecture.sequences.length ? undefined : allowed;
+    const timing = scriptTiming(allBlocks(draft), target);
     const parts = [
       `Documentary: ${this.ctx.project.title} — ${this.ctx.project.topic}`,
+      `Runtime: ${fmtClock(timing.totalSec)} of narration (acceptable ${fmtClock(target.minSec)}–${fmtClock(target.maxSec)}).${timing.totalSec > target.maxSec ? ' It already runs over its maximum: add no pause the story does not need.' : ''}`,
       `Narrator: ${scope.architecture.narrativeMode}; point of view ${scope.architecture.povStrategy.type}.`,
       `Cast: ${scope.architecture.cast.map((m) => `${m.name} (${m.kind})`).join('; ')}`,
       '',
@@ -596,3 +641,46 @@ function refinementSummary(base: LoadedScript, draft: ScriptDraft, content: Scri
 }
 
 export type { ScriptFinding };
+
+/** The quality rules about the story — said once, facts that earn their place, introductions, evidence, pacing — read before the sentence-level warnings. */
+const STORY_RULES = CRAFT_KINDS.filter((k) => !['WRITTEN_SYNTAX', 'LIST_SENTENCE', 'NUMBER_DENSE', 'MONOTONOUS_RHYTHM', 'NOUN_HEAVY'].includes(k));
+
+/**
+ * Rule findings as a reader of the prompt sees them: blocking ones first and
+ * in full, then the story-level quality rules, then the other warnings — a
+ * warning found in many places shown four times, then where else.
+ */
+function renderFindings(findings: readonly ScriptFinding[], max: number): string[] {
+  const rank = (f: ScriptFinding) => (isBlocking(f) ? 0 : STORY_RULES.includes(f.kind) ? 1 : 2);
+  const groups = new Map<ScriptFindingKind, ScriptFinding[]>();
+  for (const f of [...findings].sort((a, b) => rank(a) - rank(b))) groups.set(f.kind, [...(groups.get(f.kind) ?? []), f]);
+  const lines: string[] = [];
+  for (const [kind, fs] of groups) {
+    const blocking = isBlocking(fs[0]!);
+    const shown = blocking ? fs : fs.slice(0, 4);
+    for (const f of shown) lines.push(`- ${blocking ? 'BLOCKING' : 'warning'} ${kind}: ${f.detail}`);
+    if (fs.length > shown.length) lines.push(`- warning ${kind}: the same in ${fs.length - shown.length} more place(s): ${fs.slice(shown.length).map((f) => f.ref ?? 'the script').join(', ')}`);
+  }
+  if (lines.length > max) return [...lines.slice(0, max), `- (${lines.length - max} more lines not shown)`];
+  return lines.length ? lines : ['- nothing'];
+}
+
+/** Deliberate repetition, as the rules recognised it. */
+function renderRepetition(refrains: readonly Refrain[]): string[] {
+  return refrains.map((r) => (r.kind === 'ESCALATION' ? `- an escalating run of short sentences in ${r.refs.join(', ')}` : `- ${r.kind === 'REFRAIN' ? 'refrain' : 'callback'} "${r.phrase}" (${r.refs.join(', ')})`));
+}
+
+/** The quality rules in the order a reader wants them: about the story first, then about the sentences. */
+const digestOrder = () => [...STORY_RULES, ...CRAFT_KINDS.filter((k) => !STORY_RULES.includes(k))];
+
+/** A rule digest in one line: length, and the quality rules' findings by kind. */
+function digestLine(d: RuleDigest): string {
+  const kinds = digestOrder().flatMap((k) => (d.counts[k] ? [`${k} ${d.counts[k]}`] : []));
+  return `${d.words} words, ${d.runtime}${d.overMax ? ` (${d.overMax} over the maximum)` : ''}; ${kinds.length ? kinds.join(', ') : 'no findings'}`;
+}
+
+/** Two digests side by side: length, and each kind's count before and after. */
+function digestChange(a: RuleDigest, b: RuleDigest): string {
+  const kinds = digestOrder().filter((k) => a.counts[k] || b.counts[k]);
+  return `${a.words} → ${b.words} words, ${a.runtime} → ${b.runtime}${b.overMax ? ` (${b.overMax} over the maximum)` : ''}; ${kinds.length ? kinds.map((k) => `${k} ${a.counts[k] ?? 0} → ${b.counts[k] ?? 0}`).join(', ') : 'no findings in either'}`;
+}

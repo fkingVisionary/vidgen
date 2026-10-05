@@ -75,7 +75,10 @@ export async function recheck(tx: Tx, scriptId: string, project: Project, scope:
   const row = await tx.script.findUniqueOrThrow({ where: { id: scriptId }, include: SCRIPT_INCLUDE });
   const { draft, content } = toDraft(row);
   const target = runtimeTarget(project);
-  const findings = checkScript(draft, scope, { target, factIssues: content?.factCheck?.issues });
+  // The same comparison the job made: the version it came from (its refrains must survive) and the lines kept on purpose.
+  const baseId = content?.provenance.baseId ?? null;
+  const previous = baseId && baseId !== scriptId ? ((await loadById(tx, baseId))?.draft ?? null) : null;
+  const findings = checkScript(draft, scope, { target, factIssues: content?.factCheck?.issues, previous, kept: content?.provenance.changeLog?.kept ?? [] });
   const blocks = allBlocks(draft);
   const timing = scriptTiming(blocks, target);
   const notes = ['Re-checked after the editor\'s change (rules only, no model calls)'];
