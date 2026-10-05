@@ -1,9 +1,8 @@
 # Status — what exists, honestly
 
-Last updated: the narrative refinement pass — built and tested locally with a
-scripted fake AI; Tulip Mania script v1 → v2 with the real model is the next
-step (2026-10-05). Script Engine 1.0 is deployed (`41248ff`) and its first
-live run produced script v1 (below).
+Last updated: the first live narrative refinement — Tulip Mania script v1 →
+v2 with the real model, no director's instructions (2026-10-05; results
+below). Deployed: `69f21bc`.
 
 ## IMPLEMENTED (real, tested)
 
@@ -110,8 +109,19 @@ a retry two minutes later succeeded.
 
 ## NOT YET VERIFIED LIVE
 
-- **Narrative refinement**: no run with the real model yet (Tulip Mania v1 →
-  v2 is the next step).
+- **Narrative refinement** first live run (Tulip Mania, 2026-10-05, v1 → v2,
+  no director's instructions, `69f21bc`): four calls ≈ $2.15 estimated, 9.8
+  minutes. v2: 81 blocks, 2,319 words, 15:59 (v1: 75 blocks, 2,259 words,
+  15:26); 167 words removed and 227 added, all 7 sections changed; no claims
+  or figures added or dropped; quality gate passed (warnings: runtime near,
+  beats told in other sections, 3 stretches of 76–78 s without a pause — v1
+  had 6 of 79–91 s — section 7 long, 26 pronunciations to confirm, 5 visual
+  details without claims — v1 had 16). Script editor 8 / 7 / 8 / 7 / 8
+  (narrative, flow, clarity, emotion, ending; v1 7.5 / 6.5 / 7 / 6 / 7);
+  checklist 6 yes, 6 partly, 1 no (runtime). The fact checker caught and
+  fixed one unhedged PROBABLE statement the refinement introduced. The
+  refiner's own change log misstated the length (about 1,900 words, 12:40):
+  the measured figures above are what count.
 - **Script Engine 1.0** first live run (Tulip Mania, 2026-10-05, architecture
   v3): script v1, 7 sections, 75 blocks, 2,259 words, 15:26 against a 12:30
   midpoint (10:00–15:00), quality gate passed (warnings: runtime near,
