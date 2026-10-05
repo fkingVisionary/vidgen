@@ -1,0 +1,196 @@
+[
+  {
+    "id": "hook-p-lighthouse-with-no-light",
+    "version": 1,
+    "text": "The lighthouse on the point was finished in the autumn, but its lamp had been ordered from a maker at the other end of the country. It arrived eleven months later. The keeper's wages had started on the day the tower was handed over, so for most of a year the harbour board paid a man to keep a lighthouse that had no light.",
+    "category": "hook",
+    "quality": "excellent",
+    "traits": [
+      "dry_humour",
+      "concrete_detail",
+      "curiosity",
+      "rhythm_variation",
+      "plain_language",
+      "cause_and_effect",
+      "memorable_line"
+    ],
+    "strengths": [
+      "opens on a contradiction rather than a promise",
+      "the humour comes from the board's own arrangements, not from the narrator",
+      "the one number gets a short sentence to itself"
+    ],
+    "weaknesses": [
+      "the last sentence is long and needs a clean read to land",
+      "the joke works once and the film should not keep returning to it"
+    ],
+    "spokenRhythm": "A long sentence that sets up the delay, a five-word sentence for the number, and a long close that turns on its final phrase.",
+    "narrativeFunction": "Opens a film about a lighthouse by making the audience curious about the town that built it and the man it paid to wait.",
+    "whyItWorks": "Nothing is announced. The listener assembles the absurdity from three plain facts, and the closing phrase is funny only because it is an accurate description of what the board was paying for. It also plants the keeper, whom the film can return to.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-p-dividend-before-the-ships",
+    "version": 1,
+    "text": "The dock company paid its first dividend two years before a single ship tied up at its quays. The money came out of what the shareholders had put up to build the docks. The minutes of the general meeting record a vote of thanks to the directors, and no questions.",
+    "category": "hook",
+    "quality": "excellent",
+    "traits": [
+      "curiosity",
+      "dry_humour",
+      "source_as_detective_work",
+      "reveal_not_announce",
+      "restraint",
+      "money_context",
+      "trust_the_viewer"
+    ],
+    "strengths": [
+      "the contradiction is in the first sentence, with its one number",
+      "the second sentence explains where the money came from without a word of comment",
+      "ends on what the minutes leave out rather than on a verdict"
+    ],
+    "weaknesses": [
+      "a listener who does not know what a dividend is needs the film to explain it soon after",
+      "the dryness depends on a level, unhurried read"
+    ],
+    "spokenRhythm": "Three sentences of similar weight, the last one ending on a short afterthought that carries the joke.",
+    "narrativeFunction": "Opens a film about a dock company's finances by planting the question of how long a company can pay people with their own money.",
+    "whyItWorks": "The narrator never says fraud, folly or bubble. The minutes do the work, and the closing afterthought lets the audience notice what the shareholders did not. The dividend also gives the film an obvious detail to return to at its end.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-p-chalk-board-shipping-news",
+    "version": 1,
+    "text": "For about thirty years, the most reliable shipping news in the port was written in chalk on a board inside the door of a coffee house. Merchants paid a penny for a dish of coffee and stood in front of that board for an hour. None of it survives. The owner wiped the board clean every night.",
+    "category": "hook",
+    "quality": "excellent",
+    "traits": [
+      "concrete_detail",
+      "source_as_detective_work",
+      "curiosity",
+      "rhythm_variation",
+      "money_context",
+      "memorable_line",
+      "one_idea_per_sentence"
+    ],
+    "strengths": [
+      "the board's value is shown by what people paid and how long they stayed",
+      "a gap in the record becomes the hook",
+      "the reason for the gap is a plain domestic fact"
+    ],
+    "weaknesses": [
+      "the two short closing sentences sit at the limit of what the house allows before it becomes a run of fragments"
+    ],
+    "spokenRhythm": "Two long sentences that build the place, then two short ones that take it away.",
+    "narrativeFunction": "Opens a film about how merchants got their news by telling the audience the best source is lost, and why.",
+    "whyItWorks": "The penny and the hour tell the listener what the board was worth without a single adjective. Then the record vanishes for the most ordinary reason there is, and the film has its problem to solve, a story whose main document was wiped off every evening.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-p-men-on-the-pay-book",
+    "version": 1,
+    "text": "When the mine changed hands, the new owners sent a junior clerk to count what they had bought. The pay book listed a hundred and forty men. He could find about eighty of them. The rest had died or left years before, and every Saturday someone had been collecting their wages.",
+    "category": "hook",
+    "quality": "good",
+    "traits": [
+      "tension",
+      "curiosity",
+      "human_stakes",
+      "number_in_context",
+      "reveal_not_announce",
+      "plain_language",
+      "character_intro"
+    ],
+    "strengths": [
+      "the clerk enters doing his job, which introduces him without description",
+      "the second number answers the first",
+      "the final clause opens a mystery without calling it one"
+    ],
+    "weaknesses": [
+      "two numbers in consecutive sentences ask a little of the listener",
+      "the clerk needs a name soon if he is to carry the film"
+    ],
+    "spokenRhythm": "A medium sentence of setup, two short sentences with a number each, and a longer one that turns the numbers into a crime.",
+    "narrativeFunction": "Opens a film about a mining town with a discrepancy in a pay book and the young man whose job is to explain it.",
+    "whyItWorks": "It starts with an errand and ends with a fraud, and every step is a fact. The listener does the subtraction and arrives at the question on their own, which is the strongest kind of hook.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-p-two-seats-full-of-mail",
+    "version": 1,
+    "text": "The first passenger service across the strait had two seats. A ticket cost about what a man on the docks earned in a month. On most flights, both seats were filled with sacks of mail. The post office paid by weight, and it never asked for a refund when fog turned the aircraft back.",
+    "category": "hook",
+    "quality": "good",
+    "traits": [
+      "dry_humour",
+      "money_context",
+      "number_in_context",
+      "concrete_detail",
+      "rhythm_variation",
+      "curiosity"
+    ],
+    "strengths": [
+      "the fare is measured against a wage of the time",
+      "the hook is the gap between what the service was called and what it actually carried",
+      "the joke is given to the post office, so nothing has to be personified"
+    ],
+    "weaknesses": [
+      "the joke relies on the listener supplying the passengers who did want their money back",
+      "the two seats and the month's wage arrive in consecutive sentences and need a beat between them"
+    ],
+    "spokenRhythm": "A short opener, two medium sentences, and a longer close that saves the joke for its final clause.",
+    "narrativeFunction": "Opens a film about early air travel by showing that its first passengers were mostly letters.",
+    "whyItWorks": "In four plain sentences the listener learns how small, how dear and how unprofitable the service was, and the economics arrive as a dry aside rather than a lecture. The dock wage gives the fare its weight without any modern conversion, and the refund line is funny only because it is true.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-p-swineherd-and-the-charter",
+    "version": 1,
+    "text": "The town likes to say its salt spring was found by a swineherd, after his pigs came home crusted white. The oldest charter in the town chest is less charming. It says the spring belonged to the abbey, and that every family boiling salt there owed the monks one pan in ten.",
+    "category": "hook",
+    "quality": "excellent",
+    "traits": [
+      "legend_vs_record",
+      "dry_humour",
+      "source_as_detective_work",
+      "hedge_natural",
+      "concrete_detail",
+      "curiosity"
+    ],
+    "strengths": [
+      "gives the legend its due before setting the record beside it",
+      "the only comment is two dry words",
+      "the tithe is a share a listener can picture"
+    ],
+    "weaknesses": [
+      "the film has to stay with the charter, or the legend will seem to have been raised only to be knocked down"
+    ],
+    "spokenRhythm": "A long storytelling sentence, a short deflating one, and a long one full of particulars.",
+    "narrativeFunction": "Opens a film about a salt town by moving the audience from the town's legend to the document that says who profited.",
+    "whyItWorks": "The distance between the pigs and the charter is the hook, and the narrator crosses it without a single correction phrase. The legend is told with affection and the record with precision, so the audience feels the change of tone without being told about it.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

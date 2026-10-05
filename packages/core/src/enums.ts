@@ -413,11 +413,12 @@ export const SCRIPT_ORIGINS = [
   'REVISION', // the whole script rewritten from the editor's brief
   'RESTORE', // a copy of an earlier version, made current again (no model calls)
   'REFINEMENT', // the whole script's narration rewritten for the ear; story, structure and evidence unchanged
+  'NARRATION', // the Human Narration Pass on an earlier version: targeted edits, every block's evidence kept (Writing Engine 2)
 ] as const;
 export type ScriptOrigin = (typeof SCRIPT_ORIGINS)[number];
 
 /** Who proposed a change to a script version during its run. */
-export const SCRIPT_REVIEWERS = ['SCRIPT_EDITOR', 'FACT_CHECKER', 'PERFORMANCE'] as const;
+export const SCRIPT_REVIEWERS = ['SCRIPT_EDITOR', 'FACT_CHECKER', 'PERFORMANCE', 'NARRATION'] as const;
 export type ScriptReviewer = (typeof SCRIPT_REVIEWERS)[number];
 /** What a proposed change does: a block's text or evidence, a block removed or added, or performance timing. */
 export const SCRIPT_CHANGE_TYPES = ['EDIT', 'REMOVE', 'INSERT', 'PERFORMANCE'] as const;
@@ -579,6 +580,87 @@ export const SCRIPT_SCORES = [
   'ENDING_SCORE',
 ] as const;
 export type ScriptScore = (typeof SCRIPT_SCORES)[number];
+
+// ---------------------------------------------------------------------------
+// Documentary Writing Engine 2 (house-style corpus, diagnostics, narration pass)
+// ---------------------------------------------------------------------------
+
+/** What a corpus example does in a documentary (the house's vocabulary, lower case as written in the corpus files). */
+export const WRITING_CATEGORIES = ['hook', 'explanation', 'transition', 'character', 'economics', 'numbers', 'uncertainty', 'scene', 'dialogue_adjacent', 'payoff', 'ending', 'context', 'other'] as const;
+export type WritingCategory = (typeof WRITING_CATEGORIES)[number];
+
+/** How good an example is: excellent and good are models to follow, bad is a model to avoid, borderline teaches judgment. */
+export const WRITING_QUALITIES = ['excellent', 'good', 'borderline', 'bad'] as const;
+export type WritingQuality = (typeof WRITING_QUALITIES)[number];
+
+/** Where an example's words come from. Never a scraped commercial transcript. */
+export const WRITING_SOURCE_TYPES = ['house', 'public_domain', 'licensed', 'user_provided', 'generated_comparison'] as const;
+export type WritingSourceType = (typeof WRITING_SOURCE_TYPES)[number];
+
+/** A house-style example taken from an approved script: a candidate until a person confirms it. */
+export const WRITING_EXAMPLE_STATUSES = ['CANDIDATE', 'APPROVED', 'REJECTED', 'RETIRED'] as const;
+export type WritingExampleStatus = (typeof WRITING_EXAMPLE_STATUSES)[number];
+
+/**
+ * Patterns that make narration sound machine-written. Signals, not
+ * failures: each is a warning for an editor to judge.
+ */
+export const AI_PATTERNS = [
+  'stock_phrase', // a phrase from the stock lexicon ("little did they know")
+  'dramatic_transition', // a fake dramatic beat ("And then…", "That's when…", "Everything was about to change")
+  'hype_adverb', // "Incredibly,", "Remarkably,", "Shockingly," as a sentence opener
+  'imagine_opener', // "Imagine…", "Picture this", an unneeded "What if…"
+  'trailer_language', // "forever", "destiny", "the unthinkable", "a story of greed and betrayal"
+  'mystery_language', // "shrouded in mystery", "the hidden truth", "dark secrets"
+  'emotion_explained', // telling the listener what to feel ("a palpable sense of dread")
+  'truth_reveal', // "The truth is…", "In reality…", "Here's the thing"
+  'micro_hook', // a block or section closing on a tease ("But that was about to change.")
+  'contrast_formula', // "not X, but Y" / "It wasn't X. It was Y." — fine once, formulaic when repeated
+  'qa_pair', // "The result? Chaos." — a question answered at once by a fragment
+  'fragment_run', // three or more very short sentences in a row
+  'em_dash', // em-dashes in place of sentences
+  'metaphor_stack', // several figures of speech close together
+  'rhetorical_question', // questions the narrator answers or leaves hanging, too often
+  'repeated_ending', // blocks ending the same way again and again
+  'length_repetition', // runs of sentences of the same length
+  'visual_description', // narration describing what the picture already shows
+] as const;
+export type AiPattern = (typeof AI_PATTERNS)[number];
+
+/** The read-aloud rubric: telemetry for the editor, never a gate and never above the factual checks. */
+export const RUBRIC_DIMENSIONS = [
+  'HUMANITY',
+  'CLARITY',
+  'SPOKEN_RHYTHM',
+  'HISTORICAL_CONTEXT',
+  'NARRATIVE_RESTRAINT',
+  'INFORMATION_DENSITY',
+  'NARRATIVE_PROGRESSION',
+  'VISUAL_SEPARATION',
+  'AI_FINGERPRINT_RISK',
+  'PRONUNCIATION_FRIENDLINESS',
+] as const;
+export type RubricDimension = (typeof RUBRIC_DIMENSIONS)[number];
+
+/** How a sum of money is given meaning, in order of preference: a contemporary wage first, a modern estimate last (and always approximate). */
+export const MONEY_COMPARISON_TYPES = ['CONTEMPORARY_WAGE', 'INCOME', 'HOUSEHOLD_EXPENSE', 'ASSET', 'MODERN_ESTIMATE'] as const;
+export type MoneyComparisonType = (typeof MONEY_COMPARISON_TYPES)[number];
+
+/** What a name in the script names. */
+export const NAME_KINDS = ['PERSON', 'PLACE', 'ORGANISATION', 'TERM'] as const;
+export type NameKind = (typeof NAME_KINDS)[number];
+
+/** The layers of a script block: only NARRATION is ever spoken. */
+export const SEMANTIC_LAYERS = ['NARRATION', 'VISUAL_DIRECTION', 'EDITORIAL_NOTE', 'DELIVERY_DIRECTION', 'EVIDENCE'] as const;
+export type SemanticLayer = (typeof SEMANTIC_LAYERS)[number];
+
+/** Delivery marks as an editor reads them, derived from a block's delivery (provider-neutral; used sparingly). */
+export const DELIVERY_MARKS = ['curious', 'quiet', 'measured', 'urgent', 'reflective'] as const;
+export type DeliveryMark = (typeof DELIVERY_MARKS)[number];
+
+/** What became of a block from one version to the next, in a change report. */
+export const BLOCK_CHANGE_STATUSES = ['UNCHANGED', 'REWRITTEN', 'REMOVED', 'ADDED'] as const;
+export type BlockChangeStatus = (typeof BLOCK_CHANGE_STATUSES)[number];
 
 // ---------------------------------------------------------------------------
 // Providers & localization

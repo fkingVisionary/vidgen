@@ -1,0 +1,147 @@
+[
+  {
+    "id": "uncertainty-n-spice-wharf-secrets",
+    "version": 1,
+    "text": "The truth is, the fire that destroyed the spice wharf remains one of the port's darkest secrets. Some blamed a careless watchman, while others pointed the finger at the merchants who stood to collect the insurance. So what really happened that night? Was it a tragic accident, or something far more sinister?",
+    "category": "uncertainty",
+    "quality": "bad",
+    "traits": [
+      "truth_reveal",
+      "mystery_language",
+      "rhetorical_question",
+      "micro_hook"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "the truth is promises a reveal and delivers a mystery",
+      "darkest secrets and far more sinister are mystery words with nothing behind them",
+      "two questions in a row that add no information",
+      "ends on a tease instead of on what the evidence shows"
+    ],
+    "spokenRhythm": "An ominous opener, one useful sentence of competing blame, then two questions that pitch the voice upward like a trailer.",
+    "narrativeFunction": "Meant to set up the dispute over how the fire started, but treats the dispute as atmosphere.",
+    "whyItFails": "The one real piece of uncertainty, two competing explanations, sits in the middle and is the only sentence doing any work. The truth is announces a revelation and then offers none, darkest secrets and far more sinister decorate the doubt, and the closing questions tease an answer the film may not have.",
+    "rewrite": "Nobody has established how the fire that destroyed the spice wharf began. Some blamed a careless watchman. Others pointed to the merchants who stood to collect the insurance.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-n-disclaimer-tapestry",
+    "version": 1,
+    "text": "It is important to note that historical sources from this period are often unreliable — frequently incomplete, sometimes contradictory — and must be treated with caution. While some accounts claim the contractors paid their navvies well, other sources suggest otherwise. As we delve deeper into the records, a far more complex tapestry begins to emerge.",
+    "category": "uncertainty",
+    "quality": "bad",
+    "traits": [
+      "stock_phrase",
+      "em_dash",
+      "micro_hook"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "uncertainty delivered as a disclaimer",
+      "important to note, delve and tapestry in three sentences",
+      "dashes break the line for the ear",
+      "closes by promising complexity it never shows"
+    ],
+    "spokenRhythm": "Long, lecture-like sentences broken by dashes, so the narrator has to change pitch twice in the first breath.",
+    "narrativeFunction": "Tries to introduce conflicting evidence about the navvies' pay, but spends its words on hedging.",
+    "whyItFails": "It sounds like a caveat on an essay, not a curious person looking at the records. Important to note, delve and tapestry are stock phrases, the dashes stand in for proper sentences, and the last line teases a complex picture instead of giving the one contradiction it has.",
+    "rewrite": "The records from this period are patchy, and sometimes they contradict each other. Some say the contractors paid their navvies well. Others suggest they didn't.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-n-trembling-clerk",
+    "version": 1,
+    "text": "Imagine the guild clerk's trembling hands as he unfolds the faded will, his eyes scanning every line. A palpable sense of dread fills the tiny office. Did the workshop truly belong to the widow? Was the will a forgery? We may never know for certain.",
+    "category": "uncertainty",
+    "quality": "bad",
+    "traits": [
+      "imagine_opener",
+      "visual_description",
+      "emotion_explained",
+      "rhetorical_question"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "invents gestures no record could hold",
+      "tells the listener what to feel",
+      "two questions in a row",
+      "the real doubt arrives only at the end"
+    ],
+    "spokenRhythm": "A slow, breathy opening, two questions back to back, then a flat closing hedge.",
+    "narrativeFunction": "Intended to dramatise a disputed inheritance, but it describes a scene instead of the dispute.",
+    "whyItFails": "Imagine asks the audience to do the writer's work, and trembling hands and scanning eyes are pictures the camera would carry, invented here as if they were known. The dread is announced rather than earned, and the stacked questions turn a genuine doubt into suspense theatre.",
+    "rewrite": "The guild clerk had the will in front of him. Whether it was a forgery, and whether the workshop really belonged to the widow, we can't say for certain.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-n-modern-millions",
+    "version": 1,
+    "text": "Shockingly, the company's books show it lost a fortune that winter, a sum worth millions in today's money. But what happened next would change the fur trade forever. To this day, historians still can't agree on who was to blame.",
+    "category": "uncertainty",
+    "quality": "bad",
+    "traits": [
+      "hype_adverb",
+      "dramatic_transition",
+      "trailer_language"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "invented modern conversion presented as fact",
+      "hype adverb opener",
+      "a tease in the middle of a factual passage",
+      "the real uncertainty is tacked on"
+    ],
+    "spokenRhythm": "Starts on an exclamation, swells into a teaser, then drops into a flat afterthought.",
+    "narrativeFunction": "Meant to convey the size of a loss and the dispute over blame, but buries the dispute under hype.",
+    "whyItFails": "Shockingly tells the listener to be amazed before giving them a reason. Millions in today's money is an invented conversion with no source, and what happened next and forever are trailer devices. The one honest sentence, about historians disagreeing, sounds like an afterthought.",
+    "rewrite": "The company's books show it lost a fortune that winter, though there is no reliable way to say what that sum would mean today. Historians still disagree about who was to blame.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-n-answer-nobody-knows",
+    "version": 1,
+    "text": "Was the sickness really brought by the ship from the south? The answer? Nobody knows. Rumours. Accusations. Fear. It wasn't just an epidemic. It was a mystery that would haunt the port for generations.",
+    "category": "uncertainty",
+    "quality": "bad",
+    "traits": [
+      "rhetorical_question",
+      "qa_pair",
+      "fragment_run",
+      "contrast_formula",
+      "trailer_language",
+      "mystery_language"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "question answered at once by a fragment",
+      "a run of one-word sentences",
+      "the not-just-X-but-Y reframe",
+      "haunt for generations is trailer language"
+    ],
+    "spokenRhythm": "Choppy and percussive, every sentence a beat, with no line long enough to carry an idea.",
+    "narrativeFunction": "Tries to raise the question of where the epidemic came from, but turns it into a slogan.",
+    "whyItFails": "The question is posed only so the narrator can answer it with a fragment, and the list of single words is mood without information. The contrast formula reframes the epidemic as a mystery, which adds drama but no fact, and the closing line is written for a trailer.",
+    "rewrite": "Whether the ship from the south really brought the sickness, nobody knows. There were rumours and accusations at the time, and the port was still asking the question generations later.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

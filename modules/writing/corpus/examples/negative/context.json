@@ -1,0 +1,141 @@
+[
+  {
+    "id": "context-n-in-a-world-where",
+    "version": 1,
+    "text": "In a world where news travelled no faster than a horse, information was power. This was an age of fierce rivalries, bold ambitions and fortunes made and lost overnight — a time when a single letter could change everything — and the merchants who knew first would rise above the rest.",
+    "category": "context",
+    "quality": "bad",
+    "traits": [
+      "stock_phrase",
+      "trailer_language",
+      "em_dash"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "in a world where is a trailer opener",
+      "information was power is a slogan",
+      "fierce rivalries, bold ambitions and fortunes made overnight could describe any century",
+      "two dashes in one sentence"
+    ],
+    "spokenRhythm": "A movie-trailer opening, then a long sentence broken by dashes that climbs to a soaring finish.",
+    "narrativeFunction": "Meant to give the context of slow news, but turns one useful fact into an advertisement.",
+    "whyItFails": "There is one fact here, that news moved at the speed of a horse, and everything around it is borrowed grandeur. Change everything and rise above the rest promise a story without saying what it is, and the dashes make the voice perform page punctuation.",
+    "rewrite": "In those years, news travelled no faster than a horse, and the merchants who heard it first had an advantage over the rest.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-n-origins-shrouded",
+    "version": 1,
+    "text": "The origins of the ropemakers' guild are shrouded in mystery, and the names of its founders are lost to history. Some say it was started by a group of sailors. Others believe its roots go back even further. But one thing is certain. By the time it appears in the records, it controlled every rope walk in the harbour.",
+    "category": "context",
+    "quality": "bad",
+    "traits": [
+      "mystery_language",
+      "stock_phrase",
+      "truth_reveal"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "shrouded in mystery and lost to history in one sentence",
+      "some say and others believe without saying who",
+      "one thing is certain as a drum roll"
+    ],
+    "spokenRhythm": "A portentous opener, two vague lines of hearsay, a stock pivot, then the only concrete sentence.",
+    "narrativeFunction": "Meant to give the guild's background, but makes an ordinary gap in the records sound like a conspiracy.",
+    "whyItFails": "Not knowing who founded a guild is a normal gap in the records, and calling it shrouded in mystery turns it into a cheap thrill. The some-say lines name no source, and one thing is certain is a stock pivot. The fact that matters, the guild's hold on every rope walk, sits at the end like a consolation prize.",
+    "rewrite": "Nobody knows who founded the ropemakers' guild. One story says it was a group of sailors, and another makes it older still. By the time it appears in the records, it controlled every rope walk in the harbour.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-n-greatest-exodus",
+    "version": 1,
+    "text": "Letters from the colony reached the valley that spring. By summer they were being read in every inn. Whole families sold their furniture to pay the passage. Apprentices walked out on their masters for good. Farmers left the harvest standing in the fields. It was the beginning of the greatest exodus the country had ever seen.",
+    "category": "context",
+    "quality": "bad",
+    "traits": [
+      "length_repetition",
+      "trailer_language",
+      "dramatic_transition"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "five sentences of eight or nine words in a row",
+      "every sentence is built the same way, subject then verb then detail",
+      "it was the beginning of is the stock way generated scripts close a block",
+      "the greatest exodus the country had ever seen is an unsupported superlative"
+    ],
+    "spokenRhythm": "A steady, monotonous march of same-length sentences that ends on a longer trailer line.",
+    "narrativeFunction": "Meant to give the scale of the emigration, but sounds like a list chanted aloud.",
+    "whyItFails": "Every sentence is the same length and the same shape, so the listener hears the beat instead of the facts. The details are good, but nothing is weighted above anything else. The last line borrows the shape of it was only the beginning and claims a scale the passage never shows.",
+    "rewrite": "Letters from the colony reached the valley that spring, and by summer they were being read in every inn. Whole families sold their furniture to pay the passage. Apprentices walked out on their masters, and farmers left the harvest standing in the fields.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-n-what-was-life-really-like",
+    "version": 1,
+    "text": "To understand the strike, we first need to understand the world these workers lived in. So what was life really like inside the mills? In reality, it was brutal. Long hours. Low wages. Dangerous machines. No protection under the law.",
+    "category": "context",
+    "quality": "bad",
+    "traits": [
+      "rhetorical_question",
+      "truth_reveal",
+      "fragment_run"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "a lecture signpost before any content",
+      "a question the narrator answers at once",
+      "in reality corrects nothing",
+      "four fragments in a row"
+    ],
+    "spokenRhythm": "A slow, teacherly windup, a question, a verdict, then a list delivered as fragments.",
+    "narrativeFunction": "Meant to give the conditions behind a strike, but frames them as a classroom exercise.",
+    "whyItFails": "We first need to understand is the narrator talking about the film instead of telling it. The question and in reality add suspense to facts that need none, and the fragment run turns conditions people lived with into bullet points read aloud. Brutal is a judgement the listener should be left to make.",
+    "rewrite": "The mill workers who went on strike had put in long hours at dangerous machines, for low wages. The law gave them no protection.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-n-picture-the-canal-basin",
+    "version": 1,
+    "text": "Picture the canal basin in its heyday. Boats jostle at the wharf, horses stamp along the towpath, and the lock-keeper's lamp glows in his window as the evening light fades. For the town, the canal was everything. But that was about to change.",
+    "category": "context",
+    "quality": "bad",
+    "traits": [
+      "imagine_opener",
+      "visual_description",
+      "micro_hook"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "picture opens the passage",
+      "jostling boats, stamping horses and a glowing lamp are what the shot shows",
+      "the canal was everything is vague",
+      "ends on the commonest tease"
+    ],
+    "spokenRhythm": "An invitation, a long descriptive sentence of sights and sounds, a sweeping claim, then a dropping tease.",
+    "narrativeFunction": "Meant to establish how much the town relied on its canal, but spends itself on description and a tease.",
+    "whyItFails": "Picture asks the listener to imagine what the film is about to show them, and the boats, horses and lamp are the picture's job. Context needs a fact the camera cannot give, and this offers only a vague everything and a promise of change.",
+    "rewrite": "In its heyday the canal basin was crowded with boats, and the whole town depended on the canal.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

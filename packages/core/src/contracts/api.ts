@@ -183,7 +183,10 @@ export const ScriptJobInput = z.object({
       sections: z.array(z.number().int().min(1)).max(60).default([]),
       /** A narrative refinement of the whole script: the telling rewritten, the story and evidence unchanged. */
       refine: z.boolean().default(false),
+      /** The Human Narration Pass alone on the whole script (Writing Engine 2): targeted edits, every block's evidence kept. */
+      narration: z.boolean().default(false),
     })
+    .refine((r) => !(r.narration && (r.refine || r.sections.length)), { message: 'A narration pass works on the whole script and is not a refinement' })
     .optional(),
 });
 export type ScriptJobInput = z.infer<typeof ScriptJobInput>;
@@ -220,6 +223,21 @@ export const RefineScriptInput = z.object({
   allowPerformanceOverMax: z.boolean().optional(),
 });
 export type RefineScriptInput = z.input<typeof RefineScriptInput>;
+
+/**
+ * The Human Narration Pass on a whole script version (Writing Engine 2): the
+ * house-style corpus and the diagnostics guide targeted edits — artificial
+ * patterns out, rhythm, missing context from the evidence, picture
+ * description moved to the visual layer — then the script editor, the fact
+ * checker and the performance pass, as for any version. The base is kept.
+ * `instructions` (optional) steer the style for this film, never the evidence.
+ */
+export const NarrateScriptInput = z.object({
+  baseVersion: z.number().int().min(1),
+  instructions: z.string().trim().max(5000).optional(),
+  allowPerformanceOverMax: z.boolean().optional(),
+});
+export type NarrateScriptInput = z.input<typeof NarrateScriptInput>;
 
 /** The editor's change to one narration block (the version under review only). */
 export const UpdateScriptBlockInput = z

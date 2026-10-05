@@ -1,5 +1,7 @@
 import { SCRIPT_SCORES, SCRIPT_TIMING, fmtClock, fmtVariance, type CoherenceIssue, type QualityCheck, type QualityJudgment, type QualityMeasurement, type QualityReport, type ScriptContent, type ScriptTiming } from '@docengine/core';
+import { rhythmProfile, summarise as fingerprint } from '@docengine/writing';
 import { allBlocks, type ScriptDraft } from './draft.ts';
+import { narrationBlocks } from './editorial.ts';
 import { SCRIPT_BLOCKING, type ScriptFinding, type ScriptFindingKind } from './rules.ts';
 
 /**
@@ -34,6 +36,9 @@ const GROUPS: { id: string; label: string; kinds: ScriptFindingKind[] }[] = [
     label: 'Written for the ear',
     kinds: ['LONG_SENTENCES', 'LONG_BLOCK', 'LONG_UNBROKEN_NARRATION', 'REPETITIVE_OPENINGS', 'REPEATED_PHRASES', 'AI_PHRASES', 'RHETORICAL_QUESTIONS', 'FORMULAIC_TRANSITIONS', 'UNSPOKEN_SYMBOLS', 'WRITTEN_SYNTAX', 'LIST_SENTENCE', 'NUMBER_DENSE', 'MONOTONOUS_RHYTHM', 'NOUN_HEAVY'],
   },
+  { id: 'human_voice', label: 'Sounds written by a person (AI-pattern signals)', kinds: ['AI_PATTERN', 'VISUAL_IN_NARRATION'] },
+  { id: 'money_context', label: 'Sums of money carry the context the evidence gives', kinds: ['MONEY_WITHOUT_CONTEXT'] },
+  { id: 'layers', label: 'Only narration is spoken (no directions in the text)', kinds: ['DIRECTION_IN_NARRATION'] },
   { id: 'performance', label: 'Pauses and emphasis with restraint', kinds: ['PAUSE_OVERUSE', 'EMPHASIS_OVERUSE'] },
   { id: 'runtime_balance', label: 'Sections paced to the story', kinds: ['RUNTIME_BALANCE', 'SECTION_OVER_BUDGET', 'ENDING_DRAG'] },
   { id: 'runtime_plan', label: 'If it runs long: where to cut first', kinds: ['RUNTIME_PLAN'] },
@@ -50,7 +55,7 @@ const listed = (refs: readonly string[]) => (refs.length ? `${refs.slice(0, 12).
 export function computeScriptReport(args: {
   findings: readonly ScriptFinding[];
   timing: ScriptTiming;
-  content: Pick<ScriptContent, 'editor' | 'factCheck'> & Partial<Pick<ScriptContent, 'reviewChanges'>>;
+  content: Pick<ScriptContent, 'editor' | 'factCheck'> & Partial<Pick<ScriptContent, 'reviewChanges' | 'narration' | 'provenance'>>;
   notes: readonly string[];
   reviewers?: { editor: string | null; factCheck: string | null };
   /** The script, for the measurements. */
@@ -124,6 +129,22 @@ function measure(args: Parameters<typeof computeScriptReport>[0]): QualityMeasur
   out.push(m('passengers', 'Passenger candidates (for the editor to decide)', `${passengers.length}`, listed(passengers)));
   const meta = refsOf(findings, ['META_NARRATION']);
   out.push(m('meta', 'Lines about the film itself (one allowed in the opening)', `${meta.length}`, listed(meta)));
+  // Writing Engine 2: measured from the text as it stands (an editor's edit updates them), beside what the narration pass found before it.
+  const narration = args.content.narration;
+  if (draft) {
+    const blocks = narrationBlocks(draft);
+    const fp = fingerprint(blocks);
+    const before = narration?.diagnostics.before?.fingerprint;
+    out.push(m('ai_fingerprint', 'AI-pattern score (0 = none found; a heuristic indicator, not a detector)', `${fp.score}/100`, `${before ? `${before.score}/100 before the narration pass · ` : ''}${fp.signals} signal(s)${Object.keys(fp.perPattern).length ? `: ${Object.entries(fp.perPattern).map(([k, v]) => `${k} ${v}`).join(', ')}` : ''}`));
+    const r = rhythmProfile(blocks);
+    out.push(m('rhythm', 'Spoken rhythm', `${r.meanWords} words a sentence, spread ${r.variation}`, `${Math.round(r.fragmentShare * 100)}% fragments · longest run of fragments ${r.longestFragmentRun} · ${r.sameLengthRuns} run(s) of same-length sentences · ${r.clausesPerSentence} clauses a sentence · ${r.tongueTwisters.length} tongue-twister(s)`));
+  }
+  if (narration) {
+    out.push(m('rubric', 'Read-aloud rubric when the version was made (telemetry; never a gate)', narration.diagnostics.after.rubric.map((x) => `${x.dimension.toLowerCase().replace(/_/g, ' ')} ${x.score}`).join(' · '), null));
+    out.push(m('money_context', 'Money context', `${narration.money.used.length} added`, `${narration.money.contexts.length} comparison(s) the evidence supports · ${narration.money.gaps.length} sum(s) the evidence gives no context for`));
+    const candidates = narration.names.filter((n) => n.candidate);
+    out.push(m('names', 'Names', `${narration.names.length}`, candidates.length ? `pronunciation to decide: ${candidates.map((n) => n.displayName).join(', ')}` : 'every name has a confident or confirmed pronunciation note'));
+  }
   const changes = args.content.reviewChanges ?? [];
   if (changes.length) {
     const count = (who: string, s: string) => changes.filter((c) => c.reviewer === who && c.status === s).length;
@@ -133,7 +154,7 @@ function measure(args: Parameters<typeof computeScriptReport>[0]): QualityMeasur
         'review_changes',
         'Reviewer changes',
         `${changes.filter((c) => c.status === 'ACCEPTED').length} kept, ${changes.filter((c) => c.status === 'REJECTED').length} rejected, ${changes.filter((c) => c.status === 'SKIPPED').length} skipped`,
-        [by('SCRIPT_EDITOR', 'script editor'), by('FACT_CHECKER', 'fact checker'), by('PERFORMANCE', 'performance timing')].filter(Boolean).join(' · '),
+        [by('NARRATION', 'narration pass'), by('SCRIPT_EDITOR', 'script editor'), by('FACT_CHECKER', 'fact checker'), by('PERFORMANCE', 'performance timing')].filter(Boolean).join(' · '),
       ),
     );
   }
@@ -149,8 +170,9 @@ function judgments(args: Parameters<typeof computeScriptReport>[0]): QualityJudg
     const scores = SCRIPT_SCORES.flatMap((k) => (content.editor!.scores[k] ? [`${k.replace('_SCORE', '').toLowerCase().replace('_', ' ')} ${content.editor!.scores[k]!.score}`] : [])).join(', ');
     out.push(j('script_editor', "Script editor's verdict and scores", 'script editor (model)', scores || '—', content.editor.verdict));
     const a = content.editor.assessment ?? [];
-    if (a.length) out.push(j('checklist', 'Refinement checklist', 'script editor (model)', `${a.filter((x) => x.answer === 'YES').length} yes, ${a.filter((x) => x.answer === 'PARTLY').length} partly, ${a.filter((x) => x.answer === 'NO').length} no`, `${a.filter((x) => x.comparedToPrevious === 'WORSE').length} judged worse than the version before`));
+    if (a.length) out.push(j('checklist', content.narration && content.provenance?.origin === 'NARRATION' ? 'Narration checklist (first: would a listener assume a competent human writer?)' : 'Refinement checklist', 'script editor (model)', `${a.filter((x) => x.answer === 'YES').length} yes, ${a.filter((x) => x.answer === 'PARTLY').length} partly, ${a.filter((x) => x.answer === 'NO').length} no`, `${a.filter((x) => x.comparedToPrevious === 'WORSE').length} judged worse than the version before`));
   } else out.push(j('script_editor', "Script editor's verdict and scores", 'script editor (model)', 'not reviewed', args.reviewers?.editor ?? 'The script editor did not review this version'));
+  if (content.narration) out.push(j('narration_pass', 'Narration pass verdict', 'narration editor (model)', content.narration.unavailable ? 'not run' : `${content.narration.counts.kept} edit(s) kept of ${content.narration.counts.proposed}`, content.narration.unavailable ?? content.narration.verdict));
   if (content.factCheck) out.push(j('fact_checker', "Fact checker's verdict", 'fact checker (model)', `${content.factCheck.issues.length} issue(s)`, content.factCheck.verdict));
   else out.push(j('fact_checker', "Fact checker's verdict", 'fact checker (model)', 'not reviewed', args.reviewers?.factCheck ?? 'The fact checker did not review this version'));
   return out;

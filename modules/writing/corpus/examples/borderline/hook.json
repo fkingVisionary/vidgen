@@ -1,0 +1,98 @@
+[
+  {
+    "id": "hook-b-coast-nobody-has-seen",
+    "version": 1,
+    "text": "How do you draw a coast that nobody has seen? The chartmakers of the port did it from sailors' memories, bought for the price of a drink, and sold the results as if every line had been measured.",
+    "category": "hook",
+    "quality": "borderline",
+    "traits": [
+      "rhetorical_question",
+      "curiosity",
+      "dry_humour",
+      "concrete_detail"
+    ],
+    "strengths": [
+      "the question is the film's real question",
+      "the answer is concrete and quietly funny"
+    ],
+    "weaknesses": [
+      "the narrator answers his own question in the next breath",
+      "the second-person you turns narration into a lesson"
+    ],
+    "spokenRhythm": "A short rising question, then a long answer that falls through three clauses to its dry close.",
+    "narrativeFunction": "Opens a film about early chartmaking with the problem the chartmakers faced and the cheap way they solved it.",
+    "whyItWorks": "Once, at the top of a film, a question that is genuinely the subject can work, and this one is answered with a fact sharp enough to reward the listener for asking it.",
+    "whyItFails": "A question answered at once is a pattern listeners recognise from machine-written videos, and the you makes it sound like a classroom. If another sequence opens the same way, the device becomes a habit. The answer is strong enough to stand alone as a statement, and it sounds more confident that way.",
+    "rewrite": "The chartmakers of the port drew coasts that none of them had seen. They worked from sailors' memories, bought for the price of a drink, and sold the results as if every line had been measured.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-b-not-coal-but-milk",
+    "version": 1,
+    "text": "The first thing the new railway carried was not passengers, and it was not coal. It was milk. Farmers along the line could get it to the city before it turned, and for two years the milk paid the interest on the company's loans.",
+    "category": "hook",
+    "quality": "borderline",
+    "traits": [
+      "contrast_formula",
+      "curiosity",
+      "cause_and_effect",
+      "money_context"
+    ],
+    "strengths": [
+      "a genuinely surprising fact",
+      "the explanation follows at once in plain cause and effect",
+      "the loan interest gives the milk real weight"
+    ],
+    "weaknesses": [
+      "the not this, not that, it was shape is the commonest formula in generated history narration"
+    ],
+    "spokenRhythm": "A long denial, a three-word answer, then a long sentence that explains it.",
+    "narrativeFunction": "Opens a film about an early railway by overturning what the audience expects it to have been for.",
+    "whyItWorks": "Used once, the denial names the audience's expectation and the short answer overturns it. The surprise is real, so the device is earning its place rather than manufacturing one.",
+    "whyItFails": "The shape announces that a surprise is coming, so the listener hears the machinery before the fact. If any other sequence in the film uses it, the second makes the first sound formulaic too. Said straight, milk is surprising enough.",
+    "rewrite": "The first thing the new railway carried was milk. Farmers along the line could get it to the city before it turned, and for two years the milk paid the interest on the company's loans.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-b-ice-for-the-hospital",
+    "version": 1,
+    "text": "The ice company sold most of each winter's cutting to hotels, butchers and fishmongers. The summer the fever reached the port, one customer bought more than all of them put together. The hospital.",
+    "category": "hook",
+    "quality": "borderline",
+    "traits": [
+      "fragment_run",
+      "curiosity",
+      "reveal_not_announce",
+      "human_stakes",
+      "trust_the_viewer",
+      "concrete_detail"
+    ],
+    "strengths": [
+      "the ordinary customers in the first sentence make the exception stand out",
+      "the listener works out for themselves why a hospital needed ice in a fever summer",
+      "the reveal joins the ice trade to the epidemic without a word of explanation"
+    ],
+    "weaknesses": [
+      "the middle sentence withholds its subject only so the fragment can supply it",
+      "a one-word answer after a held-back setup sits close to the question-and-answer shape"
+    ],
+    "spokenRhythm": "An even sentence of routine, a longer sentence that holds back its subject, and a two-word fragment that drops on the reveal.",
+    "narrativeFunction": "Opens a film about the ice trade by showing the moment its cargo stopped being a luxury and became a medical supply.",
+    "whyItWorks": "A single fragment at the moment of reveal can land like a turned page. Here the answer is grave enough to deserve the pause, and the narrator never explains the connection between ice and fever, so the listener makes it.",
+    "whyItFails": "One fragment is how a fragment run begins, and the setup that hides its own subject is a tease. If the next line is another fragment, or if the film reaches for this beat at the head of every sequence, it becomes the clipped rhythm of generated narration. The hospital is just as surprising as the subject of a full sentence.",
+    "rewrite": "The ice company sold most of each winter's cutting to hotels, butchers and fishmongers. The summer the fever reached the port, the hospital bought more than all of them put together.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

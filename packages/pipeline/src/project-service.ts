@@ -5,6 +5,7 @@ import {
   GenerateScriptInput,
   ReorderSelectionInput,
   ReviseArchitectureInput,
+  NarrateScriptInput,
   RefineScriptInput,
   ReviseScriptInput,
   STATUS_DEFINITIONS,
@@ -417,6 +418,33 @@ export class ProjectService {
         { actor, baseVersion: base.version, kind: 'REFINEMENT', instructions },
       );
       return { ...(instructions ? { notes: instructions } : {}), revise: { baseVersion: base.version, sections: [], refine: true }, ...(input.allowPerformanceOverMax ? { allowPerformanceOverMax: true } : {}) };
+    });
+  }
+
+  /**
+   * The Human Narration Pass on a whole script version (Writing Engine 2): a
+   * new version made from the base by targeted edits — the house-style corpus
+   * and the diagnostics decide which blocks need work, each edit is judged
+   * against the evidence rules and the pass's own invariants, then the script
+   * editor, the fact checker and the performance pass run as for any version.
+   * The base is kept unchanged; every version is kept.
+   */
+  async narrateScript(projectId: string, raw: NarrateScriptInput, actor: Actor): Promise<Job> {
+    const input = NarrateScriptInput.parse(raw);
+    const instructions = input.instructions?.trim() || null;
+    return this.scriptJob(projectId, actor, `Narration pass on script v${input.baseVersion}`, async (tx) => {
+      const approved = await this.requireApprovedArchitecture(tx, projectId);
+      const base = await tx.script.findUnique({ where: { projectId_version: { projectId, version: input.baseVersion } }, select: { version: true, storyId: true } });
+      if (!base) throw new NotFoundError('Script', `v${input.baseVersion}`);
+      if (base.storyId !== approved.id) throw new ConflictError(`Script v${base.version} tells an architecture that is no longer the approved one (v${approved.version}): write a new draft instead`);
+      await this.event(
+        tx,
+        projectId,
+        EVENT.SCRIPT_REVISION_REQUESTED,
+        `The Human Narration Pass on v${base.version} (Writing Engine 2: targeted edits, evidence unchanged) — ${instructions ? `director's instructions: ${instructions.length > 160 ? `${instructions.slice(0, 159)}…` : instructions}` : 'the house style'}`,
+        { actor, baseVersion: base.version, kind: 'NARRATION', instructions },
+      );
+      return { ...(instructions ? { notes: instructions } : {}), revise: { baseVersion: base.version, sections: [], refine: false, narration: true }, ...(input.allowPerformanceOverMax ? { allowPerformanceOverMax: true } : {}) };
     });
   }
 

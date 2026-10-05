@@ -85,8 +85,10 @@ export const EnvSchema = z
     // Script stage
     /** Hard ceiling on one script job's estimated provider spend (USD): a draft, a revision or a section rewrite. */
     SCRIPT_MAX_COST_USD: opt(z.coerce.number().min(0.5).max(200).default(15)),
-    /** Optional per-step model overrides, e.g. "perform=<model id>" (steps: plan, write, edit, factCheck, perform). Unset steps use AI_MODEL. */
+    /** Optional per-step model overrides, e.g. "perform=<model id>" (steps: plan, write, narrate, edit, factCheck, perform). Unset steps use AI_MODEL. */
     SCRIPT_MODELS: opt(z.string().max(500).optional()),
+    /** Writing Engine 2: the modes the Human Narration Pass runs in — "all" (the default), "none" (only a narration pass on its own), or a list such as "DRAFT,REFINEMENT". */
+    SCRIPT_NARRATION_MODES: opt(z.string().max(200).optional()),
 
     /** Directory of the built dashboard. Defaults to apps/web/dist. */
     WEB_DIST_DIR: opt(z.string().optional()),

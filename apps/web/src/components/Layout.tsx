@@ -24,7 +24,10 @@ export function Layout({ children }: { children: ReactNode }) {
           <Link to="/" className="font-semibold tracking-tight">
             Documentary Engine <span className="ml-1 rounded bg-stone-100 px-1.5 py-0.5 text-xs font-normal text-stone-500">V1</span>
           </Link>
-          <div className="flex items-center gap-2 text-xs text-stone-500">
+          <div className="flex items-center gap-3 text-xs text-stone-500">
+            <Link to="/writing" className="whitespace-nowrap text-sm text-stone-700 hover:underline">
+              House style
+            </Link>
             <span className={`inline-block h-2 w-2 rounded-full ${health.isError ? 'bg-red-500' : h?.status === 'ok' ? 'bg-emerald-500' : 'bg-amber-400'}`} />
             {health.isError ? 'API unreachable' : h ? `API ${h.status} · DB ${h.database} · worker ${h.worker} · v${h.version}` : 'connecting…'}
           </div>

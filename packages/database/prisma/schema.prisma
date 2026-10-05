@@ -398,6 +398,14 @@ enum PerformanceStrategy {
   DIRECTED
 }
 
+/// A house-style example taken from an approved script: in retrieval only once a person approves it.
+enum WritingExampleStatus {
+  CANDIDATE
+  APPROVED
+  REJECTED
+  RETIRED
+}
+
 enum PronunciationStatus {
   PENDING
   APPROVED
@@ -458,6 +466,7 @@ model Project {
   scripts              Script[]
   voiceRuns            VoiceRun[]
   voicePronunciations  VoicePronunciation[]
+  writingExamples      WritingExample[]
   storyboards          Storyboard[]
   infographics         Infographic[]
   timelines            Timeline[]
@@ -1141,16 +1150,17 @@ model Script {
   createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  story       StoryArchitecture? @relation(fields: [storyId], references: [id], onDelete: SetNull)
-  revisionOf  Script?            @relation("ScriptRevisions", fields: [revisionOfId], references: [id], onDelete: SetNull)
-  revisions   Script[]           @relation("ScriptRevisions")
-  job         Job?               @relation(fields: [jobId], references: [id], onDelete: SetNull)
-  scenes      Scene[]
-  blocks      ScriptBlock[]
-  voiceRuns   VoiceRun[]
-  storyboards Storyboard[]
-  approvals   Approval[]
+  project         Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  story           StoryArchitecture? @relation(fields: [storyId], references: [id], onDelete: SetNull)
+  revisionOf      Script?            @relation("ScriptRevisions", fields: [revisionOfId], references: [id], onDelete: SetNull)
+  revisions       Script[]           @relation("ScriptRevisions")
+  job             Job?               @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  scenes          Scene[]
+  blocks          ScriptBlock[]
+  voiceRuns       VoiceRun[]
+  storyboards     Storyboard[]
+  approvals       Approval[]
+  writingExamples WritingExample[]
 
   @@unique([projectId, version])
   @@index([revisionOfId])
@@ -1158,17 +1168,17 @@ model Script {
 }
 
 model Scene {
-  id                     String  @id @default(uuid(7)) @db.Uuid
-  scriptId               String  @map("script_id") @db.Uuid
+  id                     String              @id @default(uuid(7)) @db.Uuid
+  scriptId               String              @map("script_id") @db.Uuid
   /// Stable key shared by every language ("S01").
-  sceneKey               String  @map("scene_key")
-  sortOrder              Int     @map("sort_order")
+  sceneKey               String              @map("scene_key")
+  sortOrder              Int                 @map("sort_order")
   title                  String?
-  emotionalTone          String? @map("emotional_tone")
-  visualIntent           String? @map("visual_intent")
-  infographicOpportunity String? @map("infographic_opportunity")
-  soundDesignOpportunity String? @map("sound_design_opportunity")
-  targetDurationSec      Float?  @map("target_duration_sec")
+  emotionalTone          String?             @map("emotional_tone")
+  visualIntent           String?             @map("visual_intent")
+  infographicOpportunity String?             @map("infographic_opportunity")
+  soundDesignOpportunity String?             @map("sound_design_opportunity")
+  targetDurationSec      Float?              @map("target_duration_sec")
   /// The architecture sequence this section tells (Script Engine: one section per sequence).
   sequenceNumber         Int?                @map("sequence_number")
   /// The planner's intent for the section (ScriptSectionPlan).
@@ -1329,10 +1339,10 @@ model VoiceRun {
   createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project         Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  languageVersion LanguageVersion @relation(fields: [languageVersionId], references: [id], onDelete: Cascade)
-  script          Script          @relation(fields: [scriptId], references: [id], onDelete: Cascade)
-  profile         VoiceProfile    @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion   @relation(fields: [languageVersionId], references: [id], onDelete: Cascade)
+  script          Script            @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  profile         VoiceProfile      @relation(fields: [profileId], references: [id], onDelete: Restrict)
   chunks          VoiceChunk[]
   generations     VoiceGeneration[]
   assemblies      VoiceAssembly[]
@@ -1656,4 +1666,51 @@ model QaReport {
 
   @@index([projectId])
   @@map("qa_reports")
+}
+
+/// Writing Engine 2: house-style examples from the team's own approved scripts.
+/// Proposed as CANDIDATEs (never fed back automatically); a person approves,
+/// rejects or retires each. Approved ones join the corpus files in retrieval.
+/// category, quality and source are the corpus vocabulary (WritingCorpusExample).
+model WritingExample {
+  id                   String               @id @default(uuid(7)) @db.Uuid
+  /// Stable id across versions ("house-…"); with `version`, what a prompt was given.
+  exampleId            String               @unique @map("example_id")
+  version              Int                  @default(1)
+  projectId            String?              @map("project_id") @db.Uuid
+  scriptId             String?              @map("script_id") @db.Uuid
+  scriptVersion        Int?                 @map("script_version")
+  blockKey             String?              @map("block_key")
+  text                 String
+  /// sha256 of the normalized text: one candidate per wording.
+  textHash             String               @unique @map("text_hash")
+  category             String
+  quality              String
+  traits               String[]
+  strengths            String[]
+  weaknesses           String[]
+  spokenRhythm         String               @map("spoken_rhythm")
+  narrativeFunction    String               @map("narrative_function")
+  whyItWorks           String?              @map("why_it_works")
+  whyItFails           String?              @map("why_it_fails")
+  sourceType           String               @map("source_type")
+  sourceReference      String?              @map("source_reference")
+  copyrightSafe        Boolean              @default(true) @map("copyright_safe")
+  approvedForRetrieval Boolean              @default(false) @map("approved_for_retrieval")
+  status               WritingExampleStatus @default(CANDIDATE)
+  /// What the diagnostics measured when it was proposed (AI-pattern signals, rhythm).
+  diagnostics          Json                 @default("{}")
+  createdBy            String               @map("created_by")
+  reviewedBy           String?              @map("reviewed_by")
+  reviewedAt           DateTime?            @map("reviewed_at") @db.Timestamptz(3)
+  reviewNote           String?              @map("review_note")
+  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  script  Script?  @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([projectId])
+  @@map("writing_examples")
 }

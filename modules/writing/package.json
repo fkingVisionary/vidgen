@@ -1,0 +1,20 @@
+{
+  "name": "@docengine/writing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Documentary Writing Engine 2: the versioned house-style corpus (style bible, rubric, examples), targeted retrieval, AI-pattern and spoken-rhythm diagnostics, the read-aloud rubric, historical money context from the evidence, name layers, semantic layers and the change report between script versions. A library used by the script stage — not a stage of its own.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "corpus:docs": "tsx src/docs-cli.ts"
+  },
+  "dependencies": {
+    "@docengine/core": "workspace:*",
+    "@docengine/database": "workspace:*",
+    "@docengine/story": "workspace:*",
+    "zod": "catalog:"
+  }
+}

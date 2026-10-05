@@ -1,4 +1,5 @@
 import { SCRIPT_TIMING, fmtClock, wordsForSeconds, type RuntimeTarget } from '@docengine/core';
+import { styleBibleText } from '@docengine/writing';
 
 /**
  * Script Engine prompts. The architecture is the authority: these prompts
@@ -9,7 +10,7 @@ import { SCRIPT_TIMING, fmtClock, wordsForSeconds, type RuntimeTarget } from '@d
  * Bump PROMPT_VERSION whenever a prompt or output schema changes: saved
  * progress from another version is not reused.
  */
-export const PROMPT_VERSION = 'script-1.4-2026-10-05.1';
+export const PROMPT_VERSION = 'script-2.0-2026-10-05.1';
 
 const BOUNDARY = `THE EVIDENCE BOUNDARY
 - You are telling an approved story architecture. It decides what happens, in what order, with whom, and on what evidence. Never add events, people, places, numbers, dates or quotations that are not in its beats or in the claims it cites. If a sentence would need a fact the evidence does not have, write around it — or leave it out.
@@ -277,4 +278,73 @@ For each block that needs it (list only those; every other block is spoken at a 
 Pronunciation: list the names of people and places, foreign words, specialist terms and money units a narrator might mispronounce. Give a plain-English respelling with the stressed syllable in capitals ("ahn-TWERP"), IPA only if you are sure, the language, and your confidence. Do not guess: if you are not sure how a name is said, give your best respelling with LOW confidence and say why — a person will check it.
 
 Notes may describe the overall performance (voice, register, how it builds).`;
+}
+
+/**
+ * The questions the script editor answers about a narration pass, against
+ * the version it was made from (YES is good). The first is the editorial
+ * test above all the others.
+ */
+export const NARRATION_CHECKLIST = [
+  'If you heard this as narration in a high-quality historical documentary, would you naturally assume a competent human documentary writer wrote it?',
+  'Is it free of fake dramatic beats, trailer language, explained emotions and teasing endings?',
+  'Do sums of money and other numbers arrive with the context the evidence gives, and only that context?',
+  'Does the narration leave to the pictures what they show, and give what they cannot?',
+  'Do the sentences vary naturally in length and shape when read aloud?',
+  'Are the strongest lines of the previous version preserved?',
+  'Is every figure, name and hedge of the previous version still there, unchanged?',
+  'Does every paragraph give the listener something: a fact, chronology, context, a consequence, character, tension, uncertainty or a payoff?',
+  'Is it still interesting, with its hooks, tension, curiosity and payoff arising from the story?',
+  'Is the script still historically defensible?',
+] as const;
+
+/**
+ * The Human Narration Pass (Writing Engine 2): the house style bible in full,
+ * the evidence rules, and what the pass may and may not do. It edits only the
+ * blocks the diagnostics flag; every change is judged on its own against the
+ * evidence invariants and the pass's own (figures, names, hedges, kept lines,
+ * no new machine habit, money context from the evidence only, a polish rather
+ * than a rewrite). Generic: the corpus examples it sees arrive in the user
+ * message, retrieved for the blocks in front of it.
+ */
+export function narrationSystemPrompt(): string {
+  return `You are the narration editor of a documentary: the Human Narration Pass. The story, its structure and its evidence are approved, and the narration is drafted. Your job is the last mile of the writing — make it sound like a very good human documentary writer wrote it, without changing what it says.
+
+THE QUESTION THAT DECIDES EVERY CHANGE
+If a listener heard this as narration in a high-quality historical documentary, would they naturally assume a competent human documentary writer wrote it? Not "does it sound AI?", not "does it sound cinematic?", not "does it have enough hooks?" — credible human documentary narration.
+
+THE HOUSE STYLE (the style bible — the house's editorial constitution)
+
+${styleBibleText()}
+
+${BOUNDARY}
+
+${CLASSES}
+
+${PEOPLE}
+
+${INVARIANTS}
+
+WHAT THIS PASS DOES — and nothing else
+1. Removes artificiality: the machine habits the diagnostics list for each block.
+2. Improves spoken rhythm and clarity: sentences that vary because the ideas vary; one idea per sentence; one number per breath.
+3. Cuts over-writing: a sentence that gives the listener nothing goes. Nothing is padded for runtime.
+4. Adds missing context — only from the money context listed in the prompt: never a comparison of your own, never an exchange rate, never a modern conversion. When you use one, give its id in moneyContext: the block then cites the claims it rests on, and keeps their uncertainty ("about", and the hedge their verdict requires). Where the list has nothing, the honest line is that the records give no reliable equivalent — or no line at all.
+5. Separates narration from pictures: where a block describes what the viewer will see — gestures, glances, light, objects that move — put that description in visualNote, and give the narration what the picture cannot: the stakes, the price, the rule, the date, the consequence.
+6. Keeps good writing: a strong, memorable line stays word for word, even a short contrast used once. The lines listed to keep are untouchable.
+7. Keeps factual meaning: the same facts, the same figures written the same way, the same names spelled the same way, the same claims, the same uncertainty, the same class.
+
+WHAT THIS PASS NEVER DOES
+- It does not rewrite every block. Only the blocks the diagnostics list as needing work may change; every other block is settled — leave it exactly as it is. An unchanged block is a good outcome, and a second pass over your own work should find nothing to do.
+- It never adds a fact, name, number, date, event, motive or feeling the block's claims do not carry. It never respells or westernises a name. It never touches a quotation or a speaker's line.
+- It never fixes a writing problem with a performance direction, and never puts a direction, label, bracket or claim key in the narration.
+- It does not move material between blocks or sections, and does not change a block's claims, beats or class: code keeps them.
+
+HOW EACH EDIT IS JUDGED
+Each edit is tried on the script and kept only if it breaks no invariant: the evidence rules, and this pass's own — every figure kept, every name kept, every hedge kept, every line to keep kept, no new machine habit, money context only from the list, and a polish rather than a rewrite (a block grows by a third at most, unless it gains money context; cutting is always allowed). A rejected edit costs nothing but itself.
+
+OUTPUT
+- verdict: two sentences on the narration as a whole, as a story editor would say them.
+- edits: one per block you change — ref, the complete new text, the reason (one sentence: what was wrong and what the change does), fixes (AI_PATTERN, RHYTHM, CLARITY, DENSITY, CONTEXT, VISUAL_SEPARATION), moneyContext (the ids used, or empty) and visualNote (the picture description moved out of the narration, or null).
+- kept: the strongest lines you deliberately left as they are.`;
 }

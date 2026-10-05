@@ -16,9 +16,13 @@ import {
   type ScriptVersionView,
   type ScriptView,
   type VoiceRenderPlan,
+  type LayeredBlockView,
+  type ScriptChangeReport,
+  type ScriptEditorialView,
 } from '@docengine/core';
 import type { Database } from '@docengine/database';
-import { SCRIPT_INCLUDE, blockingDetails, compareDrafts, evidenceChanges, toDraft, voicePlan, type ScriptDraft, type ScriptRow } from '@docengine/script';
+import { SCRIPT_INCLUDE, blockingDetails, checkScript, compareDrafts, evidenceChanges, loadById, moneyUses, narrationBlocks, scopeFor, scriptNames, toDraft, uncertaintyOf, voicePlan, type LoadedScript, type ScriptDraft, type ScriptRow } from '@docengine/script';
+import { changeReport, deliveryMark, diagnose, directionLeaks } from '@docengine/writing';
 import { jobCost } from './research-views.ts';
 import { evidenceFor } from './story-views.ts';
 
@@ -161,6 +165,7 @@ function editorialActions(project: Project, shown: ScriptVersionView | null, app
     generate: { allowed: base === null, reason: base },
     revise: { allowed: reviseReason === null, reason: reviseReason },
     refine: { allowed: reviseReason === null, reason: reviseReason },
+    narrate: { allowed: reviseReason === null, reason: reviseReason },
     edit: { allowed: editReason === null, reason: editReason },
     approve: { allowed: approveReason === null, reason: approveReason },
     restore: { allowed: restoreReason === null, reason: restoreReason },
@@ -203,6 +208,70 @@ export async function loadScriptCompare(db: Database, projectId: string, a: numb
     changeLog: lb.content?.provenance.changeLog ?? null,
     assessment: lb.content?.editor?.assessment ?? [],
     evidence: evidenceChanges(la.draft, lb.draft),
+    changeReport: reportBetween(la, lb),
+  };
+}
+
+/** a → b block by block: exact for a narration pass made from a (its own lineage), matched by evidence and wording otherwise. */
+function reportBetween(a: LoadedScript, b: LoadedScript): ScriptChangeReport {
+  const own = b.content?.provenance.baseId === a.row.id ? (b.content?.narration ?? null) : null;
+  return changeReport({
+    base: { id: a.row.id, version: a.row.version, blocks: narrationBlocks(a.draft) },
+    revised: { id: b.row.id, version: b.row.version, blocks: narrationBlocks(b.draft) },
+    lineage: own?.lineage ?? null,
+    ledger: b.content?.provenance.baseId === a.row.id ? (b.content?.reviewChanges ?? []) : [],
+    narration: own,
+    uncertainty: uncertaintyOf,
+  });
+}
+
+/**
+ * A version through the writing engine: the record of the narration pass
+ * that made it, its diagnostics measured now (the text as it stands), the
+ * change report against the version it was made from, and its blocks in
+ * their semantic layers.
+ */
+export async function loadScriptEditorial(db: Database, projectId: string, version: number): Promise<ScriptEditorialView | null> {
+  const row = await db.script.findUnique({ where: { projectId_version: { projectId, version } }, include: SCRIPT_INCLUDE });
+  if (!row) return null;
+  const project = await db.project.findUniqueOrThrow({ where: { id: projectId } });
+  const loaded = toDraft(row);
+  const { draft, content } = loaded;
+  const scope = row.storyId ? await scopeFor(db, row.storyId).catch(() => null) : null;
+  const blocks = narrationBlocks(draft);
+  const findings = scope ? checkScript(draft, scope, { target: runtimeTarget(project), factIssues: content?.factCheck?.issues }) : [];
+  const kinds: Record<string, number> = {};
+  for (const f of findings) kinds[f.kind] = (kinds[f.kind] ?? 0) + 1;
+  const diagnostics = diagnose({ blocks, findings: kinds, money: scope ? moneyUses(draft, scope) : [], names: scope ? scriptNames(draft, scope) : [] }).diagnostics;
+  const baseId = content?.provenance.baseId ?? null;
+  const base = baseId && baseId !== row.id ? await loadById(db, baseId) : null;
+  const ledger = content?.reviewChanges ?? [];
+  const layers: LayeredBlockView[] = draft.sections.flatMap((s) =>
+    s.blocks.map((b) => ({
+      key: b.key,
+      section: s.sequence,
+      narration: b.text,
+      visual: { intent: b.visual.intent, note: b.visual.note, mustShow: b.visual.mustShow.map((m) => m.detail) },
+      delivery: {
+        mark: deliveryMark(b.delivery),
+        pace: b.delivery.pace,
+        energy: b.delivery.energy,
+        emotion: b.delivery.emotion,
+        pauses: [b.delivery.pauseBefore.length !== 'NONE' ? `before: ${b.delivery.pauseBefore.length.toLowerCase()}${b.delivery.pauseBefore.reason ? ` (${b.delivery.pauseBefore.reason.toLowerCase()})` : ''}` : null, b.delivery.pauseAfter.length !== 'NONE' ? `after: ${b.delivery.pauseAfter.length.toLowerCase()}${b.delivery.pauseAfter.reason ? ` (${b.delivery.pauseAfter.reason.toLowerCase()})` : ''}` : null].filter((x): x is string => x !== null),
+      },
+      evidence: { claimKeys: b.claimKeys, presentation: b.presentation.map((p) => `${p.claimKey}: ${p.presentation.toLowerCase().replace(/_/g, ' ')}`) },
+      editorial: ledger.filter((c) => c.status === 'ACCEPTED' && c.savedRef === b.key).map((c) => `${c.id}: ${c.reason}`),
+      leaks: directionLeaks(b.text),
+    })),
+  );
+  return {
+    version: row.version,
+    origin: content?.provenance.origin ?? 'DRAFT',
+    baseVersion: base?.row.version ?? null,
+    record: content?.narration ?? null,
+    diagnostics,
+    report: base ? reportBetween(base, loaded) : null,
+    layers,
   };
 }
 

@@ -1,0 +1,98 @@
+[
+  {
+    "id": "payoff-b-ships-came-home-refrain",
+    "version": 1,
+    "text": "The last ship the underwriters had any stake in was one they owned themselves. She went down off the cape in her first winter, and nobody else had been willing to share the risk. Ships came home, or they didn't.",
+    "category": "payoff",
+    "quality": "borderline",
+    "traits": [
+      "repeated_ending",
+      "callback",
+      "payoff",
+      "memorable_line",
+      "restraint"
+    ],
+    "strengths": [
+      "the underwriters end up carrying the kind of loss they sold cover against",
+      "the refrain returns with its meaning turned round"
+    ],
+    "weaknesses": [
+      "a closing refrain is a familiar device",
+      "it only works if the line was heard once early and not since"
+    ],
+    "spokenRhythm": "A medium statement, a long sentence of loss, and a six-word refrain that falls flat on purpose.",
+    "narrativeFunction": "Closes a film about a marine insurance syndicate by bringing back the line it opened with.",
+    "whyItWorks": "Heard once at the start as the underwriters' indifferent arithmetic, the refrain now applies to them. A repeated line can carry a whole film's change in one breath, and here it is said once more and no more.",
+    "whyItFails": "If the film has used the line at the end of other sequences, it becomes a catchphrase and every use cheapens the last. Even used once, a closing refrain can sound like the narrator admiring his own line, and the first two sentences already make the point.",
+    "rewrite": "The last ship the underwriters had any stake in was one they owned themselves. She went down off the cape in her first winter, and nobody else had been willing to share the risk.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "payoff-b-promotion-as-payment",
+    "version": 1,
+    "text": "The inquiry sat for three weeks, and its report names nobody. The clerk who had counted the men was moved to the company's office in the city, on twice his old salary. It's hard not to read the promotion as a kind of payment.",
+    "category": "payoff",
+    "quality": "borderline",
+    "traits": [
+      "truth_reveal",
+      "callback",
+      "payoff",
+      "hedge_natural",
+      "human_stakes"
+    ],
+    "strengths": [
+      "the first two sentences make a strong payoff by juxtaposition",
+      "the hedge admits the last line is an interpretation"
+    ],
+    "weaknesses": [
+      "the closing sentence hands the audience the real meaning, a softer cousin of the truth is",
+      "it edges toward a claim the record does not make",
+      "it's hard not to is itself a phrase generated narration leans on"
+    ],
+    "spokenRhythm": "Two plain sentences of record, then a softer sentence of opinion.",
+    "narrativeFunction": "Returns to the clerk who found the missing men on the pay book and shows how the company dealt with him.",
+    "whyItWorks": "When the evidence has been laid out, a single interpretive line, honestly hedged, can be right. A narrator is allowed to say what the facts suggest, and this one says it as a reading rather than a verdict.",
+    "whyItFails": "The silent report beside the doubled salary already makes the point, so the last line explains a payoff the audience has just landed for themselves. It also implies that the clerk was bought, which no document says. Used after more than one reveal, it becomes the narrator nudging the audience every time.",
+    "rewrite": "The inquiry sat for three weeks, and its report names nobody. The clerk who had counted the men was moved to the company's office in the city, on twice his old salary.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "payoff-b-ditch-swallowed-fortunes",
+    "version": 1,
+    "text": "When the water company was wound up, its debts were paid and the shareholders got back a few shillings in the pound. The ditch had swallowed two family fortunes, and in the end it gave back a little of each.",
+    "category": "payoff",
+    "quality": "borderline",
+    "traits": [
+      "metaphor_stack",
+      "callback",
+      "payoff",
+      "money_context"
+    ],
+    "strengths": [
+      "the return is measured in shillings in the pound, a scale anyone can feel",
+      "the two families from earlier in the film return at the right moment"
+    ],
+    "weaknesses": [
+      "the ditch is made to swallow and give back, a personification with a stock shape",
+      "one more image nearby would turn it into a stack"
+    ],
+    "spokenRhythm": "A long sentence of plain accounting, then a balanced figurative sentence in two halves.",
+    "narrativeFunction": "Closes a film about a gold-rush water company by returning to the two families whose money dug its ditch.",
+    "whyItWorks": "One figurative line after a plain sentence of figures can give a payoff some warmth, and swallowed is a word a listener takes in at once. Said once, it sounds like a person talking rather than a writer decorating.",
+    "whyItFails": "The swallowing and giving back is a familiar balanced shape, and it makes the ditch the actor when people made the decisions. The shillings in the pound have already told the audience how little came back, so the image repeats the point in costume. A second image anywhere close would make it a stack.",
+    "rewrite": "When the water company was wound up, its debts were paid and the shareholders got back a few shillings in the pound. Among them were the two families whose fortunes had paid for the ditch.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

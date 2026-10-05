@@ -199,8 +199,10 @@ export class ScriptEditing {
       if (!approved || old.storyId !== approved.id) throw new ConflictError(`Script v${input.version} tells an architecture that is no longer the approved one`);
       const loaded = (await loadById(tx, old.id))!;
       const scope = await scopeFor(tx, approved.id);
+      // A copy of an earlier version: the record of the narration pass that made it belongs to that run, not to this copy.
+      const { narration: _run, ...earlier } = loaded.content ?? emptyContent(approved);
       const content: ScriptContent = {
-        ...(loaded.content ?? emptyContent(approved)),
+        ...earlier,
         provenance: { origin: 'RESTORE', baseVersion: input.version, baseId: old.id, sections: [], brief: null, requestedBy: actor, changeLog: null },
       };
       const languageVersionId = loaded.row.scenes[0]?.narrations[0]?.languageVersionId ?? (await tx.languageVersion.findFirstOrThrow({ where: { projectId, isMaster: true }, select: { id: true } })).id;

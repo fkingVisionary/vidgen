@@ -40,6 +40,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { api } from '../api.ts';
+import { ChangeReportView } from './editorial.tsx';
 import { formatUsd } from '../format.ts';
 import { ClaimRefs, Section } from './evidence.tsx';
 
@@ -395,6 +396,7 @@ export function VersionsTab({ projectId, view: v, onVersion }: { projectId: stri
   const [b, setB] = useState<number | null>(v.scripts[0]?.version ?? null);
   const compare = useQuery({ queryKey: ['script', 'compare', projectId, a, b], queryFn: () => api.compareScripts(projectId, a!, b!), enabled: a !== null && b !== null && a !== b });
   const restore = useScriptRequest((version: number) => api.restoreScript(projectId, version));
+  const propose = useMutation({ mutationFn: (version: number) => api.proposeHouseCandidates(projectId, version) });
   return (
     <div className="space-y-4">
       <Section title={`Versions (${v.scripts.length}) — every version is kept`}>
@@ -421,6 +423,19 @@ export function VersionsTab({ projectId, view: v, onVersion }: { projectId: stri
           </button>
         )}
         {restore.error && <p className="mt-1 text-sm text-red-700">{restore.error.message}</p>}
+        {v.script?.status === 'APPROVED' && (
+          <div className="mt-2 text-sm">
+            <button disabled={propose.isPending} onClick={() => propose.mutate(v.script!.version)} className={`${button} bg-white text-violet-800 ring-1 ring-violet-300 hover:bg-violet-50`}>
+              Propose house-style candidates from v{v.script.version}
+            </button>
+            {propose.data && (
+              <span className="ml-2 text-xs text-stone-600">
+                {propose.data.created} new candidate(s) of {propose.data.proposed} proposed — decide on them on the <Link to="/writing" className="underline">House style</Link> page.
+              </span>
+            )}
+            {propose.error && <p className="mt-1 text-red-700">{propose.error.message}</p>}
+          </div>
+        )}
       </Section>
       {v.scripts.length > 1 && (
         <Section title="Compare versions">
@@ -520,7 +535,15 @@ function Comparison({ cmp }: { cmp: ScriptCompareView }) {
           {(cmp.changeLog.kept ?? []).length > 0 && <p className="mt-1 text-stone-600">Kept word for word: {cmp.changeLog.kept!.map((l) => `“${l}”`).join(' · ')}</p>}
         </div>
       )}
-      {cmp.assessment.length > 0 && <AssessmentList items={cmp.assessment} against={a.version} />}
+      {cmp.assessment.length > 0 && <AssessmentList items={cmp.assessment} against={a.version} title={b.origin === 'NARRATION' ? 'Narration checklist' : 'Refinement checklist'} />}
+      {cmp.changeReport && (
+        <details className="rounded border border-violet-200 bg-violet-50/30 p-2" open={b.origin === 'NARRATION'}>
+          <summary className="cursor-pointer font-medium text-violet-900">Block by block: original → revised → why</summary>
+          <div className="mt-2">
+            <ChangeReportView report={cmp.changeReport} />
+          </div>
+        </details>
+      )}
       {cmp.sections.map((x) => (
         <details key={x.sequenceNumber} className="rounded border border-stone-200 p-2">
           <summary className="cursor-pointer">
@@ -549,9 +572,9 @@ function Comparison({ cmp }: { cmp: ScriptCompareView }) {
 const ANSWER_TONE: Record<ScriptAssessmentItem['answer'], string> = { YES: 'bg-emerald-100 text-emerald-800', PARTLY: 'bg-amber-100 text-amber-900', NO: 'bg-red-100 text-red-800' };
 
 /** The script editor's refinement checklist, answered against the version refined. */
-export function AssessmentList({ items, against }: { items: ScriptAssessmentItem[]; against: number | null }) {
+export function AssessmentList({ items, against, title = 'Refinement checklist' }: { items: ScriptAssessmentItem[]; against: number | null; title?: string }) {
   return (
-    <Section title={`Refinement checklist — the script editor${against ? `, against v${against}` : ''} (model judgment)`}>
+    <Section title={`${title} — the script editor${against ? `, against v${against}` : ''} (model judgment)`}>
       <ol className="space-y-1.5 text-sm">
         {items.map((x, i) => (
           <li key={i} className="flex flex-wrap items-baseline gap-x-2">
@@ -601,7 +624,7 @@ export function JudgmentsSection({ items }: { items: QualityJudgment[] }) {
 }
 
 const CHANGE_TONE: Record<ScriptReviewChange['status'], string> = { ACCEPTED: 'bg-emerald-100 text-emerald-800', REJECTED: 'bg-red-100 text-red-800', SKIPPED: 'bg-stone-100 text-stone-600' };
-const REVIEWER_LABEL: Record<ScriptReviewChange['reviewer'], string> = { SCRIPT_EDITOR: 'Script editor', FACT_CHECKER: 'Fact checker', PERFORMANCE: 'Performance timing' };
+const REVIEWER_LABEL: Record<ScriptReviewChange['reviewer'], string> = { NARRATION: 'Narration pass (Writing Engine 2)', SCRIPT_EDITOR: 'Script editor', FACT_CHECKER: 'Fact checker', PERFORMANCE: 'Performance timing' };
 
 /** Every change the reviewers proposed in the run that made this version, judged one by one. */
 export function ReviewChangesSection({ changes }: { changes: ScriptReviewChange[] }) {

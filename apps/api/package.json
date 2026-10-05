@@ -22,6 +22,7 @@
     "@docengine/script": "workspace:*",
     "@docengine/story": "workspace:*",
     "@docengine/voice": "workspace:*",
+    "@docengine/writing": "workspace:*",
     "@fastify/static": "10.1.5",
     "@prisma/adapter-pg": "catalog:",
     "@prisma/client": "catalog:",

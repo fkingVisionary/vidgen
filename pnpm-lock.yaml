@@ -74,6 +74,9 @@ importers:
       '@docengine/voice':
         specifier: workspace:*
         version: link:../../modules/voice
+      '@docengine/writing':
+        specifier: workspace:*
+        version: link:../../modules/writing
       '@fastify/static':
         specifier: 10.1.5
         version: 10.1.5
@@ -172,6 +175,9 @@ importers:
       '@docengine/story':
         specifier: workspace:*
         version: link:../story
+      '@docengine/writing':
+        specifier: workspace:*
+        version: link:../writing
       zod:
         specifier: 'catalog:'
         version: 4.6.5
@@ -218,6 +224,21 @@ importers:
       '@docengine/story':
         specifier: workspace:*
         version: link:../story
+
+  modules/writing:
+    dependencies:
+      '@docengine/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@docengine/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@docengine/story':
+        specifier: workspace:*
+        version: link:../story
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
 
   packages/core:
     dependencies:

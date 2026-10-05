@@ -7,9 +7,10 @@ import { StatusBadge } from '../components/badges.tsx';
 import { QualityReportView, Section } from '../components/evidence.tsx';
 import { ProjectNav } from '../components/ProjectNav.tsx';
 import { AssessmentList, JudgmentsSection, MeasurementsSection, ReviewChangesSection, SectionCard, TimingSummary, VersionsTab, VoiceTab, button, useScriptRequest } from '../components/script.tsx';
+import { EditorialTab } from '../components/editorial.tsx';
 import { formatDate, formatUsd } from '../format.ts';
 
-type Tab = 'script' | 'quality' | 'voice' | 'versions' | 'runs';
+type Tab = 'script' | 'editorial' | 'quality' | 'voice' | 'versions' | 'runs';
 
 /**
  * The script: the documentary as it will be spoken, section by section — the
@@ -58,6 +59,7 @@ export function ScriptPage() {
   };
   const tabs: [Tab, string][] = [
     ['script', s ? `Script v${s.version}` : 'Script'],
+    ['editorial', s?.revisionOfVersion ? `Editorial (v${s.revisionOfVersion} → v${s.version})` : 'Editorial'],
     ['quality', s ? `Quality gate${s.qualityPassed ? '' : ' ⚠'}` : 'Quality gate'],
     ['voice', 'Pronunciation & voice'],
     ['versions', `Versions (${v.scripts.length})`],
@@ -103,6 +105,7 @@ export function ScriptPage() {
             ))}
           </div>
           {tab === 'script' && <ScriptTab projectId={p.id} view={v} />}
+          {tab === 'editorial' && <EditorialTab projectId={p.id} version={s.version} />}
           {tab === 'quality' && <QualityTab view={v} />}
           {tab === 'voice' && <VoiceTab projectId={p.id} script={s} />}
           {tab === 'versions' && <VersionsTab projectId={p.id} view={v} onVersion={showVersion} />}
@@ -174,6 +177,11 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
     setDirection('');
     onQueued();
   });
+  const [voiceNotes, setVoiceNotes] = useState('');
+  const narrate = useScriptRequest(() => api.narrateScript(p.id, { baseVersion: s!.version, ...(voiceNotes.trim() ? { instructions: voiceNotes.trim() } : {}), ...over }), () => {
+    setVoiceNotes('');
+    onQueued();
+  });
   const overMaxToggle = (id: string) => (
     <label htmlFor={id} className="mt-2 flex items-start gap-2 text-xs text-stone-600">
       <input id={id} type="checkbox" checked={overMax} onChange={(e) => setOverMax(e.target.checked)} className="mt-0.5" />
@@ -188,7 +196,7 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
   const failed = p.status === 'FAILED' && p.failedFromStatus === 'SCRIPT_DRAFT';
   const failedJob = p.jobs.find((j) => j.type === 'SCRIPT' && j.status === 'FAILED');
   const underReview = v.scripts.find((x) => x.status === 'IN_REVIEW');
-  const error = generate.error ?? revise.error ?? refine.error ?? decide.error ?? retry.error;
+  const error = generate.error ?? revise.error ?? refine.error ?? narrate.error ?? decide.error ?? retry.error;
 
   return (
     <section className="space-y-3 rounded-lg border border-stone-200 bg-white p-4">
@@ -196,7 +204,7 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
 
       {running && (
         <div className="rounded-md bg-sky-50 p-3 text-sm text-sky-900">
-          <p className="font-medium">Working on the script — the writing, then the script editor, the fact checker and the performance pass…</p>
+          <p className="font-medium">Working on the script — the writing, the narration pass, then the script editor, the fact checker and the performance pass…</p>
           {progress && <p className="mt-1 text-xs">Latest: {progress.message}</p>}
         </div>
       )}
@@ -204,7 +212,7 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
       {!running && (p.status === 'STORY_APPROVED' || (p.status === 'SCRIPT_DRAFT' && !s)) && (
         <div>
           <p className="text-sm">
-            The story architecture{v.architecture ? ` v${v.architecture.version}` : ''} is approved. The Script Engine plans the narration, writes it, has a script editor and a fact checker review it, and marks the performance — then stops for you. No voice is generated.
+            The story architecture{v.architecture ? ` v${v.architecture.version}` : ''} is approved. The Script Engine plans the narration, writes it, gives it a Human Narration Pass in the house style, has a script editor and a fact checker review it, and marks the performance — then stops for you. No voice is generated.
           </p>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Instructions for the writer (optional) — e.g. keep the opening under a minute" className="mt-2 w-full rounded-md border border-stone-300 px-2 py-1.5 text-sm" />
           {overMaxToggle('over-max-draft')}
@@ -258,12 +266,31 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
         </div>
       )}
 
+      {s && v.editorial.narrate.allowed && !running && (
+        <details className="rounded-md border border-emerald-200 bg-emerald-50/40 p-3 text-sm">
+          <summary className="cursor-pointer font-medium text-emerald-900">Human Narration Pass on v{s.version} (Writing Engine 2)…</summary>
+          <p className="mt-2 text-stone-700">
+            The writing engine measures every block — machine habits, rhythm, sums of money without context, narration describing the picture — and a narration editor edits only the blocks that need it, guided by the house style bible and a handful of examples from the corpus. Each edit is kept only if every figure, name, hedge,
+            claim and strong line survives; picture description moves to the visual layer; money context comes from the evidence only. Then the script editor, the fact checker and the performance pass run as usual (five model calls). v{s.version} is kept; the
+            Editorial tab shows original → revised → why for every block.
+          </p>
+          <label className="mt-2 block text-xs font-medium text-stone-600" htmlFor="narration-instructions">
+            Director's instructions (optional)
+          </label>
+          <textarea id="narration-instructions" value={voiceNotes} onChange={(e) => setVoiceNotes(e.target.value)} rows={2} placeholder="e.g. keep the companion's scenes spare" className="mt-1 w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm" />
+          {overMaxToggle('over-max-narrate')}
+          <button disabled={narrate.isPending} onClick={() => narrate.mutate(undefined)} className={`${button} mt-1 bg-emerald-700 text-white hover:bg-emerald-600`}>
+            Run the narration pass
+          </button>
+        </details>
+      )}
+
       {s && v.editorial.refine.allowed && !running && (
         <details className="rounded-md border border-violet-200 bg-violet-50/40 p-3 text-sm">
           <summary className="cursor-pointer font-medium text-violet-900">Refine the narration of v{s.version} (the writing only)…</summary>
           <p className="mt-2 text-stone-700">
             Rewrites how the whole script is told, for the ear: the same story, structure, information classes and evidence — no new facts. Strong lines are kept; signposting, restated explanations and essay-like passages go. The script editor then
-            judges it against v{s.version} with a checklist, the fact checker checks it and the performance is marked again (four model calls). v{s.version} is kept; compare them in Versions.
+            judges it against v{s.version} with a checklist, the fact checker checks it and the performance is marked again (five model calls, the narration pass among them). v{s.version} is kept; compare them in Versions.
           </p>
           <p className="mt-1 text-xs text-stone-500">The house style is built in — nothing needs to be written here. Director's instructions are optional: they can steer tone, emphasis, pacing and creative direction, never the facts, the architecture, quotations or the line between fiction and history.</p>
           <label className="mt-2 block text-xs font-medium text-stone-600" htmlFor="director-instructions">
@@ -291,7 +318,7 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
       {s && !running && v.editorial.generate.allowed && p.status !== 'STORY_APPROVED' && (
         <details className="text-sm">
           <summary className="cursor-pointer text-stone-600">Write a fresh draft from the architecture…</summary>
-          <p className="mt-1 text-xs text-stone-500">Starts again from the approved architecture (all five steps). Every earlier version is kept.</p>
+          <p className="mt-1 text-xs text-stone-500">Starts again from the approved architecture (all six steps). Every earlier version is kept.</p>
           <button disabled={generate.isPending} onClick={() => generate.mutate(undefined)} className={`${button} mt-1 bg-stone-800 text-white`}>
             Write a fresh draft
           </button>
@@ -316,7 +343,7 @@ function ScriptTab({ projectId, view: v }: { projectId: string; view: ScriptView
       )}
       {s.content?.provenance.brief && (
         <p className="text-sm text-stone-600">
-          {s.origin === 'REFINEMENT' ? "Director's instructions" : 'Brief'} for v{s.version}: “{s.content.provenance.brief}”{s.content.provenance.requestedBy ? ` — ${s.content.provenance.requestedBy}` : ''}
+          {s.origin === 'REFINEMENT' || s.origin === 'NARRATION' ? "Director's instructions" : 'Brief'} for v{s.version}: “{s.content.provenance.brief}”{s.content.provenance.requestedBy ? ` — ${s.content.provenance.requestedBy}` : ''}
         </p>
       )}
       {s.origin === 'REFINEMENT' && !s.content?.provenance.brief && <p className="text-sm text-stone-600">Refined with the house style (no director's instructions).</p>}
@@ -362,7 +389,7 @@ function QualityTab({ view: v }: { view: ScriptView }) {
       {report ? <QualityReportView report={report} claims={s.evidence.claims} reviewTitle="Reviewers' issues (model judgments)" /> : <p className="text-sm text-stone-500">No quality report.</p>}
       {changes.length > 0 && <ReviewChangesSection changes={changes} />}
       {report?.judgments && report.judgments.length > 0 && <JudgmentsSection items={report.judgments} />}
-      {editor?.assessment && editor.assessment.length > 0 && <AssessmentList items={editor.assessment} against={s.revisionOfVersion} />}
+      {editor?.assessment && editor.assessment.length > 0 && <AssessmentList items={editor.assessment} against={s.revisionOfVersion} title={s.origin === 'NARRATION' ? 'Narration checklist' : 'Refinement checklist'} />}
       {editor && (
         <Section title="Script editor's scores (model judgment — recorded, never blocking)">
           <p className="text-sm">{editor.verdict}</p>

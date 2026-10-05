@@ -14,6 +14,8 @@ import {
   unknownProperNouns,
   wordTokens,
 } from '@docengine/story/shared';
+import { STOCK_PHRASES } from '@docengine/writing';
+import { editorialFindings } from './editorial.ts';
 import { evidenceInvariants } from './evidence.ts';
 import { craftFindings, humanIn, inEscalation, partOfRefrain, protectedBlocks, renderTrimPlan, trimPlan, type Refrain, type TrimPlan } from './craft.ts';
 import { allBlocks, fictionalMentions, sectionDurationSec, type DraftBlock, type DraftSection, type ScriptDraft } from './draft.ts';
@@ -71,6 +73,8 @@ export const SCRIPT_FINDING_KINDS = [
   'CENTRAL_QUESTION_ABANDONED', // the central question is not answered at the end
   'RUNTIME_OFF', // far from the target runtime
   'OPEN_CRITICAL_FACT_ISSUE', // a critical fact issue on a block nobody has fixed
+  // Semantic layers (Writing Engine 2)
+  'DIRECTION_IN_NARRATION', // a production direction, label, tag or claim key inside the narration text
   // Warnings: the editor decides
   'BEAT_FROM_OTHER_SEQUENCE', // a block tells a beat of another sequence
   'QUESTION_POSED_LATE', // the central question is posed after the first third
@@ -118,6 +122,19 @@ export const SCRIPT_FINDING_KINDS = [
   'PERSON_WITHOUT_EVIDENCE_SCENE', // a reconstructed scene naming a real person none of its claims mentions
   'UNCITED_CLAIM_MATCH', // a sentence that says what an uncited claim says
   'RUNTIME_PLAN', // over the maximum: where to cut first
+  // Writing Engine 2 (editorial.ts): warnings
+  'AI_PATTERN', // machine-writing habits in a block (fake dramatic beats, formulas, fragment runs, trailer language…)
+  'VISUAL_IN_NARRATION', // narration describing what the picture shows
+  'MONEY_WITHOUT_CONTEXT', // a sum of money said without the context the evidence offers
+  // The narration pass's own invariants (never found by checkScript: they reject a narration change)
+  'NARRATION_FIGURE_CHANGED', // a number of the block lost or changed
+  'NARRATION_NAME_CHANGED', // a name respelt or replaced
+  'NARRATION_KEPT_LINE_LOST', // a line kept on purpose, gone
+  'NARRATION_QUOTE_TOUCHED', // a quotation or a speaker's line changed
+  'NARRATION_HEDGE_DROPPED', // a hedge of the original gone
+  'NARRATION_PATTERN_ADDED', // more machine-writing patterns than before
+  'NARRATION_MONEY_UNSOURCED', // money context that is not from the evidence
+  'NARRATION_LENGTH_DRIFT', // a block rewritten far beyond a polish
 ] as const;
 export type ScriptFindingKind = (typeof SCRIPT_FINDING_KINDS)[number];
 
@@ -158,41 +175,8 @@ const MONTHS = 'January|February|March|April|May|June|July|August|September|Octo
 /** A year or a calendar date ("1637", "14 January", "January 14th"): a fictional act with one becomes a dated historical claim. */
 const DATE_PATTERN = new RegExp(`\\b(?:1[0-9]{3}|20[0-9]{2})\\b|\\b(?:${MONTHS})\\s+\\d{1,2}(?:st|nd|rd|th)?\\b|\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?(?:${MONTHS})\\b`, 'i');
 
-/** Stock phrases that make narration sound machine-written. */
-const AI_PHRASES = [
-  "here's where things get interesting",
-  'here is where things get interesting',
-  "but here's the thing",
-  'little did they know',
-  'fast forward',
-  'fast-forward',
-  'buckle up',
-  "let's dive",
-  'dive into',
-  'in a world where',
-  "but that's not all",
-  'the rest is history',
-  "it's important to note",
-  'it is important to note',
-  "it's worth noting",
-  'it is worth noting',
-  'needless to say',
-  'at the end of the day',
-  'plot twist',
-  "you won't believe",
-  'game-changer',
-  'game changer',
-  'a testament to',
-  'tapestry',
-  'delve',
-  'stood the test of time',
-  'in the annals of history',
-  'nothing would ever be the same',
-  'one thing is certain',
-  'only time will tell',
-  'a perfect storm',
-  'the stage was set',
-];
+/** Stock phrases that make narration sound machine-written (the writing engine's lexicon, shared with the prompts). */
+const AI_PHRASES: readonly string[] = STOCK_PHRASES;
 
 const CONNECTORS = new Set(['but', 'so', 'meanwhile', 'now', 'then', 'and', 'yet', 'still', 'today', 'soon', 'later']);
 const SYMBOLS = /[&%#@*_~\\/[\]{}<>|^=+]|\b(?:c|ca|fl|approx|etc|vs)\.(?=\s|$)|\b(?:e\.g|i\.e)\.|\d\s*[–-]\s*\d/i;
@@ -389,6 +373,7 @@ export function checkScript(draft: ScriptDraft, scope: ScriptScope, opts: CheckO
   pronunciation(draft, scope, out);
   out.push(...craft.findings);
   out.push(...evidenceInvariants(draft, scope, opts.previous ?? null));
+  editorialFindings(draft, scope, out);
   const plan = trimPlan(draft, timing, out, protectedBlocks(draft, scope, craft.refrains, opts.kept), scope);
   if (plan) out.push({ kind: 'RUNTIME_PLAN', ref: null, detail: `Over the ${clock(plan.maxSec)} maximum by ${clock(plan.overMaxSec)}: cut or compress first ${plan.candidates.slice(0, 8).map((c) => `${c.ref} (${c.reasons.join(', ')})`).join('; ') || '(no obvious candidate)'}` });
   return out;

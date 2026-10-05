@@ -1,0 +1,139 @@
+[
+  {
+    "id": "transition-n-meanwhile-shipyard",
+    "version": 1,
+    "text": "Meanwhile, back at the shipyard, life went on as usual. The hammers kept ringing from dawn to dusk. The caulkers kept filing in through the gates. The owners kept counting the profits upstairs. But all of that was about to change.",
+    "category": "transition",
+    "quality": "bad",
+    "traits": [
+      "dramatic_transition",
+      "micro_hook",
+      "length_repetition",
+      "visual_description"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "meanwhile as a scene-change label",
+      "three kept sentences built the same way at the same length",
+      "ringing hammers and men filing through gates are the picture's job",
+      "ends on a tease instead of a consequence"
+    ],
+    "spokenRhythm": "A plodding run of matched sentences, each starting with the same shape, then a portentous drop at the end.",
+    "narrativeFunction": "Meant to cut back to the shipyard and set up a change, but it describes routine and then promises drama.",
+    "whyItFails": "Meanwhile is a scene-change label, not a link between events. The repeated kept sentences sound like a list read aloud, the hammers and the gates describe what the shot will already show, and the closing line withholds the very thing the transition should deliver.",
+    "rewrite": "At the shipyard, the work ran from dawn to dusk, and upstairs the owners kept counting the profits.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-n-everything-changed",
+    "version": 1,
+    "text": "For generations, the valley had been nothing but quiet farmland. And then, one spring morning, a farmer noticed a dark sheen glistening on the surface of the creek. Oil. That's when everything changed. The valley would never be the same again.",
+    "category": "transition",
+    "quality": "bad",
+    "traits": [
+      "dramatic_transition",
+      "trailer_language",
+      "visual_description"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "and then as a drum roll",
+      "describes the sheen the picture would show",
+      "a one-word reveal followed by two stock lines",
+      "says everything changed without saying how"
+    ],
+    "spokenRhythm": "A slow build, a one-word reveal, then two stock lines that land like a trailer.",
+    "narrativeFunction": "Meant to carry the film from a farming valley to an oil boom, but it stops on the announcement.",
+    "whyItFails": "And then and that's when everything changed are fake dramatic beats, and never be the same again is trailer language. The glistening sheen is a picture the camera should carry. The transition promises a change instead of showing its first consequence.",
+    "rewrite": "The valley had been farmland for generations, until one spring a farmer noticed oil on the surface of the creek.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-n-the-answer-ruin",
+    "version": 1,
+    "text": "The new toll doubled the cost of every bale of wool. So what did this mean for the wool merchants of the valley? The answer? Ruin. But why would the duke do such a thing? To understand that, we need to go back twenty years.",
+    "category": "transition",
+    "quality": "bad",
+    "traits": [
+      "rhetorical_question",
+      "qa_pair"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "questions the narrator answers at once",
+      "a one-word answer as a sting",
+      "signposts the flashback instead of moving into it"
+    ],
+    "spokenRhythm": "Question, half-question, one-word bang, another question, then a teacherly instruction.",
+    "narrativeFunction": "Meant to link the toll to its consequence and then to its cause, but stalls on questions.",
+    "whyItFails": "The narrator asks questions only to answer them, which is the quiz-show rhythm of generic history videos. The answer and its one-word reply make ruin sound like a punchline, and we need to go back is a lecture signpost rather than a transition.",
+    "rewrite": "The new toll doubled the cost of every bale of wool, and it ruined the valley's wool merchants. The duke's reasons for it went back twenty years.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-n-fast-forward",
+    "version": 1,
+    "text": "Fast forward ten years, and the little airfield had become a bustling hub of activity. Little did the townspeople know, this was only the beginning. Let's dive into how it all unfolded.",
+    "category": "transition",
+    "quality": "bad",
+    "traits": [
+      "stock_phrase",
+      "dramatic_transition",
+      "micro_hook"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "fast forward, little did they know and dive into are stock phrases",
+      "bustling hub of activity says nothing specific",
+      "only the beginning teases instead of informing"
+    ],
+    "spokenRhythm": "Breezy and presenter-like, with the energy of a video intro rather than a documentary.",
+    "narrativeFunction": "Meant to jump a decade, but fills the jump with stock phrases and a promise.",
+    "whyItFails": "Three stock phrases in three sentences make it sound machine-written at once. A time jump needs a consequence or a changed number to carry it, and this one offers neither, only the claim that more is coming.",
+    "rewrite": "Ten years later, the town's little airfield was a busy place.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-n-thunderbolt",
+    "version": 1,
+    "text": "The news hit the coffee house like a thunderbolt — three ships lost in a single week. Fortunes evaporated like morning mist. A wave of panic swept through the room — and the underwriters could feel their world crumbling beneath their feet.",
+    "category": "transition",
+    "quality": "bad",
+    "traits": [
+      "metaphor_stack",
+      "em_dash",
+      "emotion_explained"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "four figures of speech in three sentences",
+      "dashes in place of sentences",
+      "tells the listener what the underwriters felt"
+    ],
+    "spokenRhythm": "Breathless, with each dash forcing a change of pitch and each image arriving before the last has landed.",
+    "narrativeFunction": "Meant to move the story from the losses at sea to their effect on the underwriters, but drowns the facts in imagery.",
+    "whyItFails": "Thunderbolt, mist, wave and crumbling ground are four metaphors fighting for one moment, the dashes break the line for the ear, and the panic is described rather than shown through what the underwriters lost. The fact that matters, three ships in one week, is squeezed into an aside.",
+    "rewrite": "Three ships were lost in a single week. When the news reached the coffee house, it wiped out fortunes among the underwriters in the room.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

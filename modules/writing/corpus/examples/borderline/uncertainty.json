@@ -1,0 +1,102 @@
+[
+  {
+    "id": "uncertainty-b-single-question",
+    "version": 1,
+    "text": "The harbourmaster's report says the pilot was drunk. The pilot's statement says the harbourmaster never lit the second lamp. Which of them do we believe? Both were writing to the same board of inquiry, and both had a job to keep.",
+    "category": "uncertainty",
+    "quality": "borderline",
+    "traits": [
+      "rhetorical_question",
+      "source_as_detective_work",
+      "hedge_natural",
+      "human_stakes",
+      "one_idea_per_sentence"
+    ],
+    "strengths": [
+      "two sources set side by side",
+      "the answer is a reason to doubt both, not a verdict",
+      "plain conversational tone"
+    ],
+    "weaknesses": [
+      "the question is answered in the very next breath",
+      "the device becomes a tic if every disagreement gets one"
+    ],
+    "spokenRhythm": "Two parallel statements, a short question that tilts the voice up, then a longer sentence that settles it.",
+    "narrativeFunction": "Frames conflicting testimony and points the listener to the motives behind each account.",
+    "whyItWorks": "The question is the one the listener is already asking, and the narrator does not answer it with a verdict but with a reason to read both sources carefully. Once in a sequence, it sounds like someone thinking aloud.",
+    "whyItFails": "A question put to the audience is a device, and here the next sentence answers it at once, so it nearly does nothing the statements could not do alone. Used at every disagreement in a film, it turns into the rhetorical question habit of generic history videos.",
+    "rewrite": "The harbourmaster's report says the pilot was drunk. The pilot's statement says the harbourmaster never lit the second lamp. Both were writing to the same board of inquiry, and both had a job to keep.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-b-in-reality",
+    "version": 1,
+    "text": "Every guide in the town will tell you the guild hall went up in a single summer, the masons working by torchlight to finish it. In reality, the building accounts run for six years.",
+    "category": "uncertainty",
+    "quality": "borderline",
+    "traits": [
+      "truth_reveal",
+      "legend_vs_record",
+      "source_as_detective_work",
+      "dry_humour",
+      "number_in_context"
+    ],
+    "strengths": [
+      "legend first, record second",
+      "the number does the deflating",
+      "short and clean"
+    ],
+    "weaknesses": [
+      "in reality casts the narrator as a debunker",
+      "slightly sneers at the guides",
+      "becomes a formula the second time"
+    ],
+    "spokenRhythm": "A long, generous sentence for the legend, then a short flat one that closes the door on it.",
+    "narrativeFunction": "Sets a local legend against the building records to move the film from story to evidence.",
+    "whyItWorks": "The structure is right. The legend is given room, the record answers it with one number, and the gap between a summer and six years is quietly funny.",
+    "whyItFails": "In reality announces the correction instead of letting the accounts make it, and it puts the narrator above the people who tell the story. Once is tolerable. Repeated, it becomes the truth-reveal formula, and the film starts to sound like it is scoring points.",
+    "rewrite": "Every guide in the town will tell you the guild hall went up in a single summer, the masons working by torchlight to finish it. The building accounts run for six years.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-b-never-know-closer",
+    "version": 1,
+    "text": "The storm warning was sent from the coast station at ten past four. The mail plane took off from the airfield inland at a quarter to five. Whether anyone carried the warning out to the pilot, we will probably never know.",
+    "category": "uncertainty",
+    "quality": "borderline",
+    "traits": [
+      "repeated_ending",
+      "hedge_natural",
+      "chronology",
+      "tension",
+      "restraint"
+    ],
+    "strengths": [
+      "two exact times do the work",
+      "the gap between them creates tension without comment",
+      "the hedge is honest"
+    ],
+    "weaknesses": [
+      "we will probably never know is the stock closing hedge",
+      "closes the investigation instead of naming what is missing"
+    ],
+    "spokenRhythm": "Two even sentences of timekeeping, then a longer one that falls away on its final words.",
+    "narrativeFunction": "Marks the point where the record stops, just before the consequence the film will show.",
+    "whyItWorks": "The times are specific and the listener can feel the thirty-five minutes. The uncertainty is genuine and said without drama.",
+    "whyItFails": "We will probably never know is the phrase generic narration reaches for at the end of every unknown. It shuts the question rather than saying where the evidence runs out, and if several sections close on it the film acquires a repeated ending.",
+    "rewrite": "The storm warning was sent from the coast station at ten past four. The mail plane took off from the airfield inland at a quarter to five. Whether anyone carried the warning out to the pilot, the record doesn't say.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

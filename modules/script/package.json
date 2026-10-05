@@ -17,6 +17,7 @@
     "@docengine/pipeline": "workspace:*",
     "@docengine/providers": "workspace:*",
     "@docengine/story": "workspace:*",
+    "@docengine/writing": "workspace:*",
     "zod": "catalog:"
   }
 }

@@ -56,6 +56,15 @@ export const INVARIANT: Partial<Record<ScriptFindingKind, string>> = {
   CENTRAL_QUESTION_ABANDONED: 'the central narrative question',
   RUNTIME_OFF: 'the runtime range',
   OPEN_CRITICAL_FACT_ISSUE: 'factual defensibility',
+  DIRECTION_IN_NARRATION: 'the semantic layers (only narration is spoken)',
+  NARRATION_FIGURE_CHANGED: 'factual meaning (every figure kept)',
+  NARRATION_NAME_CHANGED: 'historical identities',
+  NARRATION_KEPT_LINE_LOST: 'the strongest lines',
+  NARRATION_QUOTE_TOUCHED: 'recorded-quote integrity',
+  NARRATION_HEDGE_DROPPED: 'uncertainty presentation',
+  NARRATION_PATTERN_ADDED: 'the house style (no new machine habits)',
+  NARRATION_MONEY_UNSOURCED: 'money context from the evidence only',
+  NARRATION_LENGTH_DRIFT: 'a polish, not a rewrite',
 };
 
 /** One change of a patch, numbered in the reviewer's order: edits, then removals, then insertions. */
@@ -70,7 +79,7 @@ export interface ProposedChange {
   block?: WriterBlock;
 }
 
-const PREFIX: Record<ScriptReviewer, string> = { SCRIPT_EDITOR: 'E', FACT_CHECKER: 'F', PERFORMANCE: 'P' };
+const PREFIX: Record<ScriptReviewer, string> = { SCRIPT_EDITOR: 'E', FACT_CHECKER: 'F', PERFORMANCE: 'P', NARRATION: 'N' };
 
 export function proposals(patch: ScriptPatch, reviewer: ScriptReviewer): ProposedChange[] {
   let n = 0;
@@ -91,6 +100,12 @@ export interface ReviewContext {
   base: ScriptDraft | null;
   /** Lines kept on purpose by a refinement. */
   kept?: readonly string[];
+  /**
+   * A reviewer's own invariants, beyond the rules (the narration pass's):
+   * findings that reject a change, given the block before and after it. A
+   * string skips the change instead (it has nothing to do there).
+   */
+  guard?: (before: DraftBlock | null, after: DraftBlock | null, change: ProposedChange) => ScriptFinding[] | string;
 }
 
 export interface ReviewOutcome {
@@ -233,9 +248,20 @@ export function reviewPatch(draft: ScriptDraft, patch: ScriptPatch, reviewer: Sc
       changes.push({ ...record, status: 'SKIPPED', rulesImpacted: [], rejectionReason: tried.skip });
       continue;
     }
+    let guarded: ScriptFinding[] = [];
+    if (ctx.guard) {
+      const before = c.type === 'INSERT' ? null : (allBlocks(work).find((b) => uidOf(b) === tried.uid) ?? null);
+      const now = c.type === 'REMOVE' ? null : (allBlocks(tried.draft).find((b) => uidOf(b) === tried.uid) ?? null);
+      const g = ctx.guard(before, now, c);
+      if (typeof g === 'string') {
+        changes.push({ ...record, status: 'SKIPPED', rulesImpacted: [], rejectionReason: g });
+        continue;
+      }
+      guarded = g;
+    }
     const after = judge(tried.draft, ctx);
-    // New blocking findings, and claim links this change itself dropped.
-    const introduced = [...[...after.blocking].filter(([k]) => !current.blocking.has(k)).map(([, f]) => f), ...claimLinksLost(tried.draft, work, ctx.scope)];
+    // New blocking findings, claim links this change itself dropped, and the reviewer's own invariants.
+    const introduced = [...[...after.blocking].filter(([k]) => !current.blocking.has(k)).map(([, f]) => f), ...claimLinksLost(tried.draft, work, ctx.scope), ...guarded];
     if (introduced.length) {
       changes.push({ ...record, status: 'REJECTED', rulesImpacted: unique(introduced.map((f) => f.kind)), rejectionReason: rejection(introduced) });
       continue;

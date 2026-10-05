@@ -14,6 +14,11 @@ import type {
   ReviseArchitectureInput,
   ReviewScriptSectionInput,
   RefineScriptInput,
+  NarrateScriptInput,
+  ScriptEditorialView,
+  WritingCorpusView,
+  WritingExampleDecisionInput,
+  WritingExampleView,
   ReviseScriptInput,
   RewindInput,
   ScriptCompareView,
@@ -95,6 +100,14 @@ export const api = {
   /** Rewrite chosen sections (or the whole script) of a version from a brief: a new version, every version kept. */
   reviseScript: (id: string, input: ReviseScriptInput) => request<JobView>('POST', `/api/projects/${id}/script/revise`, input),
   refineScript: (id: string, input: RefineScriptInput) => request<JobView>('POST', `/api/projects/${id}/script/refine`, input),
+  /** The Human Narration Pass on a version (Writing Engine 2): a new version, the base kept. */
+  narrateScript: (id: string, input: NarrateScriptInput) => request<JobView>('POST', `/api/projects/${id}/script/narrate`, input),
+  /** A version through the writing engine: its narration pass, diagnostics, change report against its base, semantic layers. */
+  scriptEditorial: (id: string, version: number) => request<ScriptEditorialView>('GET', `/api/projects/${encodeURIComponent(id)}/script/versions/${version}/editorial`),
+  /** The house-style corpus: style bible, rubric, AI-pattern glossary, examples, house candidates. */
+  writingCorpus: () => request<WritingCorpusView>('GET', '/api/writing/corpus'),
+  proposeHouseCandidates: (id: string, version: number) => request<{ proposed: number; created: number; corpus: WritingCorpusView }>('POST', `/api/projects/${id}/script/versions/${version}/house-candidates`, {}),
+  decideWritingExample: (exampleId: string, input: WritingExampleDecisionInput) => request<WritingExampleView>('POST', `/api/writing/examples/${exampleId}/decision`, input),
   restoreScript: (id: string, version: number) => request<ScriptView>('POST', `/api/projects/${id}/script/restore`, { version }),
   compareScripts: (id: string, a: number, b: number) => request<ScriptCompareView>('GET', `/api/projects/${encodeURIComponent(id)}/script/compare?a=${a}&b=${b}`),
   voicePlan: (id: string, version?: number) => request<VoiceRenderPlan>('GET', `/api/projects/${encodeURIComponent(id)}/script/voice-plan${version ? `?version=${version}` : ''}`),

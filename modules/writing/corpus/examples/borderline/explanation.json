@@ -1,0 +1,101 @@
+[
+  {
+    "id": "explanation-b-paid-to-wait",
+    "version": 1,
+    "text": "Why would a mill owner pay a man to sit up all night with the boiler while the mill was shut? A cold boiler took most of the morning to raise steam again. Until it did, two hundred people were being paid to wait.",
+    "category": "explanation",
+    "quality": "borderline",
+    "traits": [
+      "rhetorical_question",
+      "cause_and_effect",
+      "dry_humour",
+      "curiosity",
+      "human_stakes",
+      "number_in_context"
+    ],
+    "strengths": [
+      "a real puzzle a listener might have",
+      "the answer is concrete and has a cost",
+      "paid to wait is dry"
+    ],
+    "weaknesses": [
+      "the narrator asks and answers in the same breath",
+      "the question is long, so the listener has to hold it"
+    ],
+    "spokenRhythm": "A long question, a medium answer, then a short line that lands the cost.",
+    "narrativeFunction": "Explains an odd expense by the larger expense it avoided.",
+    "whyItWorks": "The question is one the listener might genuinely ask, and the answer is a room of people waiting, which is easier to feel than any figure for lost output. Used once in a sequence, it gives the explanation a shape.",
+    "whyItFails": "A question the narrator answers at once is the quiz rhythm of generated history videos. If the script reaches for the device again, the listener hears the formula, and the statement version carries the same surprise.",
+    "rewrite": "The mill owner paid a man to sit up all night with the boiler while the mill was shut. A cold boiler took most of the morning to raise steam again, and until it did, two hundred people were being paid to wait.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-b-what-if-every-depositor",
+    "version": 1,
+    "text": "What if every depositor asked for his money back on the same morning? The bank couldn't have paid them, and it was never meant to. Most of the money had been lent out again, to farmers and builders, and the vault held only enough coin for an ordinary week.",
+    "category": "explanation",
+    "quality": "borderline",
+    "traits": [
+      "imagine_opener",
+      "rhetorical_question",
+      "cause_and_effect",
+      "plain_language",
+      "tension"
+    ],
+    "strengths": [
+      "the hypothetical is the real risk the arrangement ran",
+      "never meant to is a calm surprise",
+      "an ordinary week gives the reserve a scale"
+    ],
+    "weaknesses": [
+      "what if is a habitual opener of generated narration",
+      "the question is answered at once"
+    ],
+    "spokenRhythm": "A question, a short answer with a quiet twist, then a long explanatory sentence.",
+    "narrativeFunction": "Explains how a bank could keep so little coin, before the film reaches the morning when the depositors did come.",
+    "whyItWorks": "The hypothetical is the actual danger the bank lived with, so it is doing work rather than decorating. Once, it lets the listener feel the risk before learning the mechanism.",
+    "whyItFails": "A script that explains things this way more than once turns a device into a format. If the film later shows a real run on the bank, the question also starts to feel like a tease. The statement version is just as clear.",
+    "rewrite": "The bank couldn't have paid every depositor on the same morning, and it was never meant to. Most of the money had been lent out again, to farmers and builders, and the vault held only enough coin for an ordinary week.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-b-lighthouse-reframe",
+    "version": 1,
+    "text": "A lighthouse wasn't there to show a ship the way in. It was there to tell the captain where he was. Each light along the coast flashed in its own pattern, and a master who counted the seconds between flashes could find himself on the chart.",
+    "category": "explanation",
+    "quality": "borderline",
+    "traits": [
+      "contrast_formula",
+      "memorable_line",
+      "plain_language",
+      "concrete_detail",
+      "cause_and_effect"
+    ],
+    "strengths": [
+      "corrects an assumption most listeners hold",
+      "counting the seconds makes the mechanism concrete"
+    ],
+    "weaknesses": [
+      "the reversal overstates, since many lights did mark a way in",
+      "the wasn't-X-was-Y see-saw is the commonest machine reframe"
+    ],
+    "spokenRhythm": "Two short sentences in a matched see-saw, then a long sentence of mechanism.",
+    "narrativeFunction": "Explains what a coastal light was for, before the film reaches a stretch of coast where two lights were easy to confuse.",
+    "whyItWorks": "The reframe sharpens a real misunderstanding, and the counted flashes back it up at once with a mechanism the listener can follow.",
+    "whyItFails": "The see-saw is one of the clearest signatures of generated narration, and a second one anywhere nearby turns it into a tic. It also trades accuracy for neatness, because lights did both jobs, and the house would rather be right than quotable.",
+    "rewrite": "A lighthouse told a captain where he was. Each light along the coast flashed in its own pattern, and a master who counted the seconds between flashes could find himself on the chart.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

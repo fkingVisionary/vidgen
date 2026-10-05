@@ -1,0 +1,101 @@
+[
+  {
+    "id": "transition-b-wasnt-speed",
+    "version": 1,
+    "text": "What the railway sold at first wasn't speed. It was the timetable. A dairy farmer could know, a week ahead, the hour his milk would reach the city.",
+    "category": "transition",
+    "quality": "borderline",
+    "traits": [
+      "contrast_formula",
+      "memorable_line",
+      "transition_by_consequence",
+      "concrete_detail"
+    ],
+    "strengths": [
+      "the reframe is backed at once by a concrete example",
+      "short and quotable",
+      "moves the film from machinery to its users"
+    ],
+    "weaknesses": [
+      "it-wasn't-X-it-was-Y is the commonest machine reframe",
+      "slightly overclaims, since speed mattered too"
+    ],
+    "spokenRhythm": "A setup sentence, a short reversal, then a longer concrete sentence that pays it off.",
+    "narrativeFunction": "Turns the story from the engines to the people who organised their lives around them.",
+    "whyItWorks": "Once in a film, a single reframe like this can sharpen a point, and the dairy farmer makes it concrete rather than clever.",
+    "whyItFails": "The not-X-but-Y shape is one of the clearest signatures of generated narration. A second use anywhere nearby turns it into a formula, and the neat reversal flattens a more complicated truth about why people used the railway.",
+    "rewrite": "What the railway sold at first was the timetable. A dairy farmer could know, a week ahead, the hour his milk would reach the city.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-b-single-meanwhile",
+    "version": 1,
+    "text": "In the city, the directors spent the spring arguing over the size of the dividend. Meanwhile, out on the line, the engineer had stopped work on the tunnel. The rock was softer than his survey had said.",
+    "category": "transition",
+    "quality": "borderline",
+    "traits": [
+      "dramatic_transition",
+      "tension",
+      "chronology",
+      "concrete_detail",
+      "trust_the_viewer",
+      "dry_humour"
+    ],
+    "strengths": [
+      "the two threads really are simultaneous, so meanwhile is doing honest work",
+      "the irony of the dividend argument is left for the listener to see",
+      "the cause of the stoppage arrives as a plain fact, not a tease"
+    ],
+    "weaknesses": [
+      "meanwhile is the commonest scene-change label in generated narration",
+      "out on the line is a second signpost, so the cut is labelled twice"
+    ],
+    "spokenRhythm": "A long, even sentence in the boardroom, a sentence that pivots on its first word, then a short plain fact.",
+    "narrativeFunction": "Cuts from the directors to the works so the listener knows something the board does not.",
+    "whyItWorks": "Meanwhile is honest here because the two scenes happen at the same time and the gap between them is the point. Used once, at the moment the film's two threads come apart, it is the shortest way to say so.",
+    "whyItFails": "It is a label rather than a link, and the meaning survives without it. A script that changes scene with meanwhile every time sounds generic at once, and the house would usually rather let a date or a consequence carry the cut.",
+    "rewrite": "In the city, the directors spent the spring arguing over the size of the dividend. That same spring, out on the line, the engineer had stopped work on the tunnel. The rock was softer than his survey had said.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-b-ribbon-image",
+    "version": 1,
+    "text": "Year by year, the railway took the coal, the grain and the passengers. The canal that had been the town's main street became a ribbon of still water, left to the anglers.",
+    "category": "transition",
+    "quality": "borderline",
+    "traits": [
+      "metaphor_stack",
+      "visual_description",
+      "memorable_line",
+      "transition_by_consequence",
+      "scale"
+    ],
+    "strengths": [
+      "a slow decline compressed into two sentences",
+      "left to the anglers is dry and concrete",
+      "the first sentence carries real cause and effect"
+    ],
+    "weaknesses": [
+      "two figures of speech in one sentence",
+      "the ribbon of still water is the picture's job"
+    ],
+    "spokenRhythm": "A steady list of three, then a longer sentence that slows into an image and ends on a small, plain phrase.",
+    "narrativeFunction": "Closes the canal's story and hands the town over to the railway.",
+    "whyItWorks": "One clear image can hold a whole decline, and anglers on an idle canal is specific and faintly funny. The cause is stated before the image arrives.",
+    "whyItFails": "Main street and ribbon of still water are two figures stacked in one breath, and the ribbon describes what the shot of the canal will already show. Keep one image, and keep the one the picture cannot give.",
+    "rewrite": "Year by year, the railway took the coal, the grain and the passengers. The canal, once the town's busiest road, was left to the anglers.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

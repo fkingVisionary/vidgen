@@ -3,7 +3,7 @@ import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers, t
 import type { JobType } from '@docengine/core';
 import { createProviders, describeProviders, type ProviderSet } from '@docengine/providers';
 import { createResearchStage, type ResearchConfig } from '@docengine/research';
-import { ScriptEditing, createScriptStage, parseScriptModels, type ScriptConfig } from '@docengine/script';
+import { ScriptEditing, createScriptStage, parseNarrationModes, parseScriptModels, type ScriptConfig } from '@docengine/script';
 import { createStoryAnglesStage, createStoryArchitectureStage, createStoryMiningStage, type StoryConfig } from '@docengine/story';
 import { VoiceService, createVoiceStage, voiceGate, type VoiceStageConfig } from '@docengine/voice';
 import type { Logger } from 'pino';
@@ -56,7 +56,7 @@ export function createContainer(
     handlers.STORY_MINING = createStoryMiningStage(story);
     handlers.STORY_ARCHITECTURE = createStoryArchitectureStage(story);
     handlers.STORY_ANGLES = createStoryAnglesStage(story);
-    handlers.SCRIPT = createScriptStage({ maxCostUsd: env.SCRIPT_MAX_COST_USD, models: parseScriptModels(env.SCRIPT_MODELS), ...overrides.scriptConfig });
+    handlers.SCRIPT = createScriptStage({ maxCostUsd: env.SCRIPT_MAX_COST_USD, models: parseScriptModels(env.SCRIPT_MODELS), narration: parseNarrationModes(env.SCRIPT_NARRATION_MODES), ...overrides.scriptConfig });
     // Narration needs a real script; with a MOCK voice provider its takes are labelled MOCK (beep and silence).
     handlers.VOICE = createVoiceStage({ maxCharacters: env.VOICE_MAX_CHARACTERS, concurrency: env.VOICE_CONCURRENCY, ...overrides.voiceConfig });
   }

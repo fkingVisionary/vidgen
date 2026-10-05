@@ -19,6 +19,7 @@ import {
   VISUAL_INTENTS,
   VISUAL_PRIORITIES,
 } from '../enums.ts';
+import { NarrationRecord } from './writing.ts';
 
 /**
  * Script Engine 1.0 — the structured, provider-neutral script. A script
@@ -233,6 +234,8 @@ export const ScriptContent = z.object({
   provenance: ScriptProvenance,
   /** Every change the reviewers proposed in the run that made this version, and what became of each (versions before granular review have none). */
   reviewChanges: z.array(ScriptReviewChange).optional(),
+  /** Writing Engine 2: the Human Narration Pass of the run that made this version — corpus examples used, diagnostics before and after, money context, names, lineage (versions before it have none). */
+  narration: NarrationRecord.optional(),
 });
 export type ScriptContent = z.infer<typeof ScriptContent>;
 

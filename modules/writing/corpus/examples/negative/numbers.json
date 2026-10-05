@@ -1,0 +1,151 @@
+[
+  {
+    "id": "numbers-n-four-figures-one-breath",
+    "version": 1,
+    "text": "Incredibly, within just twenty years the company had laid 1,200 miles of track, hired 14,000 workers and was carrying 9 million passengers a year — a mind-blowing 200% increase on its first decade!",
+    "category": "numbers",
+    "quality": "bad",
+    "traits": [
+      "hype_adverb",
+      "em_dash",
+      "stock_phrase"
+    ],
+    "strengths": [
+      "the figures themselves are the right ones to show the railway's growth"
+    ],
+    "weaknesses": [
+      "four numbers in one breath",
+      "a percentage that leaves the listener unsure what grew",
+      "Incredibly and mind-blowing do the reacting"
+    ],
+    "spokenRhythm": "One long sentence that never pauses, ending on an exclamation.",
+    "narrativeFunction": "Meant to show the scale of a railway company's growth, but delivers it as a table read aloud.",
+    "whyItFails": "No listener can hold four figures said in one breath, and the percentage at the end asks for arithmetic while the narration rushes on. Numerals and a percentage sign are page syntax. Incredibly and mind-blowing tell the audience to be impressed instead of letting the numbers arrive one at a time.",
+    "rewrite": "Twenty years after its founding, the company had laid twelve hundred miles of track. It employed fourteen thousand people. Its trains carried nine million passengers a year. That was three times as many as in its first decade.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-n-heartbreaking-countdown",
+    "version": 1,
+    "text": "The numbers are nothing short of heartbreaking. Forty men set out. Twenty-two reached the river. Nine reached the coast. And only one would live to tell the tale.",
+    "category": "numbers",
+    "quality": "bad",
+    "traits": [
+      "emotion_explained",
+      "stock_phrase",
+      "fragment_run",
+      "length_repetition"
+    ],
+    "strengths": [
+      "the numbers do fall in a clear sequence"
+    ],
+    "weaknesses": [
+      "announces the emotion before the facts",
+      "four short sentences in the same mould",
+      "live to tell the tale is a stock ending"
+    ],
+    "spokenRhythm": "A verdict, then four clipped sentences that march in step toward a cliché.",
+    "narrativeFunction": "Meant to show an expedition's losses stage by stage, but turns them into a countdown.",
+    "whyItFails": "Calling the numbers heartbreaking tells the listener what to feel before they've heard them. The sentences that follow are all the same shape, so the rhythm becomes a drumbeat, and the stock phrase at the end makes a death toll sound like a trailer.",
+    "rewrite": "Forty men set out. By the time the party reached the river, there were twenty-two. Nine reached the coast, and only one of them survived.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-n-ice-that-doesnt-add-up",
+    "version": 1,
+    "text": "The truth is, the numbers simply don't add up. The company claimed to have shipped 50,000 tons of ice that season, but in reality the harbour records show just 31,412 tons. That's a staggering 37.2% discrepancy that has baffled historians for centuries.",
+    "category": "numbers",
+    "quality": "bad",
+    "traits": [
+      "truth_reveal",
+      "mystery_language",
+      "stock_phrase"
+    ],
+    "strengths": [
+      "setting the company's claim against the harbour's count is good detective work"
+    ],
+    "weaknesses": [
+      "The truth is and in reality frame a plain comparison as an exposé",
+      "an exact tonnage and a decimal percentage no listener can use",
+      "invents a puzzle among historians to make the gap sound mysterious"
+    ],
+    "spokenRhythm": "A declaration, a long sentence with two exact figures, and a closing statistic delivered as a headline.",
+    "narrativeFunction": "Meant to show that the ice company overstated its trade, but overloads the comparison and inflates it into a mystery.",
+    "whyItFails": "The comparison is interesting on its own. The truth is and in reality make it sound like an exposure, the exact tonnage and the decimal percentage are more precision than the ear can use, and baffled historians for centuries is a claim nobody checked, added to make the gap sound like a mystery. Set side by side and rounded, the two figures make the point without help.",
+    "rewrite": "The company said it had shipped fifty thousand tons of ice that season. The harbour records count a little over thirty-one thousand.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-n-bricks-end-to-end",
+    "version": 1,
+    "text": "How many bricks does it take to build a lighthouse? A thousand? Ten thousand? Try over a million! Laid end to end, they would stretch across the entire county, and every single one had to be rowed out to the rock by hand.",
+    "category": "numbers",
+    "quality": "bad",
+    "traits": [
+      "rhetorical_question",
+      "qa_pair",
+      "fragment_run",
+      "stock_phrase"
+    ],
+    "strengths": [
+      "the boats that carried every brick out to the rock are a strong concrete detail"
+    ],
+    "weaknesses": [
+      "a run of guesses the narrator answers himself",
+      "laid end to end is an invented comparison that nobody measured",
+      "the strongest fact is buried at the end of a long sentence"
+    ],
+    "spokenRhythm": "A question, two guesses, an exclamation, then a long sentence that puts its best fact last.",
+    "narrativeFunction": "Meant to convey the scale of building on the rock, but spends its energy on a guessing game.",
+    "whyItFails": "The questions are a quiz the viewer never asked to take, and the answer arrives with an exclamation. Laid end to end is a comparison invented to sound big, it says nothing about the work, and it may not even be true. The real measure of the job, that every brick went out by boat, is left as an afterthought.",
+    "rewrite": "The lighthouse took more than a million bricks to build, and every one of them was rowed out to the rock.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-n-trembling-roll-call",
+    "version": 1,
+    "text": "As the mine manager's trembling finger moves down the roll call, the terrible total comes into focus. Forty-seven men. Forty-seven families. Forty-seven empty chairs at the supper table. A heavy silence falls over the crowd at the pithead, thick with grief.",
+    "category": "numbers",
+    "quality": "bad",
+    "traits": [
+      "visual_description",
+      "emotion_explained",
+      "fragment_run",
+      "length_repetition",
+      "stock_phrase"
+    ],
+    "strengths": [
+      "the roll call is exactly the right document to carry the number"
+    ],
+    "weaknesses": [
+      "narrates a trembling finger and a silence the pictures would show",
+      "says the same number three times in fragments",
+      "tells the audience what the crowd felt"
+    ],
+    "spokenRhythm": "A long scene-setting sentence, three hammering fragments, and a slow sentence of mood.",
+    "narrativeFunction": "Meant to deliver the death toll of a mine disaster, but staggers it through description and repetition.",
+    "whyItFails": "The trembling finger and the silence over the crowd describe what the picture can show, and terrible and thick with grief tell the listener what to feel. Repeating the number in three fragments turns it into a drumbeat, and the empty chairs are decoration. The roll call is strong enough to carry the number once, plainly.",
+    "rewrite": "When the roll was called at the pithead, forty-seven men did not answer.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

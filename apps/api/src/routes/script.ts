@@ -1,10 +1,10 @@
-import { GenerateScriptInput, RefineScriptInput, ReorderScriptBlocksInput, RestoreScriptInput, ReviewScriptSectionInput, ReviseScriptInput, UpdateScriptBlockInput } from '@docengine/core';
+import { GenerateScriptInput, NarrateScriptInput, RefineScriptInput, ReorderScriptBlocksInput, RestoreScriptInput, ReviewScriptSectionInput, ReviseScriptInput, UpdateScriptBlockInput } from '@docengine/core';
 import { ConflictError, NotFoundError } from '@docengine/pipeline';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { actorOf } from '../auth.ts';
 import type { AppContainer } from '../container.ts';
-import { loadScriptCompare, loadScriptView, loadVoicePlan, ownerOfBlock, ownerOfSection } from '../script-views.ts';
+import { loadScriptCompare, loadScriptEditorial, loadScriptView, loadVoicePlan, ownerOfBlock, ownerOfSection } from '../script-views.ts';
 import { findProject, toJobView } from '../views.ts';
 
 const ProjectParams = z.object({ id: z.string().trim().min(1).max(100) });
@@ -69,6 +69,24 @@ export async function scriptRoutes(app: FastifyInstance, c: AppContainer): Promi
     requireReal();
     const job = await c.projects.refineScript(project.id, input, actorOf(req));
     return reply.code(202).send(toJobView(job));
+  });
+
+  /** The Human Narration Pass on a version (Writing Engine 2: targeted edits, evidence unchanged): a new version. */
+  app.post('/api/projects/:id/script/narrate', async (req, reply) => {
+    const project = await requireProject(req.params);
+    const input = NarrateScriptInput.parse(req.body ?? {});
+    requireReal();
+    const job = await c.projects.narrateScript(project.id, input, actorOf(req));
+    return reply.code(202).send(toJobView(job));
+  });
+
+  /** A version through the writing engine: its narration pass, diagnostics now, change report against its base, semantic layers. */
+  app.get('/api/projects/:id/script/versions/:version/editorial', async (req) => {
+    const project = await requireProject(req.params);
+    const version = Version.parse((req.params as { version?: unknown }).version);
+    const view = await loadScriptEditorial(c.db, project.id, version);
+    if (!view) throw new NotFoundError('Script', `v${version}`);
+    return view;
   });
 
   /** Make an earlier version current again, as a new version (no model calls). */

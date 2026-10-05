@@ -1,0 +1,198 @@
+[
+  {
+    "id": "context-p-answer-next-year",
+    "version": 1,
+    "text": "A letter from the colony took about four months to reach the company's directors at home. A governor who asked them a question could expect the answer some time the following year. Most governors stopped asking.",
+    "category": "context",
+    "quality": "excellent",
+    "traits": [
+      "number_in_context",
+      "dry_humour",
+      "cause_and_effect",
+      "trust_the_viewer",
+      "restraint",
+      "rhythm_variation",
+      "memorable_line",
+      "plain_language"
+    ],
+    "strengths": [
+      "one number, then what it meant in practice",
+      "the last line explains a whole way of governing in four words",
+      "distance and authority are never named, and the listener infers both"
+    ],
+    "weaknesses": [
+      "the generalisation in the last line needs the film's sources behind it"
+    ],
+    "spokenRhythm": "Two medium sentences that build the delay, then a four-word line that lands it.",
+    "narrativeFunction": "Gives the listener the one fact they need to understand why the men on the spot acted on their own.",
+    "whyItWorks": "The number arrives with its consequence, so four months becomes a question nobody could afford to wait on. The closing line is short and dry, and it does the work of a paragraph about distance and power without using either word.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-p-where-the-whaler-turned",
+    "version": 1,
+    "text": "Nobody on the expedition had been further south than the whaling grounds. The best chart aboard had been drawn from a whaling captain's log, and it stopped where his ship had turned round.",
+    "category": "context",
+    "quality": "good",
+    "traits": [
+      "concrete_detail",
+      "scale",
+      "tension",
+      "restraint",
+      "plain_language",
+      "trust_the_viewer",
+      "source_as_detective_work"
+    ],
+    "strengths": [
+      "the limit of knowledge is a place on a chart, set by one ship's turning point",
+      "the unknown is never called the unknown",
+      "turned round is plain and quietly unsettling"
+    ],
+    "weaknesses": [
+      "a chart drawn from a captain's log is a specific claim the film's sources would need to support",
+      "the second sentence carries two clauses and needs a breath after log"
+    ],
+    "spokenRhythm": "A plain statement of experience, then a longer sentence that ends on a short, ordinary phrase.",
+    "narrativeFunction": "Tells the listener how little the expedition knew before it sailed.",
+    "whyItWorks": "It gives the scale of what was unknown without a single adjective about it. The edge of the map is simply the point where another man decided to go home, which the listener feels without being told. It is good rather than excellent because the second sentence is a little long for the ear.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-p-trains-carried-other-people",
+    "version": 1,
+    "text": "A third-class ticket to the city cost four shillings. A farm labourer in the valley earned about ten shillings a week. For years, the trains that ran past the fields he worked carried other people.",
+    "category": "context",
+    "quality": "excellent",
+    "traits": [
+      "money_context",
+      "number_in_context",
+      "human_stakes",
+      "dry_humour",
+      "trust_the_viewer",
+      "one_idea_per_sentence",
+      "restraint",
+      "memorable_line"
+    ],
+    "strengths": [
+      "the fare is set against a wage from the same place and time",
+      "one number per sentence",
+      "the listener draws the conclusion before the last line confirms it"
+    ],
+    "weaknesses": [
+      "the listener has to do a quick sum in their head"
+    ],
+    "spokenRhythm": "Two short, even sentences that set two numbers side by side, then a longer, quieter line.",
+    "narrativeFunction": "Puts the new railway in the context of what ordinary people in the valley could afford.",
+    "whyItWorks": "The price means nothing until it meets the wage, and both come from the same valley at the same time. The narration never says the railway was for the better off. It says whom the trains carried, and lets the listener do the sum.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-p-water-by-the-bucket",
+    "version": 1,
+    "text": "The town had no river. Its water came up from the valley in barrels, on mules, and it was sold by the bucket in the street. The price rose through the summer. When a fire started, there was very little to put it out with.",
+    "category": "context",
+    "quality": "excellent",
+    "traits": [
+      "concrete_detail",
+      "cause_and_effect",
+      "tension",
+      "human_stakes",
+      "rhythm_variation",
+      "plain_language",
+      "one_idea_per_sentence"
+    ],
+    "strengths": [
+      "one absence explains daily life and a future danger",
+      "the bucket and the mule make the hardship concrete",
+      "the fire is set up as a fact, not a tease"
+    ],
+    "weaknesses": [
+      "the fire line points forward, so the film must reach a fire soon after"
+    ],
+    "spokenRhythm": "A five-word statement, a longer sentence of logistics, a short line about price, then a medium sentence that turns towards danger.",
+    "narrativeFunction": "Gives the listener the condition of the town that will matter most later in the film.",
+    "whyItWorks": "The context is a single absence followed through. The listener learns how people got water, what it cost them and what it meant in a fire, in that order, without being told the town was vulnerable. The last line plants something the film will use, and states it as a fact rather than a promise.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-p-read-aloud-at-the-inn",
+    "version": 1,
+    "text": "In the market town, perhaps one man in three could read, and fewer women. News still travelled mostly by word of mouth, on market day and after church. A printed notice nailed up at the inn was usually read aloud, by whoever could.",
+    "category": "context",
+    "quality": "good",
+    "traits": [
+      "hedge_natural",
+      "concrete_detail",
+      "plain_language",
+      "dry_humour",
+      "one_idea_per_sentence",
+      "human_stakes"
+    ],
+    "strengths": [
+      "the hedge sits inside the sentence",
+      "the notice read aloud shows what literacy meant in practice",
+      "by whoever could is dry and specific"
+    ],
+    "weaknesses": [
+      "and fewer women is a compressed afterthought some listeners will miss",
+      "the middle sentence is a familiar generalisation"
+    ],
+    "spokenRhythm": "A sentence with a short tail, a medium sentence that names two gatherings, then a line that ends on a dry three-word phrase.",
+    "narrativeFunction": "Tells the listener how printed words reached people who couldn't read them, before the film turns to one printed notice.",
+    "whyItWorks": "The literacy figure is hedged the way a person would hedge it, and its meaning arrives in the picture of a notice being read out at the inn. It is good rather than excellent because its middle sentence is the most general line in it.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-p-paying-for-the-neighbours",
+    "version": 1,
+    "text": "Relief in the parish was paid for out of the rates, a local tax on anyone who owned or rented property there. In a bad year, the farmers who were losing their crops were the same people being asked to pay more to feed their neighbours.",
+    "category": "context",
+    "quality": "good",
+    "traits": [
+      "cause_and_effect",
+      "human_stakes",
+      "tension",
+      "plain_language",
+      "trust_the_viewer",
+      "restraint",
+      "spoken_clarity"
+    ],
+    "strengths": [
+      "the term is explained in the same breath it is used",
+      "the second sentence turns a tax into a dilemma",
+      "nobody is cast as a villain"
+    ],
+    "weaknesses": [
+      "the rates is a term some listeners will not know, so the gloss has to stay",
+      "the gloss is accurate but sounds like a dictionary"
+    ],
+    "spokenRhythm": "A medium sentence with a short gloss after its comma, then a long sentence that tightens towards its end.",
+    "narrativeFunction": "Explains why famine relief was resented by the people who paid for it, before the film reaches the arguments over it.",
+    "whyItWorks": "The listener gets the one piece of machinery they need, and then sees the pressure it created. Nobody is judged, and the quarrel the film shows next already makes sense before it starts. It is good rather than excellent because the gloss on the rates reads like a definition and the line never reaches a memorable turn.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

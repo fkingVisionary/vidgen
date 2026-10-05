@@ -199,6 +199,26 @@ stages. A project whose architecture is approved shows a **Script** page:
 fact checker, performance) and stops in *Script review*. Nothing is voiced;
 approving the script does not start anything.
 
+## Deploying Writing Engine 2
+
+No new services, no new required variables. The pre-deploy command applies
+migration `20261005130000_writing_engine_2`, which is additive only: one new
+enum (`WritingExampleStatus`) and one new table (`writing_examples`, the house
+candidates from approved scripts). No existing row is changed; the Voice
+Engine's tables and code are untouched.
+
+The script prompt version changed (`script-2.0-2026-10-05.1`) and the script
+job has a new step, `narrate`: a Retry of a script job started before the
+deploy starts its model calls again. A draft now makes six model calls
+(planner, writer, narration pass, script editor, fact checker, performance);
+a refinement or a section rewrite five; the stand-alone **narration pass** on
+a version (Script page → *Human Narration Pass on vN*) four. Set
+`SCRIPT_NARRATION_MODES=none` to keep drafts and refinements at their earlier
+cost and run the pass only on demand.
+
+The corpus is part of the build (`modules/writing/corpus`, bundled): nothing to
+upload. The **House style** page (`/writing`) shows it.
+
 ## Deploying the narrative refinement
 
 No migration, no new variables. The script prompt version changed
@@ -266,7 +286,8 @@ agreed, but they are not read yet.
 | `RESEARCH_MAX_SOURCES` | `45` | ✓ | Sources whose full text is retrieved and read per run |
 | `STORY_MAX_COST_USD` | `15` | ✓ | Per-job ceiling for story mining, story architecture (and revisions) and angle explorations; the job stops (FAILED, not retried) once recorded spend passes it |
 | `SCRIPT_MAX_COST_USD` | `15` | ✓ | Per-job ceiling for a script draft, section rewrite or revision; same behaviour |
-| `SCRIPT_MODELS` | — | ✓ | Optional per-step models for the script, e.g. `perform=<model>,edit=<model>` (steps: plan, write, edit, factCheck, perform); unset steps use `AI_MODEL`. With the real AI provider, a malformed value stops the server at startup |
+| `SCRIPT_MODELS` | — | ✓ | Optional per-step models for the script, e.g. `perform=<model>,edit=<model>` (steps: plan, write, narrate, edit, factCheck, perform); unset steps use `AI_MODEL`. With the real AI provider, a malformed value stops the server at startup |
+| `SCRIPT_NARRATION_MODES` | `all` | ✓ | Writing Engine 2: the script modes the Human Narration Pass runs in — `all`, `none` (only the stand-alone narration pass), or a list such as `DRAFT,REFINEMENT`. A malformed value stops the server at startup |
 | `WEB_DIST_DIR` | `apps/web/dist` | ✓ | Override only for unusual layouts |
 | `RAILWAY_GIT_COMMIT_SHA` | — | ✓ | Set by Railway; shown in `/api/health` |
 | `TEST_DATABASE_URL` | — | tests | Integration tests only; DB name must contain `test` |

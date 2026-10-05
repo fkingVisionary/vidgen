@@ -181,3 +181,29 @@ export const PerformanceOutput = z.object({
   notes: z.array(z.string()),
 });
 export type PerformanceOutput = z.infer<typeof PerformanceOutput>;
+
+/** What a narration edit fixes (for the change report). */
+export const NARRATION_FIXES = ['AI_PATTERN', 'RHYTHM', 'CLARITY', 'DENSITY', 'CONTEXT', 'VISUAL_SEPARATION'] as const;
+
+/**
+ * Stage B½ — the Human Narration Pass (Writing Engine 2): edits to block
+ * texts only. Code keeps every block's claims, beats, class, speaker, visual
+ * direction and delivery; money context it cites adds the claims it rests on.
+ */
+export const NarrationOutput = z.object({
+  verdict: z.string(),
+  edits: z.array(
+    z.object({
+      ref: z.string(),
+      text: z.string(),
+      reason: z.string(),
+      fixes: z.array(z.enum(NARRATION_FIXES)),
+      /** Money context ids ("M2") the new text uses. */
+      moneyContext: z.array(z.string()),
+      /** Picture description moved out of the narration, for the visual layer. */
+      visualNote: z.string().nullable(),
+    }),
+  ),
+  kept: z.array(z.string()),
+});
+export type NarrationOutput = z.infer<typeof NarrationOutput>;

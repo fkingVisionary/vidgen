@@ -1,6 +1,8 @@
 export { createScriptStage } from './stage.ts';
-export { DEFAULT_SCRIPT_CONFIG, SCRIPT_STEPS, parseScriptModels, type ScriptConfig, type ScriptStep } from './config.ts';
-export { PROMPT_VERSION, REFINEMENT_CHECKLIST } from './prompts.ts';
+export { DEFAULT_SCRIPT_CONFIG, SCRIPT_MODES, SCRIPT_STEPS, parseNarrationModes, parseScriptModels, type ScriptConfig, type ScriptMode, type ScriptStep } from './config.ts';
+export { NARRATION_CHECKLIST, PROMPT_VERSION, REFINEMENT_CHECKLIST } from './prompts.ts';
+export { knownNames, moneyUses, narrationBlocks, scopeMoney, scriptNames } from './editorial.ts';
+export { uncertaintyOf } from './narration.ts';
 export { ScriptEditing, scopeFor, recheck } from './editing.ts';
 export { compareDrafts, diffBlocks, evidenceChanges, voicePlan, wordDiff } from './compare.ts';
 export { SCRIPT_INCLUDE, loadById, loadVersion, toDraft, type LoadedScript, type ScriptRow } from './store.ts';

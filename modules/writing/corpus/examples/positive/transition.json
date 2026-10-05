@@ -1,0 +1,197 @@
+[
+  {
+    "id": "transition-p-banana-price-list",
+    "version": 1,
+    "text": "The first cargo of bananas sold for whatever the captain could get before they turned black in the hold. Three summers later, there was a ripening shed on the quay. The newspaper printed the price every week, between coffee and sugar.",
+    "category": "transition",
+    "quality": "excellent",
+    "traits": [
+      "transition_by_consequence",
+      "chronology",
+      "concrete_detail",
+      "reveal_not_announce",
+      "trust_the_viewer",
+      "scale",
+      "restraint"
+    ],
+    "strengths": [
+      "three summers pass in one clause",
+      "the price list shows a perishable novelty becoming ordinary",
+      "no announcement that things changed"
+    ],
+    "weaknesses": [
+      "the three summers are skipped, so the next section has to show how the trade actually got going"
+    ],
+    "spokenRhythm": "A long opening sentence of risk, a short one that jumps the years, then a medium line that lands on an ordinary list.",
+    "narrativeFunction": "Moves the story from a gamble to an established trade by showing where the price ended up.",
+    "whyItWorks": "The transition is carried by the price itself. A cargo sold in a hurry becomes a commodity listed beside groceries, and the listener understands the change without being told that everything changed.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-p-coal-and-carters",
+    "version": 1,
+    "text": "The canal opened in the spring, and by the autumn the price of coal in the town had fallen by almost half. The carters who had hauled it over the hill road had a year, perhaps two, to find other work.",
+    "category": "transition",
+    "quality": "excellent",
+    "traits": [
+      "transition_by_consequence",
+      "cause_and_effect",
+      "human_stakes",
+      "hedge_natural",
+      "number_in_context",
+      "plain_language",
+      "rhythm_variation"
+    ],
+    "strengths": [
+      "one event, one price, one group of people",
+      "the hedge sits naturally inside the sentence",
+      "the winners are implied, the losers named"
+    ],
+    "weaknesses": [
+      "depends on the next section actually following the carters"
+    ],
+    "spokenRhythm": "A long sentence that runs from spring to autumn, then a shorter one with a small pause around its hedge.",
+    "narrativeFunction": "Turns the opening of the canal into a consequence for a specific trade and hands the film to its next characters.",
+    "whyItWorks": "The transition happens through cause and effect, not a signpost. The price fall is good news for the town and bad news for the carters, and the narration lets both be true in two sentences.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-p-paper-bill",
+    "version": 1,
+    "text": "The book carried the son's name for forty years. The first doubt came from a bill for the paper it was printed on, found in a solicitor's files long after the family had died out. It was made out to his mother, and she had signed for the delivery.",
+    "category": "transition",
+    "quality": "excellent",
+    "traits": [
+      "source_as_detective_work",
+      "reveal_not_announce",
+      "character_intro",
+      "chronology",
+      "concrete_detail",
+      "curiosity",
+      "trust_the_viewer"
+    ],
+    "strengths": [
+      "new evidence carries the turn",
+      "a humble document rather than a dramatic discovery",
+      "introduces a new character through a signature"
+    ],
+    "weaknesses": [
+      "the middle sentence is long and needs a breath after printed on",
+      "a signature on a delivery is thin evidence, so the film must not treat it as proof"
+    ],
+    "spokenRhythm": "A short statement of the accepted story, a long sentence that tracks the evidence, then a medium one that delivers the name.",
+    "narrativeFunction": "Moves the film from the received story of authorship to the investigation of the mother.",
+    "whyItWorks": "Nothing is announced as a twist. The evidence is ordinary, a bill and a signature, and the listener draws the conclusion before the narrator would need to say it.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-p-lifeboat-appeal",
+    "version": 1,
+    "text": "The lifeboat appeal raised eleven hundred pounds that winter. A fisherman in the harbour might clear thirty in a good season. The boat cost less than half of what came in. The treasurer's book records her price, and after that it has very little to say.",
+    "category": "transition",
+    "quality": "good",
+    "traits": [
+      "money_context",
+      "number_in_context",
+      "source_as_detective_work",
+      "tension",
+      "curiosity",
+      "one_idea_per_sentence",
+      "dry_humour",
+      "trust_the_viewer"
+    ],
+    "strengths": [
+      "the sum is set against a fisherman's season in the same harbour",
+      "one number per sentence, and the third figure is a fraction the ear can hold",
+      "the missing money is left for the listener to work out",
+      "no accusation is made"
+    ],
+    "weaknesses": [
+      "the first three sentences are of similar length, so the read has to slow into the last one",
+      "the dry close implies wrongdoing that the next section must examine fairly"
+    ],
+    "spokenRhythm": "Three short factual sentences that stack up the money, then a longer, quieter sentence that lets the record trail off.",
+    "narrativeFunction": "Moves the film from the fundraising to the question of what happened to the rest of the money.",
+    "whyItWorks": "The transition is an open question built from the evidence, not a tease. The fisherman's earnings give the sum its weight, the boat's cost leaves more than half unaccounted for, and the treasurer's silence makes the listener lean in without the narrator suggesting anything.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-p-inn-on-the-point",
+    "version": 1,
+    "text": "Ships bound for the town used to wait at the river mouth for the tide, sometimes for days. Once the channel was dredged, they came straight in. The inn on the point had lived on waiting crews for a century. Within a year, it was up for sale.",
+    "category": "transition",
+    "quality": "good",
+    "traits": [
+      "transition_by_consequence",
+      "cause_and_effect",
+      "concrete_detail",
+      "chronology",
+      "one_idea_per_sentence",
+      "trust_the_viewer"
+    ],
+    "strengths": [
+      "the dredging is felt through a loss rather than praised",
+      "a single building stands for the old order",
+      "ends on the consequence, with no comment on what it meant"
+    ],
+    "weaknesses": [
+      "the cause sits in a short subordinate clause, so the second sentence must not be rushed",
+      "depends on the film having shown the waiting ships, or the inn's trade means little"
+    ],
+    "spokenRhythm": "A long sentence of the old routine, a short one for the change, a steady one that gives the inn its history, then a very short plain close.",
+    "narrativeFunction": "Carries the film from an improvement to the harbour to its first casualty.",
+    "whyItWorks": "It moves forward through consequence. The listener does not need to be told the dredging changed the town, because the inn being for sale says it.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "transition-p-knowing-first",
+    "version": 1,
+    "text": "Before the cable, news of a price on the far side of the ocean came by ship, three weeks old. Once the cable was working, it came the same afternoon. The merchants who had made their living by knowing first now needed some other advantage.",
+    "category": "transition",
+    "quality": "good",
+    "traits": [
+      "transition_by_consequence",
+      "cause_and_effect",
+      "scale",
+      "plain_language",
+      "human_stakes",
+      "dry_humour"
+    ],
+    "strengths": [
+      "the change is measured in the age of the news",
+      "names who lost by it",
+      "ends on a problem, not a tease"
+    ],
+    "weaknesses": [
+      "the closing line is abstract and wants a named merchant soon after"
+    ],
+    "spokenRhythm": "A long sentence for the old world, a short one for the new, then a medium sentence that turns to the people affected.",
+    "narrativeFunction": "Moves from the technology to its consequences for a group whose business depended on delay.",
+    "whyItWorks": "The transition goes through consequence. Three weeks shrinking to an afternoon is felt rather than celebrated, and the last sentence points the story toward the people who now had a problem.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

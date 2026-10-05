@@ -1,0 +1,98 @@
+[
+  {
+    "id": "numbers-b-eleven-stalls-echo",
+    "version": 1,
+    "text": "The new market hall was built for three hundred stalls. On the first day, eleven were let. Eleven. The other traders stayed in the street outside, where nobody charged them rent.",
+    "category": "numbers",
+    "quality": "borderline",
+    "traits": [
+      "fragment_run",
+      "number_in_context",
+      "dry_humour",
+      "cause_and_effect"
+    ],
+    "strengths": [
+      "the echo gives the listener a beat to measure eleven against three hundred",
+      "the last sentence explains the failure with a dry, practical reason"
+    ],
+    "weaknesses": [
+      "repeating a number is an emphasis device the listener notices",
+      "the echo underlines a contrast that is already clear"
+    ],
+    "spokenRhythm": "A plain opener, a short count, a one-word echo with a pause around it, and a longer, easy close.",
+    "narrativeFunction": "Shows a civic project failing on its first day, and why.",
+    "whyItWorks": "Once in a film, an echoed number can act like a held shot. It gives the listener a second to feel the gap between three hundred and eleven before the narration moves on.",
+    "whyItFails": "The echo is the narrator nudging the listener, and a single fragment is the first step toward the run of fragments the house avoids. Used a second time in the same film, it becomes a mannerism. Here the contrast is clear without it, so the plain version is usually the better choice.",
+    "rewrite": "The new market hall was built for three hundred stalls, and on the first day eleven were let. The other traders stayed in the street outside, where nobody charged them rent.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-b-one-every-ten-seconds",
+    "version": 1,
+    "text": "At its busiest, the telegraph office at the exchange handled nine thousand messages a day. Spread evenly around the clock, that would be one every ten seconds. The company kept forty boys on the payroll just to carry them across the street.",
+    "category": "numbers",
+    "quality": "borderline",
+    "traits": [
+      "scale",
+      "number_in_context",
+      "concrete_detail",
+      "spoken_clarity"
+    ],
+    "strengths": [
+      "the forty messenger boys turn traffic into people",
+      "the derived rate is easy to hear, and the narrator says it is an average"
+    ],
+    "weaknesses": [
+      "the average describes a steady stream the office never had",
+      "the narrator's own sum sits between two facts from the record"
+    ],
+    "spokenRhythm": "A medium sentence with the total, a shorter one with the derived rate, and a longer close that brings in people.",
+    "narrativeFunction": "Gives the scale of a busy telegraph office at the height of its trade.",
+    "whyItWorks": "Breaking a daily total into seconds can make a large number felt at speaking speed, and here the narrator admits it is an average. Once, in a sequence about the speed of the wire, it can earn its place.",
+    "whyItFails": "One every so many seconds is a formula generated scripts reach for whenever a total appears, and a second use in the same film turns it into a habit. The average also implies an even flow, when traffic at an exchange would have come in rushes. The forty boys already make the scale human, and they come from the record.",
+    "rewrite": "At its busiest, the telegraph office at the exchange handled nine thousand messages a day. The company kept forty boys on the payroll just to carry them across the street.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-b-trade-drained-like-a-river",
+    "version": 1,
+    "text": "In its best season, the post took in six thousand pelts. Within ten years the trade had drained away like a river in a dry summer, and the trappers were bringing in almost none. The beaver had gone from every stream within a week's paddle of the post.",
+    "category": "numbers",
+    "quality": "borderline",
+    "traits": [
+      "metaphor_stack",
+      "chronology",
+      "number_in_context",
+      "cause_and_effect",
+      "scale"
+    ],
+    "strengths": [
+      "the image comes from the story's own landscape of rivers and streams",
+      "the collapse lands without a second count",
+      "the cause follows in a plain sentence"
+    ],
+    "weaknesses": [
+      "the simile does work that almost none already does",
+      "drained, river and dry summer lean toward a stack of images",
+      "a second image nearby would tip the passage into decoration"
+    ],
+    "spokenRhythm": "A plain sentence with the peak, a long sentence that carries the image and the collapse, and a plain close that gives the cause.",
+    "narrativeFunction": "Tells the rise and collapse of a fur post's trade across a decade.",
+    "whyItWorks": "One image can give a decline a shape the ear holds on to. This one belongs to the world of the story, so it sits naturally beside the beaver streams of the last sentence, and it carries ten years without a list of yearly counts.",
+    "whyItFails": "Almost none is already stark, and the simile softens it into prose. Images like this come easily, and once a film has one for every turn, the listener starts hearing the writing instead of the history. It works once in a sequence at most, and only when nothing else nearby is figurative.",
+    "rewrite": "In its best season, the post took in six thousand pelts. Within ten years the trappers were bringing in almost none. The beaver had gone from every stream within a week's paddle of the post.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

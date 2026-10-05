@@ -1,0 +1,204 @@
+[
+  {
+    "id": "explanation-p-debt-by-letter",
+    "version": 1,
+    "text": "A cloth merchant in the port owed money to a dyer three hundred miles inland. Sending coin by road meant hiring guards and waiting weeks. So he paid a banker in the port instead. The banker wrote to his partner in the dyer's town, and the partner paid the dyer out of his own strongbox. The money crossed the country as a letter, and the bankers charged a little at each end for the trouble.",
+    "category": "explanation",
+    "quality": "excellent",
+    "traits": [
+      "plain_language",
+      "cause_and_effect",
+      "concrete_detail",
+      "one_idea_per_sentence",
+      "memorable_line",
+      "dry_humour",
+      "rhythm_variation",
+      "spoken_clarity"
+    ],
+    "strengths": [
+      "a financial instrument explained through one debt and four people",
+      "the problem, the cost of moving coin, comes before the solution",
+      "the line about the letter is both the memorable line and the plainest summary",
+      "for the trouble is dry without winking"
+    ],
+    "weaknesses": [
+      "how the two bankers settled with each other is left for the next line",
+      "four people in five sentences asks the listener to keep track"
+    ],
+    "spokenRhythm": "A long setup, a short statement of the problem, a short turn, a longer line of mechanism, then a line that lands on a plain idea and an afterthought.",
+    "narrativeFunction": "Explains how a debt could be paid across a country without moving coin, before the film follows the bankers who grew rich on it.",
+    "whyItWorks": "It never names the instrument or defines a term. It follows one debt from the man who owed it to the man who was paid, so the listener understands the mechanism by watching it work. The summary line comes only after the listener has already grasped the idea, which is why it sounds earned rather than clever.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-p-sawdust-in-the-hold",
+    "version": 1,
+    "text": "A block of ice melts from the outside in. In a hold packed full of square-cut blocks, most of the ice had no outside at all. It touched only other ice. The shippers filled the gaps with sawdust, which the timber mills along the river had been paying carters to take away.",
+    "category": "explanation",
+    "quality": "excellent",
+    "traits": [
+      "plain_language",
+      "cause_and_effect",
+      "concrete_detail",
+      "dry_humour",
+      "trust_the_viewer",
+      "rhythm_variation",
+      "one_idea_per_sentence",
+      "spoken_clarity"
+    ],
+    "strengths": [
+      "starts from something every listener has seen in a kitchen",
+      "the physics is told in everyday words",
+      "the sawdust turns a waste into a cargo without saying so"
+    ],
+    "weaknesses": [
+      "moves from present tense to past after the first sentence, which needs a clean read"
+    ],
+    "spokenRhythm": "A short plain statement, a longer sentence that builds the hold, a five-word line that lets the idea settle, then a long sentence with a dry turn at its end.",
+    "narrativeFunction": "Explains how ice survived a long voyage, and quietly introduces the cheap material that made the trade pay.",
+    "whyItWorks": "It explains a piece of physics without a technical word, by starting from a fact the listener already knows and following it into the hold. The last clause carries the economics as a small joke the narrator never points at, with the mills' rubbish becoming the trade's packing.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-p-one-sheet-at-a-time",
+    "version": 1,
+    "text": "A printer could only set as many pages as he had type for. In a small shop, that might be one sheet of a book at a time. Once the sheet was printed, the type was broken up and sorted back into the cases to set the next. So a mistake noticed in chapter two, after its sheet had gone through the press, was in every copy. The best he could do was print a list of corrections at the back.",
+    "category": "explanation",
+    "quality": "good",
+    "traits": [
+      "cause_and_effect",
+      "plain_language",
+      "chronology",
+      "concrete_detail",
+      "one_idea_per_sentence",
+      "spoken_clarity",
+      "trust_the_viewer"
+    ],
+    "strengths": [
+      "the constraint, the routine and the consequence each get a sentence",
+      "a workshop process explained without a trade term",
+      "the list of corrections at the back is a consequence a listener could hold in their hand",
+      "the best he could do is a quiet shrug in the narrator's own voice"
+    ],
+    "weaknesses": [
+      "five sentences is long for one idea",
+      "the third sentence is passive and sounds a little like a manual"
+    ],
+    "spokenRhythm": "Even, medium sentences that walk through the workshop routine step by step, then a shorter closing line that settles on the remedy.",
+    "narrativeFunction": "Explains why early books carried their errors to the end, before the film reaches a book whose mistakes mattered.",
+    "whyItWorks": "The listener learns about type and sheets only because they lead to a mistake that could not be taken back, and the list of corrections at the back turns that consequence into something a reader of the time would have seen. It is a good model rather than an excellent one because the middle is a little procedural.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-p-noon-by-head-office",
+    "version": 1,
+    "text": "Every town kept its own time by the sun, so noon in the port came a few minutes before noon in the market town to the west. A stagecoach could live with the difference. A railway with one track, and trains running towards each other on it, could not. The company set every station clock on the line by the clock at its head office, and one by one the towns set theirs by the station.",
+    "category": "explanation",
+    "quality": "excellent",
+    "traits": [
+      "cause_and_effect",
+      "tension",
+      "trust_the_viewer",
+      "plain_language",
+      "rhythm_variation",
+      "reveal_not_announce",
+      "human_stakes",
+      "chronology"
+    ],
+    "strengths": [
+      "the danger is implied and never named",
+      "the stagecoach gives the listener the world before",
+      "the last clause shows the railway quietly taking over the town's clock"
+    ],
+    "weaknesses": [
+      "to the west sounds a little like a direction on a page",
+      "the final sentence carries two steps and needs a breath after head office"
+    ],
+    "spokenRhythm": "A long opening that sets out the problem, two shorter sentences that turn on could and could not, then a long resolving sentence.",
+    "narrativeFunction": "Explains why the railway put one time on its whole line, and shows its quiet power over the places it served.",
+    "whyItWorks": "The listener works out for themselves what two clocks and one track could lead to, so the narration never has to say collision. The two middle sentences make the contrast through a situation rather than a formula, and the ending hands the town's clock to the railway without comment.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-p-barrels-over-the-side",
+    "version": 1,
+    "text": "In a storm, a master might lighten his ship by throwing cargo overboard. The merchant whose barrels went over the side had lost his goods to save everyone else's. So an old custom of the sea shared the loss out. Every owner with goods aboard paid towards it, in proportion to what he had in the hold, and the owners of the ship paid their share as well.",
+    "category": "explanation",
+    "quality": "good",
+    "traits": [
+      "cause_and_effect",
+      "plain_language",
+      "human_stakes",
+      "one_idea_per_sentence",
+      "spoken_clarity",
+      "restraint"
+    ],
+    "strengths": [
+      "a rule of maritime law explained through one merchant's barrels",
+      "the unfairness comes before the rule that fixes it",
+      "no legal term is needed"
+    ],
+    "weaknesses": [
+      "in proportion to what he had in the hold is a written phrase",
+      "an old custom of the sea is a little grand for what follows",
+      "the last sentence carries two payers and needs a clean breath before the owners of the ship"
+    ],
+    "spokenRhythm": "A plain situation, a sentence that turns on the unfairness, a short rule, then a longer line that spreads the cost around.",
+    "narrativeFunction": "Explains how a loss at sea was shared before the film turns to the insurers who took on the rest.",
+    "whyItWorks": "The rule makes sense because the listener meets the unfairness first. One merchant's barrels saved everyone's goods, so everyone paying feels right before the narration says that they did. It is good rather than excellent because the last sentence slips into the phrasing of a legal text.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-p-two-apprentices",
+    "version": 1,
+    "text": "The guild allowed each master two apprentices, and no more. A master with a dozen boys working for their keep could have undersold the whole street. The rule held prices up. It also kept down the number of young men who would one day be masters themselves, which suited the men who already were.",
+    "category": "explanation",
+    "quality": "excellent",
+    "traits": [
+      "dry_humour",
+      "cause_and_effect",
+      "plain_language",
+      "trust_the_viewer",
+      "memorable_line",
+      "rhythm_variation",
+      "one_idea_per_sentence",
+      "human_stakes"
+    ],
+    "strengths": [
+      "a rule explained by what it prevented",
+      "the second motive is the real one, and it arrives last",
+      "the closing clause is dry without a wink"
+    ],
+    "weaknesses": [
+      "boys working for their keep is a generalisation the film's sources would need to support"
+    ],
+    "spokenRhythm": "A short rule, a longer sentence of what it prevented, a five-word line, then a long sentence that ends on a quiet turn.",
+    "narrativeFunction": "Explains a guild rule through its public effect and its private one, and sets up the young men it kept out.",
+    "whyItWorks": "The narration gives the respectable reason and then the self-interested one, and lets the listener notice the gap between them. The last clause is the house's kind of humour, a plain statement that happens to be funny. Nothing is announced and nobody is called greedy.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

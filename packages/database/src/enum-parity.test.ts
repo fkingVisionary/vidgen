@@ -48,6 +48,7 @@ const PAIRS: Record<string, readonly string[]> = {
   PerformanceStrategy: core.PERFORMANCE_STRATEGIES,
   PronunciationStatus: core.PRONUNCIATION_STATUSES,
   PronunciationMethod: core.PRONUNCIATION_METHODS,
+  WritingExampleStatus: core.WRITING_EXAMPLE_STATUSES,
 };
 
 describe('Prisma enums ↔ core enums', () => {

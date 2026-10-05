@@ -521,7 +521,7 @@ describe('deliberate escalation and the writer’s own account', () => {
 describe('the rules are generic', () => {
   it('name no documentary, person, place, date, claim, section or block — in any of the quality modules', () => {
     const here = dirname(fileURLToPath(import.meta.url));
-    for (const file of ['craft.ts', 'evidence.ts', 'review.ts', 'performance.ts', 'wording.ts']) {
+    for (const file of ['craft.ts', 'evidence.ts', 'review.ts', 'performance.ts', 'wording.ts', 'editorial.ts', 'narration.ts']) {
       const source = readFileSync(join(here, file), 'utf8');
       expect([file, /tulip|bulb|guilder|haarlem|amsterdam|alkmaar|thijs|mackay|semper|florist|goldgar|cuyck|orphan chamber|1636|1637/i.exec(source)?.[0] ?? null]).toEqual([file, null]);
       expect([file, /\bC\d{3}\b/.exec(source)?.[0] ?? null]).toEqual([file, null]);

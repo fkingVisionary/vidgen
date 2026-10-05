@@ -1,0 +1,101 @@
+[
+  {
+    "id": "context-b-no-running-water",
+    "version": 1,
+    "text": "The new hospital had forty beds, a resident surgeon and its own dispensary. No running water. The nurses carried every bucket up from a pump in the yard.",
+    "category": "context",
+    "quality": "borderline",
+    "traits": [
+      "fragment_run",
+      "dry_humour",
+      "reveal_not_announce",
+      "concrete_detail",
+      "human_stakes"
+    ],
+    "strengths": [
+      "the missing item is the point, and it comes after the list",
+      "the nurses' buckets turn an absence into labour",
+      "short and dry"
+    ],
+    "weaknesses": [
+      "a verbless sting is a favourite move of generated narration",
+      "one more fragment nearby would start a run"
+    ],
+    "spokenRhythm": "A list of three, a three-word drop, then a plain sentence of consequence.",
+    "narrativeFunction": "Gives the one condition of the hospital that will matter when the epidemic arrives.",
+    "whyItWorks": "Once, the fragment works like a raised eyebrow. The list sounds like a proud report, the missing item undercuts it without comment, and the next sentence makes the absence concrete.",
+    "whyItFails": "The verbless fragment as a reveal is one of the most recognisable habits of machine narration, and it only survives if it is rare. Next to another one, or at the end of every block, it becomes a drumbeat. The full sentence is nearly as dry and never wears thin.",
+    "rewrite": "The new hospital had forty beds, a resident surgeon and its own dispensary, but it had no running water. The nurses carried every bucket up from a pump in the yard.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-b-river-decided",
+    "version": 1,
+    "text": "Before the bridge, the river decided who came to market. Anyone from the north waited on the far bank for the ferry, and the fare went up with the water.",
+    "category": "context",
+    "quality": "borderline",
+    "traits": [
+      "metaphor_stack",
+      "memorable_line",
+      "dry_humour",
+      "concrete_detail",
+      "cause_and_effect"
+    ],
+    "strengths": [
+      "the town's isolation in one short line",
+      "the second sentence grounds the image at once in waiting and fares",
+      "the fare going up with the water is dry and specific"
+    ],
+    "weaknesses": [
+      "the river is made the actor, when it was the ferryman who set the fare",
+      "decided who came overstates, since anyone could cross who could pay"
+    ],
+    "spokenRhythm": "A short figurative line, then a long practical one that ends on a small dry turn.",
+    "narrativeFunction": "Tells the listener how cut off the town was before the bridge was built.",
+    "whyItWorks": "One figure can give the listener the shape of a place quickly, and here the next sentence pays it off straight away in waiting and fares, so the image never floats free of the facts.",
+    "whyItFails": "Giving a river, a mountain or a season a will of its own is a favourite move of generated narration, and a second one in the same film turns it into a habit and the start of a stack. It also overstates, because the river decided nothing a fare could not settle, and it hides the ferryman, who did. The plain version is clearer and keeps the joke.",
+    "rewrite": "Before the bridge, anyone coming to market from the north waited on the far bank for the ferry, and the fare went up with the water.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "context-b-monday-to-saturday",
+    "version": 1,
+    "text": "The boats went out on Monday. The fish were sold on Thursday. The crews were paid on Saturday. In the meantime, their families lived on credit at the harbour shop.",
+    "category": "context",
+    "quality": "borderline",
+    "traits": [
+      "length_repetition",
+      "chronology",
+      "human_stakes",
+      "plain_language",
+      "concrete_detail"
+    ],
+    "strengths": [
+      "the week is laid out like a calendar",
+      "the gap between work and pay is the context, and the listener hears it",
+      "the last sentence turns the pattern into stakes"
+    ],
+    "weaknesses": [
+      "three matched sentences in a row",
+      "a fourth in the same shape would become a chant"
+    ],
+    "spokenRhythm": "Three six-word sentences in step, then a longer sentence that breaks the pattern.",
+    "narrativeFunction": "Gives the rhythm of a fishing family's week before the film follows a bad one.",
+    "whyItWorks": "Here the repetition carries meaning, because the days are the content. The listener hears the wait between Monday and Saturday, and the longer last sentence breaks the march at the right moment.",
+    "whyItFails": "Matched short sentences are a rhythm machine narration falls into without reason, and three is already the limit. Used again in the same film, or stretched by one more line, it sounds like a list read aloud rather than a person talking.",
+    "rewrite": "The boats went out on Monday, the fish were sold on Thursday, and the crews were paid on Saturday. In the meantime, their families lived on credit at the harbour shop.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

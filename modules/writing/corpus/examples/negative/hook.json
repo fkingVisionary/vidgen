@@ -1,0 +1,152 @@
+[
+  {
+    "id": "hook-n-imagine-icy-river",
+    "version": 1,
+    "text": "Imagine it's 1849. You're a young miner, standing knee-deep in an icy river, your hands numb and your heart pounding as something glints in your pan. This is the story of one man's gamble, a gamble that would change his life forever.",
+    "category": "hook",
+    "quality": "bad",
+    "traits": [
+      "imagine_opener",
+      "emotion_explained",
+      "visual_description",
+      "trailer_language"
+    ],
+    "strengths": [
+      "a young miner at a river with a pan is a clear, concrete starting point"
+    ],
+    "weaknesses": [
+      "opens by asking the audience to pretend",
+      "describes what the pictures will already show",
+      "tells the viewer what the miner felt",
+      "ends on a promise instead of a fact"
+    ],
+    "spokenRhythm": "A short stall, a long breathless sentence stacked with sensations, and a sweeping promise.",
+    "narrativeFunction": "Meant to open a gold-rush film on one man, but spends its time on sensations nobody recorded.",
+    "whyItFails": "The imagine opener is the most recognisable stall in generic history videos, and the second person turns the viewer into an actor. The numb hands and the pounding heart are invented, and the river and the pan belong to the pictures anyway. The last line says the story matters instead of showing why.",
+    "rewrite": "In 1849, a young miner working a cold river found something in his pan. The gamble he made on it changed his life.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-n-shrouded-spice-archive",
+    "version": 1,
+    "text": "Deep in the archives lies a story shrouded in mystery — a tale of greed, ambition and betrayal that would shake an empire to its core. This is the untold story of a spice company whose dark secrets stayed hidden for centuries, and a testament to how far men will go for a fortune.",
+    "category": "hook",
+    "quality": "bad",
+    "traits": [
+      "mystery_language",
+      "trailer_language",
+      "stock_phrase",
+      "em_dash"
+    ],
+    "strengths": [
+      "the idea of starting from the company's own papers is sound"
+    ],
+    "weaknesses": [
+      "every phrase could open a film about any company in any century",
+      "promises a revelation the film may not have",
+      "a trailer's list of vices instead of a single fact"
+    ],
+    "spokenRhythm": "Two long, swelling sentences, the first broken by a dash so it can keep inflating.",
+    "narrativeFunction": "Meant to open a film about the spice trade, but describes the film's mood rather than its subject.",
+    "whyItFails": "Nothing in it is specific, which is the surest sign that nothing has been said. Shrouded, untold and dark secrets promise a hidden truth, greed, ambition and betrayal is the stock trailer list, and a testament to is filler. The dash lets the sentence keep growing when it should have ended.",
+    "rewrite": "The spice company's papers have sat in an archive for centuries. They show how far its men were prepared to go for a fortune.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-n-mill-row-questions",
+    "version": 1,
+    "text": "What drives a child of eight to stand at a loom for fourteen hours a day? Ambition? Greed? Desperation? For the families of Mill Row, the answer was simple. Survival.",
+    "category": "hook",
+    "quality": "bad",
+    "traits": [
+      "rhetorical_question",
+      "fragment_run",
+      "qa_pair"
+    ],
+    "strengths": [
+      "the child's age and the length of the shift are strong facts"
+    ],
+    "weaknesses": [
+      "two numbers crowd the first breath",
+      "four questions in a row, three of them single words",
+      "the narrator answers his own question with a one-word fragment"
+    ],
+    "spokenRhythm": "A long question, three clipped guesses, a setup sentence and a single-word answer, all at the same pitch of suspense.",
+    "narrativeFunction": "Meant to open a film about child labour in the mills, but turns hardship into a quiz.",
+    "whyItFails": "The narrator asks a question, offers guesses nobody would make about a child, and answers it himself with a fragment. It sounds like a game show. The facts underneath are strong enough to open on directly, and the questions only delay them.",
+    "rewrite": "On Mill Row, children of eight stood at the looms. Their shifts ran to fourteen hours a day, and their families needed the work to survive.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-n-office-above-the-tavern",
+    "version": 1,
+    "text": "In the spring of 1774, a small insurance office opened above a tavern on the quay. Remarkably, it wasn't just a business. It was a wager on the sea itself. And then, one stormy night, everything changed.",
+    "category": "hook",
+    "quality": "bad",
+    "traits": [
+      "hype_adverb",
+      "contrast_formula",
+      "dramatic_transition",
+      "micro_hook"
+    ],
+    "strengths": [
+      "the first sentence is concrete and well placed",
+      "the office above a tavern is a good detail"
+    ],
+    "weaknesses": [
+      "the adverb tells the audience to be impressed by something ordinary",
+      "the not just a business line inflates a plain description",
+      "the last sentence promises drama and withholds every fact"
+    ],
+    "spokenRhythm": "A good plain opener followed by three short sentences that each raise the volume.",
+    "narrativeFunction": "Meant to open a film about early marine insurance, but turns the storm into a cliffhanger.",
+    "whyItFails": "The first sentence works and the rest wastes it. Remarkably and the contrast formula push the audience to feel something before anything has happened, and the closing line is the stock tease of generated narration, with everything turned up to its loudest. Said plainly and folded into the sentence before it, the storm becomes part of the premise instead of a cliffhanger.",
+    "rewrite": "In the spring of 1774, a small insurance office opened above a tavern on the quay. What it sold was, in effect, a wager on the sea, and one stormy night changed its fortunes.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "hook-n-iron-beast-modern-money",
+    "version": 1,
+    "text": "The truth is, the railway was a monster — a hungry iron beast that swallowed fortunes and spat out bankrupts. Its shares sold for a hundred pounds apiece — that's over twelve thousand pounds in today's money — and within a year they were worth nothing.",
+    "category": "hook",
+    "quality": "bad",
+    "traits": [
+      "truth_reveal",
+      "metaphor_stack",
+      "em_dash"
+    ],
+    "strengths": [
+      "the collapse from a hundred pounds to nothing in a year is a strong opening fact"
+    ],
+    "weaknesses": [
+      "an invented modern conversion stated as fact",
+      "monster, beast and swallowing are three images for one idea",
+      "two figures pushed into one breath by dashes"
+    ],
+    "spokenRhythm": "A sentence that keeps adding images after the dash, then a figure interrupted by a second figure.",
+    "narrativeFunction": "Meant to open a film about a railway share crash, but buries the price under a cartoon and a guess.",
+    "whyItFails": "The truth is pretends to correct a belief nobody has stated. The monster and the beast pile up until the railway is a cartoon, and the dashes let a second number crash into the first. The modern figure appears in no record and cannot be checked, yet it is said as plainly as the share price. The house drops it rather than trade one guess for another, and the collapse from a hundred pounds to nothing carries the hook on its own.",
+    "rewrite": "The railway's shares sold for a hundred pounds apiece, and within a year they were worth nothing. A good many of the people who had bought them were ruined.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

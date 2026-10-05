@@ -104,7 +104,7 @@ Creating eight empty packages today would be ceremony without content.
 ## 4. Pipeline and state machine
 
 The project `status` is the master pipeline phase (linear, as in the brief,
-plus three added review statuses — see §17, D5–D6, D77). Dashboard stages are derived.
+plus three added review statuses — see §18, D5–D6, D77). Dashboard stages are derived.
 
 | Status | Dashboard stage | Jobs that run here | Leaves by |
 |---|---|---|---|
@@ -155,7 +155,7 @@ failed) are not thrown away.
 
 ## 5. Data model
 
-36 tables. Fields that are filtered/joined/queried are typed columns; creative
+37 tables. Fields that are filtered/joined/queried are typed columns; creative
 payloads still evolving (story sequences, shot direction, infographic specs,
 timeline tracks, QA findings) are JSONB validated by zod contracts in
 `packages/core/src/contracts`. Primary keys are UUIDv7. Timestamps are
@@ -244,6 +244,12 @@ erDiagram
 | `voice_generations` | Every take of a chunk (Generation 1, 2, 3…), never deleted: status PENDING → GENERATING → GENERATED → APPROVED / REJECTED / SUPERSEDED (or FAILED); canonical, spoken and performance text; the derived representation and its checks; seed; context sent; audio asset; measured duration; word and character timestamps; QA; ledger link. |
 | `voice_assemblies` | A run's current takes in order on the measured clock (`entries`), the pauses between them, the narration `timeline` (the downstream contract), QA, the joined audio file once built. A new version whenever a current take changes; the approved full assembly is what the VOICE gate approves (`approvals.voice_assembly_id`). |
 | `voice_pronunciations` | The project's pronunciation review list: term, kind, method (the voice's own reading, alias, IPA, CMU), pronunciation, status (to check, approved, heard wrong), source and hint. |
+
+### Writing (Writing Engine 2, §17)
+
+| Table | Notes |
+|---|---|
+| `writing_examples` | House-style examples from the team's approved scripts, in the corpus's own shape (category, quality, traits, strengths, weaknesses, spoken rhythm, narrative function, why it works / fails, source, copyright-safe, approved for retrieval) with the script version and block they came from. CANDIDATE until a person approves (with a reason), rejects or retires it; one row per wording (`text_hash`). The seed corpus is files in the repository, not rows. A narration pass's record (corpus version, examples used, diagnostics before and after, money context, names, lineage) is part of `scripts.content` (`narration`, optional). |
 
 ### Creative artifacts (schema only — no code writes them yet)
 
@@ -1413,7 +1419,215 @@ caps one job.
   is not documented: characters sent include the tags, and the alignment
   skips them either way.
 
-## 17. Decisions
+## 17. Documentary Writing Engine 2
+
+The script engine's writing becomes an editorial system. Research decides
+what happened; the story architecture decides what matters; the corpus
+teaches what excellent narration sounds like; the Human Narration Pass turns
+information into natural prose; evidence QA protects the truth; the visual
+layer shows what the narrator does not need to describe; the Voice Engine
+turns the finished writing into performance.
+
+```
+RESEARCH → EVIDENCE / CLAIMS → STORY STRUCTURE → DRAFT NARRATION (writer / refiner)
+  → DOCUMENTARY STYLE CORPUS (targeted retrieval) → HUMAN NARRATION PASS (narrate)
+  → EDITORIAL QA (script editor → fact checker → rules) → DELIVERY MARKS (performance)
+  → script vN → VOICE ENGINE (unchanged)
+```
+
+Four questions are kept apart: what is historically true (the research and
+its verdicts — never the writing), what is useful to say (information
+density, the rules' passenger and retelling checks), what sounds natural
+aloud (the pass, the rhythm diagnostics) and what the audience can simply see
+(the visual layer; narration describing the picture is a signal).
+
+Library `modules/writing` (`@docengine/writing`: no model calls, no stage);
+the stage step lives in `modules/script` (`narration.ts`, `editorial.ts`).
+
+### The corpus
+
+`modules/writing/corpus/`: `README.md`, `STYLE_BIBLE.md`, `RUBRIC.md`,
+`examples/{positive,negative,borderline,house_style}/<category>.json`,
+`annotations/PATTERNS.md`, `evaluations/`, `manifest.json`, `index.ts`.
+
+- An example is a `WritingCorpusExample` (`packages/core/src/contracts/writing.ts`):
+  id + version, text, category (hook, explanation, transition, character,
+  economics, numbers, uncertainty, scene, dialogue_adjacent, payoff, ending,
+  context, other), quality (excellent, good, borderline, bad), traits (a
+  shared vocabulary that includes the AI-pattern ids), strengths, weaknesses,
+  spoken rhythm, narrative function, why it works / fails, the house rewrite
+  of a bad or borderline example, source (house, public domain, licensed,
+  user-provided, generated comparison), copyright-safe, approved for
+  retrieval. The schema refuses a retrievable example that is not
+  copyright-safe, a model to follow without why it works, a bad one without
+  why it fails.
+- The seed corpus is original house writing across many subjects and eras —
+  no transcripts of other documentaries, no subject of a project in
+  production (a test keeps the files free of the regression case's terms).
+- Files are JSON imported by `corpus/index.ts` (generated): the production
+  image ships only the esbuild bundle, so the corpus is bundled, not read
+  from disk. `STYLE_BIBLE.md`, `RUBRIC.md` and `PATTERNS.md` are generated
+  from `bible.ts`, `rubric.ts` and `docs.ts` (`pnpm --filter
+  @docengine/writing corpus:docs`); a test fails when a document and its
+  source differ.
+- Version: the manifest's semver plus a hash of the exact wording
+  (`1.0.0+3f2a…`), plus `+h…` when approved house examples joined. A
+  narration record keeps the version and every example id@version a prompt
+  was given.
+
+### Retrieval
+
+`retrieve(examples, needs)` is deterministic and targeted. Needs come from
+the blocks in front of the writer: the opening (hook, tension, restraint),
+section openings (transition), the ending (payoff), a sum of money (money,
+numbers, spoken clarity), a person met for the first time (character,
+context, rhythm), uncertain history (uncertainty), and every pattern the
+diagnostics flag (bad examples of that pattern, with the house rewrite;
+borderline examples when the pattern is a judgment call). Limits: 8 models
+to follow (2 per category), 5 habits to avoid, 3 judgment calls. Examples
+reach the user message only — never a system prompt — under a heading that
+says they carry no facts; the evidence rules reject any name or figure that
+leaks from one.
+
+### Diagnostics (warnings, telemetry)
+
+- **AI-pattern fingerprint** (`fingerprints.ts`): 18 patterns. HARD ones are
+  wrong wherever they appear (stock phrases, fake dramatic beats, hype
+  adverbs, "Imagine…", trailer and generic mystery language, explained
+  emotion, teasing block endings, narration describing the picture); DENSITY
+  ones are fine once and warn only past a threshold for the whole script
+  ("not X, but Y", a question answered by a fragment, runs of fragments,
+  em-dashes, stacked figures of speech, rhetorical questions, repeated
+  endings, same-length sentence runs, "The truth is…"). A 0–100 score weighs
+  HARD three times DENSITY. A heuristic indicator, not a detector of authors.
+- **Spoken rhythm** (`rhythm.ts`): sentence lengths and their spread,
+  fragment share and runs, long sentences, clauses and punctuation per
+  sentence, repeated openings, same-length runs, endings that repeat,
+  tongue-twisters.
+- **Read-aloud rubric** (`rubric.ts`): Humanity, Clarity, Spoken Rhythm,
+  Historical Context, Narrative Restraint, Information Density, Narrative
+  Progression, Visual/Narration Separation, AI-Fingerprint Risk,
+  Pronunciation Friendliness — each 0–10 by code, with its reasons. Never a
+  gate; the script editor's scores stay judgments.
+- In the rules: `AI_PATTERN`, `VISUAL_IN_NARRATION`, `MONEY_WITHOUT_CONTEXT`
+  (warnings, group "Sounds written by a person" / "Sums of money carry the
+  context the evidence gives"); `DIRECTION_IN_NARRATION` is **blocking**: a
+  bracket, tag, production label or claim key in the narration would be
+  spoken, or taken by the voice as a performance tag.
+
+### The Human Narration Pass
+
+A checkpointed step `narrate` (task `script.narrate`) between the writer and
+the script editor, in every mode by default (`SCRIPT_NARRATION_MODES`), and
+a mode of its own, `NARRATION` (`POST /api/projects/:id/script/narrate`):
+from a base version, no planner, no writer — the pass, then the script
+editor (with the narration checklist), the fact checker, the performance
+pass, the gate, a new version. The base is never changed.
+
+- **What it sees**: the house style bible (system prompt, generic); per
+  block, what the diagnostics found (only those blocks may change — every
+  other block is *settled*); the lines to keep and the deliberate
+  repetition; the money context the evidence supports; the names as the
+  evidence spells them; the retrieved examples; the script, architecture and
+  evidence; the director's instructions last.
+- **What it returns**: edits to block texts only — with the reason, the
+  fixes, the money context ids it used and the picture description it moved
+  out (`visualNote`). Code keeps every block's claims, beats, class, speaker,
+  visual direction and delivery; cited money context adds the claims it
+  rests on; moved description is written into the block's visual note.
+- **How each edit is judged** (`reviewPatch` with a guard, reviewer
+  `NARRATION`, changes `N1…`): tried on a copy and kept only if it adds no
+  blocking finding (the evidence invariants) and breaks none of the pass's
+  own: every figure kept (digits and number words), new figures and money
+  comparisons only from the cited money context, names spelled as before,
+  every hedge kept, lines to keep and refrains kept, no new machine habit,
+  no speaker's line touched, a polish not a rewrite (a block grows by a
+  third at most, more only with money context). An edit to a settled block
+  is skipped.
+- **Idempotent**: a fixed block has no need left, so a second pass has
+  nothing to do; a density judgment call (a deliberate contrast, a kept
+  line) is not raised again on a block an earlier pass handled. Tested with
+  a narrator that tries to edit every block: nothing changes.
+- The script editor sees the pass's changes ("do not undo an accepted
+  change"); the fact checker keeps the last word on facts; the performance
+  pass marks the final text.
+
+### Historical money context
+
+`moneyContexts(evidence, claimSet)` reads the sums the cited claims state
+(statements and verified quotations, and the dossier's price evidence) and
+sets a price beside, in order of preference, a contemporary wage, an income,
+a household expense, an asset — in the same currency, from the same era
+(within 25 years when both are dated), never a total beside a wage. A wage
+or income with a period gives a ratio a narrator can say ("about four
+years' pay for a skilled craftsman"); anything else is given in the
+evidence's own words. A modern estimate only when the evidence itself gives
+one for that sum — always approximate, LOW confidence. Each context
+(`HistoricalMoneyContext`) records the claims it rests on, takes the weaker
+verdict (which decides its wording) and its confidence, and says its
+method. No exchange rates, no conversions, no assumed working year: where
+the evidence has nothing, the honest line is "The surviving records don't
+give us a reliable equivalent." Sums said without the context the evidence
+offers are a `MONEY_WITHOUT_CONTEXT` warning; sums with none are recorded as
+gaps.
+
+### Names
+
+`nameLayer` gives every name four layers: the historical name (the
+evidence's or the cast's spelling — never westernised), the display name
+(what the narration writes; also subtitles, citations and on-screen text),
+the spoken form (a respelling from a pronunciation note — never invented
+here) and the note itself. A name is a pronunciation candidate when its
+spelling is one English readers stumble over (or it has a particle) and no
+confident note says how to say it; the voice engine's approved lexicon
+stays the authority. A cast member's own lines count as uses of their name.
+The narration pass may not respell a name.
+
+### Semantic layers and delivery marks
+
+A block keeps NARRATION (its text — the only thing spoken), VISUAL_DIRECTION
+(`visual`), DELIVERY_DIRECTION (`delivery`), EVIDENCE (claims and their
+presentation) and EDITORIAL_NOTE (the change ledger's reasons) apart; the
+Editorial tab shows them side by side. Delivery marks — [curious], [quiet],
+[measured], [urgent], [reflective] — are read from the delivery the
+performance pass sets, sparingly; a writing problem is never fixed with a
+direction.
+
+### Lineage and the change report
+
+A narration pass edits and never renumbers, so the version records its exact
+lineage (each base block → its block in the new version, through the script
+editor's and fact checker's renumbering). `changeReport(base, revised)`
+(`modules/writing/src/report.ts`) pairs blocks by that lineage (or, between
+any other two versions, by evidence and wording) and gives, block by block,
+ORIGINAL → REVISED → WHY: the reviewers' reasons, evidence preserved,
+uncertainty preserved, money context added, AI patterns removed or added,
+visual duplication removed, pronunciation candidates — and the totals (blocks
+changed and unchanged, sentences removed and rewritten, AI-pattern warnings
+before and after). Claim coverage between the versions is flagged, never
+silently lost. Served at `GET /api/projects/:id/script/versions/:v/editorial`
+and in the comparison; the job's final log carries the totals and
+representative examples.
+
+### House-style evolution
+
+`writing_examples` (migration `20261005130000_writing_engine_2`): an approved
+script proposes candidates (signal-free narrator lines at the places where
+the house style matters, one per wording) —
+`POST …/script/versions/:v/house-candidates`; a person approves each with
+why it works (it teaches the writer), rejects it, or later retires it —
+`POST /api/writing/examples/:id/decision`. Only approved examples are
+retrieved. A generated script never feeds the corpus on its own. The House
+style page (`/writing`) shows the style bible, the rubric, the pattern
+glossary, every example and the candidates.
+
+### Boundaries
+
+The Voice Engine is unchanged: it reads the same script shapes (every new
+field is optional), speaks only `block.text`, and its tests are untouched.
+No model call is made by the writing module; no live voice is generated.
+
+## 18. Decisions
 
 | # | Decision | Why | Alternative |
 |---|---|---|---|
@@ -1502,3 +1716,11 @@ caps one job.
 | D83 | The assembly's clock is the takes' measured durations; pauses between takes are inserted in assembly, less the silence the clips already hold | The script's 150 wpm is a planning estimate; exact silence at a chunk boundary is more reliable than asking a model for a pause | Trust the estimate; pauses only as markup |
 | D84 | Audio is stored through the StorageProvider (S3-compatible: a Railway bucket), never in Postgres; paid narration refuses in-memory storage | Durable, cheap, private; the API streams it with byte ranges behind the dashboard's auth | Blobs in Postgres; a Railway volume |
 | D85 | Stale audio is detected by block hashes and never reused | A take of other words than the approved script's must not reach the edit; regenerating a stale run is refused in favour of a new run | Re-use takes whose text happens to match |
+| D86 | Writing Engine 2 is a library (`modules/writing`) beside the stage packages | Diagnostics, corpus, money context, names and the change report serve the script stage, the API and the dashboard; none of it is a pipeline stage or calls a model | Put it all inside `modules/script` |
+| D87 | The Human Narration Pass is its own step between the writer and the script editor, editing texts only, judged change by change | Four problems (true, useful, natural aloud, visible) are not one prompt; the fact checker must see the final words and the performance pass must mark them; texts-only edits keep provenance and give exact lineage | A bigger writer prompt; a pass after the fact checker |
+| D88 | The pass may only touch blocks the diagnostics flag | Convergence (a second pass changes nothing) is structural, not a hope; "it should not blindly rewrite every paragraph" | Let the model decide what to change |
+| D89 | The corpus is versioned JSON in the repository, bundled into the build, original house writing only | Reviewed like code, retrievable without a database, copyright-safe by construction; the version and every example used are recorded | A database table only; scraped documentary transcripts |
+| D90 | Corpus examples go into user messages, retrieved per need, never into system prompts | Topic-laden examples must not shape every documentary; targeted examples beat a dump of the corpus | The whole corpus in the system prompt |
+| D91 | AI-pattern and rhythm findings are warnings and telemetry; directions in the narration block approval | The brief: signals, not failures, no hard cutoff; but a bracket in the text would be spoken or taken as a performance tag | Gate on a fingerprint score |
+| D92 | Money context only from cited claims, deterministic, with the weaker verdict and a method | "Never invent context": a comparison is arithmetic on two documented figures or the evidence's own words, and it must be checkable | Let the model propose comparisons; hard-coded conversion tables |
+| D93 | House examples from approved scripts enter retrieval only when a person approves them with a reason | The model must not learn its own mistakes; the reason is what teaches | Feed every approved script back automatically |

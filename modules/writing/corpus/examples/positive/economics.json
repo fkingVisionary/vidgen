@@ -1,0 +1,198 @@
+[
+  {
+    "id": "economics-p-miners-bid-for-the-lode",
+    "version": 1,
+    "text": "Many of the miners drew no wage at all. A pair of men would bid for a stretch of the lode, and the mine paid them a share of whatever ore they raised from it. A rich stretch could bring them more in two months than a man at the surface earned in a year. A poor one left them owing the mine for their candles.",
+    "category": "economics",
+    "quality": "excellent",
+    "traits": [
+      "money_context",
+      "number_in_context",
+      "cause_and_effect",
+      "human_stakes",
+      "plain_language",
+      "dry_humour",
+      "rhythm_variation",
+      "one_idea_per_sentence"
+    ],
+    "strengths": [
+      "the payment system is explained in two plain sentences before its stakes arrive",
+      "the good outcome is measured against a surface man's yearly wage, not a bare sum",
+      "the bad outcome is a debt for candles, small and exact"
+    ],
+    "weaknesses": [
+      "lode has to be understood from context or shown on screen",
+      "the matched rich and poor sentences must not be followed by another balanced pair"
+    ],
+    "spokenRhythm": "A short opener, a long sentence that explains the bargain, a medium sentence with the comparison, and a short close that lands on an ordinary object.",
+    "narrativeFunction": "Explains how a mine paid men by results, and why that made every stretch of rock a gamble for the men who worked it.",
+    "whyItWorks": "The system is explained before it is judged, and it is never judged out loud. The rich stretch is measured against a wage the audience can feel, and the poor one ends on candles, which tells the listener how thin the margin was without anyone saying so.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-p-shares-for-a-tenth-down",
+    "version": 1,
+    "text": "The railway company priced its shares at fifty pounds. It asked for a tenth of that on signing, and the rest whenever the directors chose to call it in. A country curate lived on perhaps eighty pounds a year. A good many curates signed.",
+    "category": "economics",
+    "quality": "excellent",
+    "traits": [
+      "money_context",
+      "number_in_context",
+      "cause_and_effect",
+      "dry_humour",
+      "tension",
+      "one_idea_per_sentence",
+      "restraint"
+    ],
+    "strengths": [
+      "the curate's income makes the share price human",
+      "the deposit and the calls are set out as company rules, not as a warning",
+      "the short last sentence carries the joke and the risk at once"
+    ],
+    "weaknesses": [
+      "the listener has to do the sum for the remaining forty-five pounds, so the read must leave room for it",
+      "one curate's income stands in for a whole class of buyer"
+    ],
+    "spokenRhythm": "A short opening with the price, a longer sentence that sets out the terms, a plain comparison, and a five-word close that lands dryly.",
+    "narrativeFunction": "Shows how part-paid shares drew people of modest income into a railway boom, and plants the calls that will later ruin some of them.",
+    "whyItWorks": "Each sentence carries one figure. The price, the terms and the income arrive one at a time, so the listener can feel how a tenth down made fifty pounds look affordable on eighty a year. The last sentence leaves the danger of the calls for the listener to see, and the film can collect it later.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-p-fine-with-no-measure",
+    "version": 1,
+    "text": "The guild fined the weaver twelve marks for selling cloth after the evening bell. The records can't tell us how heavy that was for a man in his trade. No wage list has come down from those years, and prices from other towns don't travel well. What the guild's book does show is that he paid it off a little at a time, over two years.",
+    "category": "economics",
+    "quality": "excellent",
+    "traits": [
+      "money_context",
+      "hedge_natural",
+      "source_as_detective_work",
+      "restraint",
+      "human_stakes",
+      "trust_the_viewer",
+      "spoken_clarity"
+    ],
+    "strengths": [
+      "says plainly that there is no reliable measure",
+      "gives the reason in one ordinary sentence",
+      "finds another kind of evidence instead of inventing a comparison"
+    ],
+    "weaknesses": [
+      "needs the weaver to have been introduced already",
+      "four sentences is about the limit before the uncertainty starts to feel like a lecture"
+    ],
+    "spokenRhythm": "A plain statement of the fine, two sentences of honest doubt at a conversational pace, and a longer close that slows for the instalments.",
+    "narrativeFunction": "Gives a guild fine its weight when no wage or price survives to compare it with.",
+    "whyItWorks": "The narrator admits the gap the way a curious person would, with a reason rather than a disclaimer. Then the guild's own book supplies a better measure than any conversion could. A man who needs two years to pay a fine has told us what it cost him.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-p-wages-held-till-home",
+    "version": 1,
+    "text": "The survey paid its chainmen three pounds a month, about what a man could earn on a coal barge at home. None of it was paid out until the party came back. If a man died in the interior, his widow was paid up to the day of his death.",
+    "category": "economics",
+    "quality": "good",
+    "traits": [
+      "money_context",
+      "number_in_context",
+      "human_stakes",
+      "restraint",
+      "cause_and_effect",
+      "plain_language"
+    ],
+    "strengths": [
+      "the wage is measured against ordinary work at home",
+      "the terms do the moral work without comment",
+      "ends on a clause of the contract, not a judgement"
+    ],
+    "weaknesses": [
+      "the comparison with barge work needs a figure from the same records",
+      "the widow's clause needs a level read or it turns maudlin"
+    ],
+    "spokenRhythm": "A long opening with its comparison, then two plain sentences that grow colder as they go.",
+    "narrativeFunction": "Sets out an expedition's terms of service so that later deaths carry their weight for the families left at home.",
+    "whyItWorks": "The pay sounds fair because it matches work at home. The terms that follow are given in the flat language of a contract, with no signpost to warn the listener, and the hardness of the last one lands without being pointed out.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-p-wool-brig-and-the-harbour",
+    "version": 1,
+    "text": "When the brig went down with the season's wool, the loss was put at two thousand pounds. The quay, the cranes and the warehouses of the whole harbour had cost less to build. That winter, three of the families who held shares in her sold their houses.",
+    "category": "economics",
+    "quality": "good",
+    "traits": [
+      "money_context",
+      "scale",
+      "number_in_context",
+      "human_stakes",
+      "cause_and_effect",
+      "chronology"
+    ],
+    "strengths": [
+      "measures one loss against an asset everybody in the town could see",
+      "moves from the sum to its consequence in one step",
+      "one number per sentence"
+    ],
+    "weaknesses": [
+      "the comparison with the harbour's building cost needs both figures from the record",
+      "the list in the second sentence is at the limit of what the ear will hold"
+    ],
+    "spokenRhythm": "A medium sentence with the figure, a comparison of similar length, and a short close that moves from money to households.",
+    "narrativeFunction": "Turns a shipwreck into an event the whole town felt, through the families who owned her.",
+    "whyItWorks": "Two thousand pounds means nothing on its own. Set beside the cost of the whole harbour, it becomes enormous, and the houses sold that winter show what it did to people without a single adjective.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-p-nurses-at-a-shilling",
+    "version": 1,
+    "text": "In the fever summer, the town paid its nurses a shilling a day. A washerwoman in the same streets earned about half that. Even so, the council's minutes record the posts standing empty for weeks at a time.",
+    "category": "economics",
+    "quality": "excellent",
+    "traits": [
+      "money_context",
+      "number_in_context",
+      "trust_the_viewer",
+      "reveal_not_announce",
+      "restraint",
+      "source_as_detective_work",
+      "human_stakes"
+    ],
+    "strengths": [
+      "the wage is set against other work in the same streets",
+      "the danger is never named",
+      "the council's minutes carry the evidence of what people felt"
+    ],
+    "weaknesses": [
+      "short enough that it needs the fever established before it"
+    ],
+    "spokenRhythm": "Three sentences of easing pace, the last one longer and quieter.",
+    "narrativeFunction": "Shows how frightened the town was by what it took to hire anyone into the sickrooms.",
+    "whyItWorks": "Twice a washerwoman's pay should have filled every post. That it didn't is the measure of the fear, and the narrator leaves the listener to make that sum. No word in it tells anyone how to feel.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

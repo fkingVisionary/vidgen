@@ -16,17 +16,20 @@ import { NonRetryableError, type StageContext, type StageHandler } from '@doceng
 import { ProviderError } from '@docengine/providers';
 import { CostCeiling, EvidenceBase, StepCheckpoint } from '@docengine/story/shared';
 import { z } from 'zod';
-import { DEFAULT_SCRIPT_CONFIG, SCRIPT_STEPS, type ScriptConfig, type ScriptStep } from './config.ts';
+import { DEFAULT_SCRIPT_CONFIG, SCRIPT_STEPS, type ScriptConfig, type ScriptMode, type ScriptStep } from './config.ts';
 import { compareDrafts, diffBlocks, evidenceChanges } from './compare.ts';
 import { allBlocks, applyPerformance, markCentralQuestion, mergePronunciations, sectionDurationSec, sectionWords, sectionsFromWriter, type ScriptDraft } from './draft.ts';
 import { fitPerformance, performanceBudget, renderBudget, type PerformanceBudget } from './performance.ts';
-import { PROMPT_VERSION, REFINEMENT_CHECKLIST, factCheckSystemPrompt, performanceSystemPrompt, plannerSystemPrompt, refineSystemPrompt, rewriteSystemPrompt, scriptEditorSystemPrompt, writerSystemPrompt } from './prompts.ts';
+import { NARRATION_CHECKLIST, PROMPT_VERSION, REFINEMENT_CHECKLIST, factCheckSystemPrompt, narrationSystemPrompt, performanceSystemPrompt, plannerSystemPrompt, refineSystemPrompt, rewriteSystemPrompt, scriptEditorSystemPrompt, writerSystemPrompt } from './prompts.ts';
 import { renderTrimPlan, selfReportMismatch, type Refrain } from './craft.ts';
 import { computeScriptReport } from './quality.ts';
 import { renderArchitecture, renderEvidence, renderScript } from './render.ts';
 import { issueResolution, reviewPatch, reviewSummary } from './review.ts';
 import { CRAFT_KINDS, blockingCount, checkScript, cutPlan, isBlocking, ruleDigest, type RuleDigest, type ScriptFinding, type ScriptFindingKind } from './rules.ts';
-import { FactCheckOutput, PerformanceOutput, PlannerOutput, RefineOutput, ScriptEditorOutput, WriterOutput } from './schemas.ts';
+import { FactCheckOutput, NarrationOutput, PerformanceOutput, PlannerOutput, RefineOutput, ScriptEditorOutput, WriterOutput } from './schemas.ts';
+import { approvedHouseExamples, changeReport, diagnose, loadCorpus, withHouseExamples, type Corpus } from '@docengine/writing';
+import { moneyUses, narrationBlocks, scriptNames } from './editorial.ts';
+import { composeLineage, countKinds, moneyUsed, moveToVisual, narrationBase, narrationGuard, narrationRecord, planNarration, renderNarrationContext, toNarrationPatch, uncertaintyOf, type NarrationPlan } from './narration.ts';
 import { buildScope, type ScriptScope } from './scope.ts';
 import { loadVersion, saveVersion, type LoadedScript } from './store.ts';
 
@@ -62,8 +65,9 @@ const Unavailable = z.object({ unavailable: z.string() });
 const EditStep = z.union([ScriptEditorOutput, Unavailable]);
 const FactStep = z.union([FactCheckOutput, Unavailable]);
 const PerformStep = z.union([PerformanceOutput, Unavailable]);
+const NarrateStep = z.union([NarrationOutput, Unavailable]);
 
-type Mode = 'DRAFT' | 'SECTIONS' | 'REVISION' | 'REFINEMENT';
+type Mode = ScriptMode;
 
 interface Architecture {
   id: string;
@@ -99,7 +103,7 @@ class ScriptRun {
     const scope = buildScope({ architectureId: arch.id, architectureVersion: arch.version, architecture: arch.content, evidence });
     const target = runtimeTarget(ctx.project);
     const all = arch.content.sequences.map((s) => s.number);
-    const mode: Mode = !input.revise ? 'DRAFT' : input.revise.refine ? 'REFINEMENT' : input.revise.sections.length ? 'SECTIONS' : 'REVISION';
+    const mode: Mode = !input.revise ? 'DRAFT' : input.revise.narration ? 'NARRATION' : input.revise.refine ? 'REFINEMENT' : input.revise.sections.length ? 'SECTIONS' : 'REVISION';
     const written = mode === 'SECTIONS' ? input.revise!.sections : all;
     const unknown = written.filter((n) => !all.includes(n));
     if (unknown.length) throw new NonRetryableError(`Sections ${unknown.join(', ')} are not sequences of architecture v${arch.version}`);
@@ -110,7 +114,9 @@ class ScriptRun {
     await ctx.progress(
       mode === 'DRAFT'
         ? `Script draft from architecture v${arch.version}: ${all.length} sequences, ${scope.claims.length} claims; target ${fmtClock(target.targetSec)}`
-        : mode === 'REFINEMENT'
+        : mode === 'NARRATION'
+          ? `Human Narration Pass on script v${base!.row.version} (Writing Engine 2): targeted edits from the house-style corpus and the diagnostics, every block's evidence kept — ${brief ? `with the director's instructions: "${clip(brief, 140)}"` : 'the house style, no director\'s instructions'}`
+          : mode === 'REFINEMENT'
           ? `Refining the narration of script v${base!.row.version} for the ear (story, structure and evidence unchanged) — ${brief ? `with the director's instructions: "${clip(brief, 140)}"` : 'the house style, no director\'s instructions'}`
           : `${mode === 'SECTIONS' ? `Rewriting section${written.length > 1 ? 's' : ''} ${written.join(', ')}` : 'Revising the whole script'} of script v${base!.row.version} from the editor's brief: "${clip(brief ?? '', 140)}"`,
       { architectureVersion: arch.version, mode, sections: written, brief, target },
@@ -121,7 +127,7 @@ class ScriptRun {
     // A. Plan (a section rewrite and a refinement keep the base version's plan).
     let plans = new Map<number, ScriptSectionPlan>(base ? base.draft.sections.flatMap((s) => (s.plan ? [[s.sequence, s.plan] as const] : [])) : []);
     let narrator = base?.content?.narrator ?? { persona: '', tone: '', approach: '' };
-    if (mode === 'SECTIONS' || mode === 'REFINEMENT') await this.steps.skip('plan');
+    if (mode === 'SECTIONS' || mode === 'REFINEMENT' || mode === 'NARRATION') await this.steps.skip('plan');
     else {
       await this.ceiling.check();
       const plan = await this.steps.step('plan', PlannerOutput, () => this.plan(scope, target, brief, base));
@@ -130,31 +136,83 @@ class ScriptRun {
       notes.push(...plan.notes.map((n) => `Planner: ${n}`));
     }
 
-    // B. Write (or rewrite the chosen sections, the others copied unchanged; or refine the whole telling).
+    // B. Write (or rewrite the chosen sections, the others copied unchanged; or refine the whole telling; or — a narration pass on its own — start from a copy of the base).
     await this.ceiling.check();
-    const writerOut: WriterOutput & { keptLines?: string[] } =
-      mode === 'REFINEMENT'
-        ? await this.steps.step('write', RefineOutput, () => this.refine(scope, target, base!, brief, plans))
-        : await this.steps.step('write', WriterOutput, () => (mode === 'SECTIONS' ? this.rewrite(scope, target, base!, written, brief, plans) : this.write(scope, target, brief, plans, narrator, base)));
-    let draft = this.assemble(writerOut, scope, base, written, plans, notes, mode === 'REFINEMENT');
-    const keptLines = mode === 'REFINEMENT' ? (writerOut.keptLines ?? []).map((l) => l.trim()).filter(Boolean) : [];
+    let writerOut: (WriterOutput & { keptLines?: string[] }) | null = null;
+    let draft: ScriptDraft;
+    if (mode === 'NARRATION') {
+      await this.steps.skip('write');
+      draft = narrationBase(base!);
+    } else {
+      writerOut =
+        mode === 'REFINEMENT'
+          ? await this.steps.step('write', RefineOutput, () => this.refine(scope, target, base!, brief, plans))
+          : await this.steps.step('write', WriterOutput, () => (mode === 'SECTIONS' ? this.rewrite(scope, target, base!, written, brief, plans) : this.write(scope, target, brief, plans, narrator, base)));
+      draft = this.assemble(writerOut, scope, base, written, plans, notes, mode === 'REFINEMENT');
+    }
+    const keptLines = mode === 'REFINEMENT' ? (writerOut?.keptLines ?? []).map((l) => l.trim()).filter(Boolean) : mode === 'NARRATION' ? [...(base!.content?.provenance.changeLog?.kept ?? [])] : [];
     // Models misjudge the length of what they wrote: the system measures it, and says so when the change log is wrong.
-    const misstated = writerOut.changeLog ? selfReportMismatch([writerOut.changeLog.summary, ...writerOut.changeLog.changes.map((c) => `${c.what} ${c.why}`)].join('\n'), scriptTiming(allBlocks(draft), target)) : null;
+    const misstated = writerOut?.changeLog ? selfReportMismatch([writerOut.changeLog.summary, ...writerOut.changeLog.changes.map((c) => `${c.what} ${c.why}`)].join('\n'), scriptTiming(allBlocks(draft), target)) : null;
     if (misstated) notes.push(`Length: ${misstated} — the measured length is the one that counts`);
     const draftFindings = checkScript(draft, scope, { target });
-    await ctx.progress(`Script ${mode === 'DRAFT' ? 'draft' : mode === 'REFINEMENT' ? 'refinement' : 'rewrite'}: ${allBlocks(draft).length} blocks, ${allBlocks(draft).reduce((n, b) => n + b.wordCount, 0)} words, ~${fmtClock(scriptTiming(allBlocks(draft), target).totalSec)}; ${blockingCount(draftFindings)} blocking findings`, {
+    await ctx.progress(`Script ${mode === 'DRAFT' ? 'draft' : mode === 'REFINEMENT' ? 'refinement' : mode === 'NARRATION' ? `v${base!.row.version}, as the narration pass starts` : 'rewrite'}: ${allBlocks(draft).length} blocks, ${allBlocks(draft).reduce((n, b) => n + b.wordCount, 0)} words, ~${fmtClock(scriptTiming(allBlocks(draft), target).totalSec)}; ${blockingCount(draftFindings)} blocking findings`, {
       findings: draftFindings.filter(isBlocking).map((f) => f.detail).slice(0, 30),
     });
 
-    // C. Script editor (craft). Each change it proposes is judged on its own.
-    await this.ceiling.check();
-    const refined = mode === 'REFINEMENT' ? base! : null;
-    const context = { base: base?.draft ?? null, changeLog: writerOut.changeLog ?? null, kept: keptLines };
     const reviewChanges: ScriptReviewChange[] = [];
     const judged = { scope, target, allowed, base: base?.draft ?? null, kept: keptLines };
+    /** Where each block the reviewers saw went, reviewer by reviewer (for lineage and the money context used). */
+    const keyMaps: Map<string, string | null>[] = [];
+
+    // B½. The Human Narration Pass (Writing Engine 2): targeted edits from the corpus and the diagnostics, judged one by one.
+    const narrating = mode === 'NARRATION' || this.cfg.narration.includes(mode);
+    let narrationPlan: NarrationPlan | null = null;
+    let narrationOut: NarrationOutput | null = null;
+    let narrationUnavailable: string | null = null;
+    let moved: { ref: string; note: string }[] = [];
+    let corpus: Corpus | null = null;
+    if (!narrating) await this.steps.skip('narrate');
+    else {
+      await this.ceiling.check();
+      corpus = withHouseExamples(loadCorpus(), await approvedHouseExamples(ctx.db));
+      if (corpus.errors.length) notes.push(`Writing corpus: ${corpus.errors.length} example(s) failed validation and were left out`);
+      // Blocks a narration pass already edited in the base (a pass on a pass's output): its judgment calls stand.
+      const handled = mode === 'NARRATION' && base?.content?.narration ? new Set((base.content.reviewChanges ?? []).filter((c) => c.reviewer === 'NARRATION' && c.status === 'ACCEPTED' && c.savedRef).map((c) => c.savedRef!)) : undefined;
+      const plan = planNarration(draft, scope, { kept: keptLines, corpus, allowed, findings: draftFindings, handled });
+      narrationPlan = plan;
+      const narrated = await this.steps.step('narrate', NarrateStep, () =>
+        this.unavailableOnError(() => this.call('narrate', 'script.narrate', NarrationOutput, 'NarrationPass', narrationSystemPrompt(), this.narratePrompt(draft, scope, target, allowed, brief, plan, base, mode), (x) => ({ edits: x.edits.length, kept: x.kept.length }))),
+      );
+      if ('unavailable' in narrated) {
+        // A narration pass on its own would save a copy of the base: fail instead.
+        if (mode === 'NARRATION') throw new NonRetryableError(`The narration pass could not run: ${narrated.unavailable}`);
+        narrationUnavailable = narrated.unavailable;
+        notes.push(`Narration pass unavailable: ${narrated.unavailable}`);
+      } else {
+        narrationOut = narrated;
+        const r = reviewPatch(draft, toNarrationPatch(narrated, draft, plan), 'NARRATION', { ...judged, guard: narrationGuard(plan, narrated, scope) });
+        const v = moveToVisual(r.draft, narrated, r.changes, scope);
+        draft = v.draft;
+        moved = v.moved;
+        reviewChanges.push(...r.changes);
+        keyMaps.push(r.keyMap);
+        notes.push(...r.notes, ...[reviewSummary('Narration pass', r.changes)].filter((x): x is string => x !== null));
+        await ctx.progress(`Narration pass: ${plan.needs.size} block(s) needed work; ${r.changes.filter((c) => c.status === 'ACCEPTED').length} edit(s) kept, ${r.changes.filter((c) => c.status === 'REJECTED').length} rejected, ${r.changes.filter((c) => c.status === 'SKIPPED').length} skipped; ${plan.retrieved.length} corpus example(s) retrieved (corpus ${plan.corpusVersion})`, {
+          changes: r.changes.map((c) => `${c.id} ${c.ref ?? ''} ${c.status}${c.status === 'ACCEPTED' ? '' : `: ${c.rejectionReason}`}`).slice(0, 60),
+          retrieved: plan.retrieved.map((x) => `${x.example.id}@${x.example.version} (${x.reason})`),
+        });
+      }
+    }
+
+    // C. Script editor (craft). Each change it proposes is judged on its own.
+    await this.ceiling.check();
+    const refined = mode === 'REFINEMENT' || mode === 'NARRATION' ? base! : null;
+    const checklist = mode === 'REFINEMENT' ? REFINEMENT_CHECKLIST : mode === 'NARRATION' ? NARRATION_CHECKLIST : null;
+    const context = { base: base?.draft ?? null, changeLog: writerOut?.changeLog ?? null, kept: keptLines };
+    const narrated = reviewChanges.length ? [...reviewChanges] : undefined;
     const edited = await this.steps.step('edit', EditStep, () =>
       this.unavailableOnError(() =>
-        this.call('edit', 'script.edit', ScriptEditorOutput, 'ScriptEditorReview', scriptEditorSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { ...context, previous: base, refinement: refined !== null, checklist: refined !== null, cuts: true }), (x) => ({ issues: x.issues.length, edits: x.edits.length, assessment: x.assessment.length })),
+        this.call('edit', 'script.edit', ScriptEditorOutput, 'ScriptEditorReview', scriptEditorSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { ...context, previous: base, refinement: refined !== null, narration: mode === 'NARRATION', checklist, cuts: true, reviewed: narrated }), (x) => ({ issues: x.issues.length, edits: x.edits.length, assessment: x.assessment.length })),
       ),
     );
     let editor: ScriptContent['editor'] = null;
@@ -162,16 +220,19 @@ class ScriptRun {
     else {
       const r = reviewPatch(draft, edited, 'SCRIPT_EDITOR', judged);
       draft = r.draft;
+      // The narration pass's kept changes now point at the editor's numbering.
+      for (const c of reviewChanges) if (c.savedRef && r.keyMap.has(c.savedRef)) c.savedRef = r.keyMap.get(c.savedRef) ?? null;
       reviewChanges.push(...r.changes);
+      keyMaps.push(r.keyMap);
       notes.push(...r.notes, ...[reviewSummary('Script editor', r.changes)].filter((x): x is string => x !== null));
-      editor = { verdict: edited.verdict, scores: edited.scores, issues: edited.issues.map((i) => ({ ...i, ...issueResolution(i.ref, r) })), ...(refined ? { assessment: checklistAnswers(edited.assessment, notes) } : {}) };
+      editor = { verdict: edited.verdict, scores: edited.scores, issues: edited.issues.map((i) => ({ ...i, ...issueResolution(i.ref, r) })), ...(checklist ? { assessment: checklistAnswers(edited.assessment, checklist, notes) } : {}) };
     }
 
     // D. Fact checker (last word on facts): it sees what the editor's changes became.
     await this.ceiling.check();
     const checked = await this.steps.step('factCheck', FactStep, () =>
       this.unavailableOnError(() =>
-        this.call('factCheck', 'script.factCheck', FactCheckOutput, 'ScriptFactCheck', factCheckSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { ...context, previous: base, refinement: refined !== null, reviewed: reviewChanges }), (x) => ({ issues: x.issues.length, edits: x.edits.length })),
+        this.call('factCheck', 'script.factCheck', FactCheckOutput, 'ScriptFactCheck', factCheckSystemPrompt(), this.reviewPrompt(draft, scope, target, allowed, brief, { ...context, previous: base, refinement: refined !== null, narration: mode === 'NARRATION', reviewed: reviewChanges }), (x) => ({ issues: x.issues.length, edits: x.edits.length })),
       ),
     );
     let factCheck: ScriptContent['factCheck'] = null;
@@ -182,6 +243,7 @@ class ScriptRun {
       // The editor's issues and kept changes now point at the fact checker's numbering.
       for (const c of reviewChanges) if (c.savedRef && r.keyMap.has(c.savedRef)) c.savedRef = r.keyMap.get(c.savedRef) ?? null;
       reviewChanges.push(...r.changes);
+      keyMaps.push(r.keyMap);
       notes.push(...r.notes, ...[reviewSummary('Fact checker', r.changes)].filter((x): x is string => x !== null));
       factCheck = { verdict: checked.verdict, issues: checked.issues.map((i) => ({ ...i, ...issueResolution(i.ref, r) })) };
       if (editor) editor = { ...editor, issues: editor.issues.map((i) => (i.ref && r.keyMap.has(i.ref) ? { ...i, ref: r.keyMap.get(i.ref) ?? i.ref } : i)) };
@@ -201,6 +263,29 @@ class ScriptRun {
       else if (input.allowPerformanceOverMax && fit.beforeSec > target.maxSec) notes.push(`Performance: runs ${fmtClock(fit.beforeSec)}, past the ${fmtClock(target.maxSec)} maximum — the user allowed it`);
       notes.push(...perf.notes.map((n) => `Performance: ${n}`));
     }
+
+    // Writing Engine 2: what the version is now — names, money context, diagnostics — and the record of the narration pass.
+    const findings = checkScript(draft, scope, { target, factIssues: factCheck?.issues, previous: base?.draft ?? null, kept: keptLines });
+    const names = scriptNames(draft, scope);
+    const afterUses = moneyUses(draft, scope);
+    const after = diagnose({ blocks: narrationBlocks(draft), findings: countKinds(findings), money: afterUses, names });
+    const lineage = mode === 'NARRATION' ? composeLineage(base!.draft, keyMaps) : null;
+    const narration = narrating
+      ? narrationRecord({
+          plan: narrationPlan,
+          out: narrationOut,
+          unavailable: narrationUnavailable,
+          changes: reviewChanges,
+          after,
+          afterUses,
+          names,
+          used: narrationOut && narrationPlan ? moneyUsed(narrationOut, reviewChanges, narrationPlan) : [],
+          moved,
+          lineage,
+          corpusVersion: corpus?.version ?? loadCorpus().version,
+        })
+      : undefined;
+    const changeLog = mode === 'NARRATION' ? narrationChangeLog(reviewChanges, narrationOut, draft, keptLines) : mode === 'REFINEMENT' ? { ...writerOut!.changeLog, kept: keptLines } : (writerOut?.changeLog ?? null);
 
     // The gate, the content, the new version.
     const posed = allBlocks(draft).find((b) => b.centralQuestion === 'POSED')?.key ?? null;
@@ -222,10 +307,10 @@ class ScriptRun {
         sections: written,
         brief,
         requestedBy: (await this.requester()) ?? null,
-        changeLog: mode === 'REFINEMENT' ? { ...writerOut.changeLog, kept: keptLines } : writerOut.changeLog,
+        changeLog,
       },
+      ...(narration ? { narration } : {}),
     };
-    const findings = checkScript(draft, scope, { target, factIssues: factCheck?.issues, previous: base?.draft ?? null, kept: keptLines });
     const timing = scriptTiming(allBlocks(draft), target);
     const report = computeScriptReport({ findings, timing, content, notes, draft, narrationSec: budget.narrationSec, reviewers: { editor: 'unavailable' in edited ? edited.unavailable : null, factCheck: 'unavailable' in checked ? checked.unavailable : null } });
     const stats = {
@@ -248,6 +333,15 @@ class ScriptRun {
       editorIssues: editor?.issues.length ?? null,
       factIssues: factCheck?.issues.length ?? null,
       pronunciations: draft.pronunciations.length,
+      writingEngine: narrating ? 2 : 1,
+      ...(narration
+        ? {
+            corpusVersion: narration.corpusVersion,
+            narration: narration.counts,
+            fingerprintBefore: narration.diagnostics.before?.fingerprint.score ?? null,
+            fingerprintAfter: narration.diagnostics.after.fingerprint.score,
+          }
+        : {}),
       resumedSteps: [...this.steps.reused],
       durationMs: Date.now() - started,
     };
@@ -287,7 +381,8 @@ class ScriptRun {
     const spend = await this.spent();
     const failed = report.checks.filter((c) => c.status === 'FAIL');
     const warned = report.checks.filter((c) => c.status === 'WARN');
-    const comparison = base && mode === 'REFINEMENT' ? refinementSummary(base, draft, content, spend) : null;
+    const comparison = base && (mode === 'REFINEMENT' || mode === 'NARRATION') ? refinementSummary(base, draft, content, spend) : null;
+    const editorial = base && narration ? editorialSummary(base, saved, draft, content, narration) : null;
     await ctx.progress(
       `Script v${saved.version}${base ? ` (from v${base.row.version})` : ''} saved for review: ${draft.sections.length} sections, ${timing.words} words, ${fmtClock(timing.totalSec)} against a target of ${fmtClock(timing.targetSec)} (${fmtVariance(timing.varianceSec)}) — quality gate ${report.passed ? 'PASSED' : `FAILED (${failed.map((c) => c.id).join(', ')}): approval is blocked until fixed`}`,
       {
@@ -318,6 +413,8 @@ class ScriptRun {
         },
         measurements: report.measurements?.map((m) => `${m.label}: ${m.value}${m.detail ? ` — ${m.detail}` : ''}`),
         ...(comparison ? { comparison } : {}),
+        ...(narration ? { narration: narrationLog(narration) } : {}),
+        ...(editorial ? { changeReport: editorial } : {}),
       },
     );
     return { scriptId: saved.id, version: saved.version, qualityPassed: report.passed, words: timing.words, durationSec: timing.totalSec, sections: draft.sections.length, mode, ...(base ? { revisionOf: base.row.version } : {}), estimatedCostUsd: spend };
@@ -471,6 +568,36 @@ class ScriptRun {
   }
 
   /**
+   * What the Human Narration Pass sees: the diagnostics' needs block by
+   * block (every other block is settled), the lines to keep, the money
+   * context the evidence supports, the names as the evidence spells them, a
+   * handful of corpus examples retrieved for those needs, the script, the
+   * architecture and the evidence — and last, the director's instructions.
+   */
+  private narratePrompt(draft: ScriptDraft, scope: ScriptScope, target: RuntimeTarget, allowed: ReadonlySet<number>, brief: string | null, plan: NarrationPlan, base: LoadedScript | null, mode: Mode): string {
+    const only = allowed.size === scope.architecture.sequences.length ? undefined : allowed;
+    const timing = scriptTiming(allBlocks(draft), target);
+    const sectionNotes = mode === 'NARRATION' && base ? base.draft.sections.filter((s) => s.editorNotes || s.reviewStatus === 'REJECTED').map((s) => `- Section ${s.sequence}${s.reviewStatus === 'REJECTED' ? ' (rejected by the editor)' : ''}: ${s.editorNotes ?? 'no note'}`) : [];
+    return [
+      this.header(target),
+      `This version runs ${fmtClock(timing.totalSec)} (${timing.words} spoken words), measured from the script.`,
+      '',
+      renderNarrationContext(plan),
+      '',
+      `# The script${mode === 'NARRATION' && base ? ` (v${base.row.version})` : ''} — the narration to edit${only ? `: section${only.size > 1 ? 's' : ''} ${[...only].join(', ')} only` : ''}`,
+      renderScript(draft, { only }),
+      '',
+      renderArchitecture(scope),
+      '',
+      renderEvidence(scope),
+      '',
+      "# The director's instructions (they may steer style and emphasis; never the evidence)",
+      brief ?? 'None. Apply the house style in full.',
+      ...(sectionNotes.length ? ["The director's notes on sections:", ...sectionNotes] : []),
+    ].join('\n');
+  }
+
+  /**
    * What a reviewer sees: the script (the sections it may change in full),
    * the rule findings, the architecture and the evidence; the version it was
    * made from, the writer's change log and the lines the writer removed on
@@ -488,7 +615,9 @@ class ScriptRun {
       previous?: LoadedScript | null;
       base?: ScriptDraft | null;
       refinement?: boolean;
-      checklist?: boolean;
+      /** The version is a narration pass on its own (no lines were removed on purpose: the pass edits, it does not cut). */
+      narration?: boolean;
+      checklist?: readonly string[] | null;
       cuts?: boolean;
       kept?: readonly string[];
       changeLog?: ScriptChangeLog | null;
@@ -504,13 +633,13 @@ class ScriptRun {
     const timing = scriptTiming(allBlocks(draft), target);
     const { plan, refrains } = opts.cuts ? cutPlan(draft, scope, checks) : { plan: null, refrains: [] as Refrain[] };
     const cuts = plan ? renderTrimPlan({ ...plan, candidates: plan.candidates.filter((c) => inSections(c.ref)) }) : null;
-    const removed = previous ? removedLines(previous.draft, draft, only) : [];
+    const removed = previous && !opts.narration ? removedLines(previous.draft, draft, only) : [];
     const log = opts.changeLog;
     return [
       this.header(target),
       `This version runs ${fmtClock(timing.totalSec)} (${timing.words} spoken words), measured from the script.`,
       ...(brief ? ['', `# The editor's brief for this version\n${brief}`] : []),
-      ...(opts.refinement && previous ? ['', `This version is a narrative refinement of v${previous.row.version}: rewording must not change what the evidence supports — hedges kept, numbers and dates unchanged, quotations exact, fiction still fiction, every factual sentence still citing the claim behind it.`] : []),
+      ...(opts.refinement && previous ? ['', `This version is a ${opts.narration ? 'narration pass on' : 'narrative refinement of'} v${previous.row.version}: rewording must not change what the evidence supports — hedges kept, numbers and dates unchanged, quotations exact, fiction still fiction, every factual sentence still citing the claim behind it.`] : []),
       '',
       `# The script${only ? ` — review and change only section${only.size > 1 ? 's' : ''} ${[...only].join(', ')}` : ''}`,
       renderScript(draft, { only }),
@@ -545,7 +674,7 @@ class ScriptRun {
             renderScript(previous.draft, { only }),
           ]
         : []),
-      ...(opts.checklist ? ['', `# Refinement checklist — answer every question, in this order, for this version against v${previous?.row.version ?? '?'}`, ...REFINEMENT_CHECKLIST.map((q, i) => `${i + 1}. ${q}`)] : []),
+      ...(opts.checklist?.length ? ['', `# ${opts.narration ? 'Narration' : 'Refinement'} checklist — answer every question, in this order, for this version against v${previous?.row.version ?? '?'}`, ...opts.checklist.map((q, i) => `${i + 1}. ${q}`)] : []),
       '',
       renderArchitecture(scope),
       '',
@@ -626,9 +755,9 @@ function countBy(xs: readonly string[]): Record<string, number> {
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** The script editor's checklist answers, one per question in the checklist's order (its own wording of a question is replaced by ours). */
-function checklistAnswers(answers: ScriptEditorOutput['assessment'], notes: string[]): NonNullable<NonNullable<ScriptContent['editor']>['assessment']> {
-  if (answers.length !== REFINEMENT_CHECKLIST.length) notes.push(`Script editor: ${answers.length} checklist answer(s) for ${REFINEMENT_CHECKLIST.length} questions`);
-  return REFINEMENT_CHECKLIST.flatMap((question, i) => {
+function checklistAnswers(answers: ScriptEditorOutput['assessment'], checklist: readonly string[], notes: string[]): NonNullable<NonNullable<ScriptContent['editor']>['assessment']> {
+  if (answers.length !== checklist.length) notes.push(`Script editor: ${answers.length} checklist answer(s) for ${checklist.length} questions`);
+  return checklist.flatMap((question, i) => {
     const a = answers[i];
     return a ? [{ question, answer: a.answer, comparedToPrevious: a.comparedToPrevious, note: a.note.trim() }] : [];
   });
@@ -658,7 +787,7 @@ function refinementSummary(base: LoadedScript, draft: ScriptDraft, content: Scri
 export type { ScriptFinding };
 
 /** The quality rules about the story — said once, facts that earn their place, introductions, evidence, pacing — read before the sentence-level warnings. */
-const STORY_RULES = CRAFT_KINDS.filter((k) => !['WRITTEN_SYNTAX', 'LIST_SENTENCE', 'NUMBER_DENSE', 'MONOTONOUS_RHYTHM', 'NOUN_HEAVY'].includes(k));
+const STORY_RULES = CRAFT_KINDS.filter((k) => !['WRITTEN_SYNTAX', 'LIST_SENTENCE', 'NUMBER_DENSE', 'MONOTONOUS_RHYTHM', 'NOUN_HEAVY', 'AI_PATTERN', 'VISUAL_IN_NARRATION', 'MONEY_WITHOUT_CONTEXT'].includes(k) && !k.startsWith('NARRATION_'));
 
 /**
  * Rule findings as a reader of the prompt sees them: blocking ones first and
@@ -709,4 +838,59 @@ function removedLines(previous: ScriptDraft, draft: ScriptDraft, only?: Readonly
     for (const d of diffBlocks(s.blocks, now)) if (d.op === 'removed') out.push(d.text);
   }
   return out.slice(0, 40);
+}
+
+/** A narration pass's change log, from its own ledger: what it changed, section by section, and the lines it kept. */
+function narrationChangeLog(changes: readonly ScriptReviewChange[], out: NarrationOutput | null, draft: ScriptDraft, kept: readonly string[]): ScriptChangeLog {
+  const mine = changes.filter((c) => c.reviewer === 'NARRATION' && c.status === 'ACCEPTED');
+  const sections = [...new Set(mine.map((c) => c.section).filter((n): n is number => n !== null))].sort((a, b) => a - b);
+  const text = allBlocks(draft).map((b) => b.text).join(' ');
+  return {
+    summary: `${out?.verdict ? `${out.verdict} ` : ''}Narration pass: ${mine.length} block(s) edited, every other block left as written.`,
+    changes: sections.map((n) => ({ section: n, what: mine.filter((c) => c.section === n).map((c) => c.ref).join(', '), why: [...new Set(mine.filter((c) => c.section === n).map((c) => c.reason))].slice(0, 3).join(' / ') })),
+    kept: [...new Set([...kept, ...(out?.kept ?? [])])].filter((l) => text.includes(l)),
+  };
+}
+
+/** The narration record in the job's final log entry: what the pass did, and the diagnostics before and after. */
+function narrationLog(n: NonNullable<ScriptContent['narration']>) {
+  const rubric = (r: readonly { dimension: string; score: number }[] | undefined) => (r ?? []).map((x) => `${x.dimension} ${x.score}`).join(', ');
+  return {
+    engine: n.engine,
+    corpusVersion: n.corpusVersion,
+    styleBible: n.styleBibleVersion,
+    unavailable: n.unavailable,
+    verdict: n.verdict,
+    counts: n.counts,
+    fingerprint: `${n.diagnostics.before?.fingerprint.score ?? '—'} → ${n.diagnostics.after.fingerprint.score} (signals ${n.diagnostics.before?.fingerprint.signals ?? '—'} → ${n.diagnostics.after.fingerprint.signals})`,
+    rubricBefore: rubric(n.diagnostics.before?.rubric),
+    rubricAfter: rubric(n.diagnostics.after.rubric),
+    retrieved: n.retrieved.map((r) => `${r.id}@${r.version} [${r.category}/${r.quality}] for ${r.refs.slice(0, 4).join(', ')}`),
+    money: { contexts: n.money.contexts.map((c) => `${c.id} ${c.amountText} ${c.currency}: ${c.explanation} (${c.sourceClaimKeys.join(', ')}, ${c.confidence})`), used: n.money.used, gaps: n.money.gaps.map((g) => `${g.ref}: ${g.amountText} ${g.currency}`) },
+    names: n.names.map((x) => `${x.displayName}${x.candidate ? ` — pronunciation to decide (${x.candidateReasons.join('; ')})` : ''}`),
+    visualMoved: n.visualMoved,
+  };
+}
+
+/** The change report against the base, compactly, with representative before/after examples (for the job log). */
+function editorialSummary(base: LoadedScript, saved: { id: string; version: number }, draft: ScriptDraft, content: ScriptContent, narration: NonNullable<ScriptContent['narration']>) {
+  const r = changeReport({
+    base: { id: base.row.id, version: base.row.version, blocks: narrationBlocks(base.draft) },
+    revised: { id: saved.id, version: saved.version, blocks: narrationBlocks(draft) },
+    lineage: narration.lineage,
+    ledger: content.reviewChanges ?? [],
+    narration,
+    uncertainty: uncertaintyOf,
+  });
+  const clipped = (t: string | null) => (t && t.length > 420 ? `${t.slice(0, 419)}…` : t);
+  return {
+    pairing: r.pairing,
+    totals: r.totals,
+    fingerprint: r.fingerprint,
+    provenance: r.provenance,
+    examples: r.blocks
+      .filter((b) => b.status === 'REWRITTEN')
+      .slice(0, 12)
+      .map((b) => ({ ref: `${b.baseRef} → ${b.ref}`, original: clipped(b.original), revised: clipped(b.revised), why: b.reasons, evidencePreserved: b.evidencePreserved, uncertaintyPreserved: b.uncertaintyPreserved, moneyContext: b.moneyContext, aiPatternsRemoved: b.aiPatternsRemoved, aiPatternsAdded: b.aiPatternsAdded, visualDuplicationRemoved: b.visualDuplicationRemoved, pronunciationCandidates: b.pronunciationCandidates })),
+  };
 }

@@ -10,7 +10,8 @@ import type { ScriptConfig } from './config.ts';
 import { ScriptEditing } from './editing.ts';
 import { createScriptStage } from './stage.ts';
 import { loadVersion } from './store.ts';
-import { REFINEMENT_CHECKLIST, refineSystemPrompt } from './prompts.ts';
+import { NARRATION_CHECKLIST, REFINEMENT_CHECKLIST, refineSystemPrompt } from './prompts.ts';
+import type { WriterOutput } from './schemas.ts';
 import { FakeScriptAI, parseScript } from './testing.ts';
 
 const db = useTestDatabase();
@@ -116,10 +117,10 @@ describe('script engine (fake AI, real database)', () => {
       ['Cornelis Proefman', true],
       ['Pieter Graanhout', true],
     ]);
-    // Five model calls, all in the ledger against this job, with their (estimated) cost.
-    expect(s.ai.calls).toMatchObject({ 'script.plan': 1, 'script.write': 1, 'script.edit': 1, 'script.factCheck': 1, 'script.perform': 1 });
+    // Six model calls — the narration pass among them — all in the ledger against this job, with their (estimated) cost.
+    expect(s.ai.calls).toMatchObject({ 'script.plan': 1, 'script.write': 1, 'script.narrate': 1, 'script.edit': 1, 'script.factCheck': 1, 'script.perform': 1 });
     const calls = await db.providerCall.findMany({ where: { jobId: job.id } });
-    expect(calls.map((c) => c.provider)).toEqual(['fake-ai', 'fake-ai', 'fake-ai', 'fake-ai', 'fake-ai']);
+    expect(calls.map((c) => c.provider)).toEqual(['fake-ai', 'fake-ai', 'fake-ai', 'fake-ai', 'fake-ai', 'fake-ai']);
     expect(calls.every((c) => c.costBasis === 'ESTIMATED' && Number(c.estimatedCostUsd) > 0)).toBe(true);
     // The writer was told the architecture, the plan and the evidence; never asked to research.
     const writerPrompt = s.ai.prompts['script.write']![0]!;
@@ -205,9 +206,9 @@ describe('script engine (fake AI, real database)', () => {
     expect(s2.sections[2]!.status).toBe('APPROVED');
     expect(s2.sections[1]!.status).toBe('PENDING');
     expect(s2.sections[1]!.blocks.every((b) => String(b[1]).includes('This time it is told more tightly (test).'))).toBe(true);
-    // Model calls only for the rewritten section: no plan; one rewrite, one review of each kind, one performance pass.
+    // Model calls only for the rewritten section: no plan; one rewrite, one narration pass, one review of each kind, one performance pass.
     const delta = Object.fromEntries(Object.entries(s.ai.calls).map(([k, n]) => [k, n - (callsBefore[k] ?? 0)]).filter(([, n]) => n !== 0));
-    expect(delta).toEqual({ 'script.rewrite': 1, 'script.edit': 1, 'script.factCheck': 1, 'script.perform': 1 });
+    expect(delta).toEqual({ 'script.rewrite': 1, 'script.narrate': 1, 'script.edit': 1, 'script.factCheck': 1, 'script.perform': 1 });
     const prompt = s.ai.prompts['script.rewrite']![0]!;
     expect(prompt).toContain('# Rewrite section 2 of script v1; every other section stays exactly as it is');
     expect(prompt).toContain("The editor's brief: Make this section more tense and less explanatory (test).");
@@ -284,9 +285,9 @@ describe('script engine (fake AI, real database)', () => {
     expect(v2.draft.sections.map((x) => x.plan)).toEqual(before.draft.sections.map((x) => x.plan));
     expect(v2.draft.sections.every((x) => x.reviewStatus === 'PENDING')).toBe(true);
 
-    // Four calls: the refinement, both reviewers, the performance — no planner.
+    // Five calls: the refinement, the narration pass, both reviewers, the performance — no planner.
     const delta = Object.fromEntries(Object.entries(s.ai.calls).map(([k, n]) => [k, n - (callsBefore[k] ?? 0)]).filter(([, n]) => n !== 0));
-    expect(delta).toEqual({ 'script.refine': 1, 'script.edit': 1, 'script.factCheck': 1, 'script.perform': 1 });
+    expect(delta).toEqual({ 'script.refine': 1, 'script.narrate': 1, 'script.edit': 1, 'script.factCheck': 1, 'script.perform': 1 });
     const prompt = s.ai.prompts['script.refine']![0]!;
     for (const part of [
       '# Refine the narration of script v1 — every section; its story, order, evidence and information classes stay as they are',
@@ -522,7 +523,7 @@ describe('script engine (fake AI, real database)', () => {
     // Measured, not judged: the report counts the changes; the log lists them.
     const report = QualityReport.parse(v1.row.qualityReport);
     expect(report.measurements?.find((m) => m.id === 'review_changes')).toMatchObject({ value: '1 kept, 2 rejected, 0 skipped', detail: 'script editor 1 kept / 2 rejected / 0 skipped' });
-    expect(report.judgments?.map((j) => j.id)).toEqual(['script_editor', 'fact_checker']);
+    expect(report.judgments?.map((j) => j.id)).toEqual(['script_editor', 'narration_pass', 'fact_checker']);
     expect(report.checks.map((c) => c.id)).not.toContain('script_editor');
     const final = await db.projectEvent.findFirstOrThrow({ where: { projectId, type: 'JOB_PROGRESS', jobId: job.id }, orderBy: { createdAt: 'desc' } });
     expect(final.data).toMatchObject({ review: { kept: 1, rejected: 2, skipped: 0 } });
@@ -572,14 +573,14 @@ describe('script engine (fake AI, real database)', () => {
     const job = await s.projects.generateScript(projectId, {}, 'editor');
     await s.runner.drain();
     expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
-    expect(s.ai.calls).toMatchObject({ 'script.plan': 1, 'script.write': 1, 'script.edit': 1, 'script.factCheck': 2, 'script.perform': 1 });
+    expect(s.ai.calls).toMatchObject({ 'script.plan': 1, 'script.write': 1, 'script.narrate': 1, 'script.edit': 1, 'script.factCheck': 2, 'script.perform': 1 });
     const v1 = await version(projectId, 1);
     expect(ScriptContent.parse(v1.row.content).editor).toBeNull();
     // A reviewer's verdict is a judgment, not a check: recorded as not reviewed, with why.
     const report = QualityReport.parse(v1.row.qualityReport);
     expect(report.checks.find((c) => c.id === 'script_editor')).toBeUndefined();
     expect(report.judgments?.find((j) => j.id === 'script_editor')).toMatchObject({ value: 'not reviewed', detail: '[fake-ai] refused (test)', source: 'script editor (model)' });
-    expect(v1.row.stats).toMatchObject({ resumedSteps: ['plan', 'write', 'edit'] });
+    expect(v1.row.stats).toMatchObject({ resumedSteps: ['plan', 'write', 'narrate', 'edit'] });
   });
 
   it('approving a newer script supersedes the approved one, and a revision needs the architecture it tells', async () => {
@@ -608,5 +609,126 @@ describe('script engine (fake AI, real database)', () => {
     await expect(s.projects.generateScript(p.id, {}, 'editor')).rejects.toThrow(/A script can be written once the story architecture is approved/);
     await db.project.update({ where: { id: p.id }, data: { status: 'STORY_APPROVED' } });
     await expect(s.projects.generateScript(p.id, {}, 'editor')).rejects.toThrow(/No approved story architecture/);
+  });
+
+  // ── Writing Engine 2: the Human Narration Pass ──────────────────────────────
+
+  /** A writer with machine habits: a fake dramatic beat in one block, the picture described in another. */
+  const theatrical = (out: WriterOutput) => {
+    const blocks = out.sections.flatMap((x) => x.blocks);
+    const documented = blocks.find((b) => b.infoClass === 'DOCUMENTED' && !b.speakerId)!;
+    documented.text = `${documented.text} And then, everything changed.`;
+    const scene = blocks.find((b) => b.infoClass === 'RECONSTRUCTION' && !b.speakerId)!;
+    scene.text = `He leans closer. The table shrugs. ${scene.text}`;
+    return out;
+  };
+
+  it('a narration pass makes a new version by targeted edits: the base untouched, the evidence kept, the lineage exact, every change explained — and a second pass changes nothing', async () => {
+    // The base is written without the pass (as before Writing Engine 2), with machine habits in it.
+    const s = setup({ narration: ['NARRATION'] });
+    s.ai.writerTransform = theatrical;
+    const projectId = await scripted(s);
+    expect(s.ai.calls['script.narrate']).toBeUndefined();
+    const v1 = await snapshot(projectId, 1);
+    const before = await version(projectId, 1);
+    const theatricalKeys = allBlocksOf(before).filter((b) => /And then, everything changed\.|The table shrugs\./.test(b.text)).map((b) => b.key);
+    expect(theatricalKeys).toHaveLength(2);
+    const callsBefore = { ...s.ai.calls };
+
+    const job = await s.projects.narrateScript(projectId, { baseVersion: 1 }, 'editor');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
+
+    // v1 kept exactly as it was; v2 made from it.
+    expect(await snapshot(projectId, 1)).toEqual(v1);
+    const v2 = await version(projectId, 2);
+    expect(v2.row).toMatchObject({ status: 'IN_REVIEW', revisionOfId: before.row.id });
+    const content = ScriptContent.parse(v2.row.content);
+    expect(content.provenance).toMatchObject({ origin: 'NARRATION', baseVersion: 1, baseId: before.row.id });
+    // No planner, no writer: the pass, both reviewers, the performance.
+    const delta = Object.fromEntries(Object.entries(s.ai.calls).map(([k, n]) => [k, n - (callsBefore[k] ?? 0)]).filter(([, n]) => n !== 0));
+    expect(delta).toEqual({ 'script.narrate': 1, 'script.edit': 1, 'script.factCheck': 1, 'script.perform': 1 });
+
+    // Only the flagged blocks changed; every block keeps its class, beats, claims and speaker.
+    const shape = (v: typeof v2) => v.draft.sections.map((x) => x.blocks.map((b) => [b.key, b.infoClass, b.beatIds.join(','), b.claimKeys.join(','), b.speakerId]));
+    expect(shape(v2)).toEqual(shape(before));
+    for (const b of allBlocksOf(v2)) {
+      const old = allBlocksOf(before).find((x) => x.key === b.key)!;
+      if (theatricalKeys.includes(b.key)) expect(b.text).not.toBe(old.text);
+      else expect(b.text).toBe(old.text);
+    }
+    expect(allBlocksOf(v2).some((b) => /And then|shrugs|leans closer/.test(b.text))).toBe(false);
+    expect(evidenceChanges(before.draft, v2.draft)).toEqual({ claimsAdded: [], claimsRemoved: [], figuresAdded: [], figuresRemoved: [] });
+    // The picture description went to the visual layer.
+    const scene = allBlocksOf(v2).find((b) => b.key === theatricalKeys.find((k) => allBlocksOf(before).find((x) => x.key === k)!.text.startsWith('He leans')))!;
+    expect(scene.visual.note).toContain('He leans closer. The table shrugs.');
+
+    // The record: what the pass did, lineage block for block, diagnostics before and after.
+    const n = content.narration!;
+    expect(n).toMatchObject({ engine: 'writing-engine-2', unavailable: null, counts: { flagged: 2, kept: 2, rejected: 0 } });
+    expect(n.lineage).toEqual(allBlocksOf(before).map((b) => ({ base: b.key, saved: b.key })));
+    expect(n.diagnostics.before!.fingerprint.signals).toBeGreaterThan(n.diagnostics.after.fingerprint.signals);
+    expect(n.diagnostics.after.fingerprint.perPattern.visual_description ?? 0).toBe(0);
+    expect(n.visualMoved.map((x) => x.ref)).toEqual([scene.key]);
+    expect(n.diagnostics.after.rubric.map((r) => r.dimension)).toHaveLength(10);
+    // The change ledger: each narration change, why, and where it landed.
+    const mine = content.reviewChanges!.filter((c) => c.reviewer === 'NARRATION');
+    expect(mine.map((c) => [c.id, c.status, c.savedRef])).toEqual(theatricalKeys.sort().map((k, i) => [`N${i + 1}`, 'ACCEPTED', k]));
+    // The script editor answered the narration checklist (the human-writer question first) and saw what the pass changed.
+    expect(content.editor!.assessment!.map((a) => a.question)).toEqual([...NARRATION_CHECKLIST]);
+    const editorPrompt = s.ai.prompts['script.edit']!.at(-1)!;
+    expect(editorPrompt).toContain('# Narration checklist — answer every question, in this order, for this version against v1');
+    expect(editorPrompt).toMatch(/^- N1 EDIT \d+\.\d+ — ACCEPTED/m);
+    expect(editorPrompt).not.toContain('Lines the writer removed on purpose');
+    // Measured and judged, apart.
+    const report = QualityReport.parse(v2.row.qualityReport);
+    expect(report.judgments?.map((j) => j.id)).toEqual(['script_editor', 'checklist', 'narration_pass', 'fact_checker']);
+    expect(report.measurements?.find((m) => m.id === 'ai_fingerprint')?.detail).toMatch(/before the narration pass/);
+    // The final log has the change report against v1, with examples: original, revised, why.
+    const final = await db.projectEvent.findFirstOrThrow({ where: { projectId, type: 'JOB_PROGRESS', jobId: job.id }, orderBy: { createdAt: 'desc' } });
+    const log = final.data as { changeReport: { pairing: string; totals: { rewritten: number; unchanged: number }; examples: { original: string; revised: string; why: string[]; evidencePreserved: boolean; aiPatternsRemoved: string[] }[] } };
+    expect(log.changeReport.pairing).toBe('EXACT');
+    expect(log.changeReport.totals).toMatchObject({ rewritten: 2, unchanged: allBlocksOf(before).length - 2 });
+    expect(log.changeReport.examples.every((e) => e.original && e.revised && e.why.length > 0 && e.evidencePreserved && e.aiPatternsRemoved.length > 0)).toBe(true);
+
+    // A second pass converges: even a narrator that edits every block changes nothing — every block is settled.
+    s.ai.narrator = (prompt) => ({ verdict: 'Everything could be better (test).', edits: parseScript(prompt).filter((b) => !b.speaker).map((b) => ({ ref: b.ref, text: `${b.text} Again.`, reason: 'Drift (test).', fixes: ['RHYTHM' as const], moneyContext: [], visualNote: null })), kept: [] });
+    await s.projects.narrateScript(projectId, { baseVersion: 2 }, 'editor');
+    await s.runner.drain();
+    const v3 = await version(projectId, 3);
+    expect(allBlocksOf(v3).map((b) => b.text)).toEqual(allBlocksOf(v2).map((b) => b.text));
+    const again = ScriptContent.parse(v3.row.content).narration!;
+    expect(again.counts).toMatchObject({ flagged: 0, kept: 0 });
+    expect(again.counts.settled).toBe(again.counts.proposed);
+  });
+
+  it('runs the narration pass in a draft, between the writer and the script editor', async () => {
+    const s = setup();
+    s.ai.writerTransform = theatrical;
+    const projectId = await scripted(s);
+    const v1 = await version(projectId, 1);
+    const content = ScriptContent.parse(v1.row.content);
+    expect(content.provenance.origin).toBe('DRAFT');
+    expect(content.narration!.counts).toMatchObject({ flagged: 2, kept: 2 });
+    expect(allBlocksOf(v1).some((b) => /And then|shrugs/.test(b.text))).toBe(false);
+    // The narration prompt: what the diagnostics found, the lines to keep, money context, names, corpus examples — the house style in the system prompt.
+    const prompt = s.ai.prompts['script.narrate']![0]!;
+    for (const part of ['# What the diagnostics found — 2 block(s) need work', '# Lines to keep word for word', '# Money context the evidence supports', '# Names, as the evidence spells them', '# The approved story architecture']) expect(prompt).toContain(part);
+    expect(s.ai.systems['script.narrate']![0]).toContain('THE HOUSE STYLE');
+    // The script editor sees the pass's changes (and must not undo them).
+    expect(s.ai.prompts['script.edit']![0]).toContain('# Changes already judged in this run');
+  });
+
+  it('fails a narration pass that cannot run, saving no copy of the base', async () => {
+    const s = setup();
+    const projectId = await scripted(s);
+    s.ai.brokenTask = 'script.narrate';
+    const job = await s.projects.narrateScript(projectId, { baseVersion: 1 }, 'editor');
+    await s.runner.drain();
+    const done = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(done.status).toBe('FAILED');
+    expect(done.error).toMatch(/The narration pass could not run/);
+    expect(await db.script.count({ where: { projectId } })).toBe(1);
+    await expect(s.projects.narrateScript(projectId, { baseVersion: 7 }, 'editor')).rejects.toThrow(/Script v7 not found/);
   });
 });

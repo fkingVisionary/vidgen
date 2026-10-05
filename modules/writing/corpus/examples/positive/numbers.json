@@ -1,0 +1,198 @@
+[
+  {
+    "id": "numbers-p-sexton-paid-by-the-grave",
+    "version": 1,
+    "text": "In the first week of September, the parish clerk entered six burials in the register. In the second week, he entered nineteen. By the end of the month, the vestry had agreed to pay the sexton by the grave instead of by the week.",
+    "category": "numbers",
+    "quality": "excellent",
+    "traits": [
+      "chronology",
+      "number_in_context",
+      "scale",
+      "money_context",
+      "reveal_not_announce",
+      "restraint",
+      "dry_humour",
+      "trust_the_viewer"
+    ],
+    "strengths": [
+      "the numbers arrive as weeks, not as a total",
+      "the third beat measures the epidemic through a change in one man's pay",
+      "no adjective anywhere"
+    ],
+    "weaknesses": [
+      "the change in the sexton's pay needs a beat after it, because the listener has to work out why it matters",
+      "the matching openings of the first two sentences must not run on into a third"
+    ],
+    "spokenRhythm": "Two sentences built the same way with one number each, then a longer third that breaks the pattern and slows.",
+    "narrativeFunction": "Shows an epidemic gathering pace through the parish's own books, week by week.",
+    "whyItWorks": "Six and nineteen are small enough to hear and far enough apart to alarm. The third sentence has no number at all. A vestry that stops paying its sexton by the week has accepted that the graves will keep coming, and the narrator never has to say so.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-p-whaleships-and-coal-gas",
+    "version": 1,
+    "text": "In its best year, the port sent forty-one whaleships to sea. A generation later, it sent nine. By then, the lamps in the town's own streets were burning gas made from coal.",
+    "category": "numbers",
+    "quality": "good",
+    "traits": [
+      "chronology",
+      "cause_and_effect",
+      "number_in_context",
+      "dry_humour",
+      "scale",
+      "restraint"
+    ],
+    "strengths": [
+      "two numbers, two sentences, a generation between them",
+      "the cause arrives as a detail from the town itself",
+      "the irony is left unspoken"
+    ],
+    "weaknesses": [
+      "a generation is vaguer than the record will be, and the film may need the year on screen",
+      "the cause is simplified for one line and needs fuller treatment elsewhere"
+    ],
+    "spokenRhythm": "A medium sentence, a short one that answers it, and a longer close that seems to change the subject.",
+    "narrativeFunction": "Compresses the decline of a whaling port into two counts and a reason.",
+    "whyItWorks": "The fall from forty-one to nine is clear at speaking speed. The narrator doesn't explain the decline. The gas in the port's own streets explains it, with a dry irony the listener can enjoy without being prompted.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-p-twelve-tons-a-day",
+    "version": 1,
+    "text": "A navvy on the canal was expected to shift about twelve tons of earth a day. The cutting through the ridge took four years of days like that. The spoil was tipped across the marsh below, and the town's main road still runs along the top of it.",
+    "category": "numbers",
+    "quality": "good",
+    "traits": [
+      "scale",
+      "number_in_context",
+      "concrete_detail",
+      "cause_and_effect",
+      "plain_language",
+      "payoff"
+    ],
+    "strengths": [
+      "a daily quota makes an engineering scale human",
+      "four years of days like that turns a duration into labour",
+      "the scale lands in a road the audience can still use, without a total"
+    ],
+    "weaknesses": [
+      "the claim about the road today must be checked on the ground before it is broadcast",
+      "says nothing of what the work cost the men, which the film has to carry elsewhere"
+    ],
+    "spokenRhythm": "A plain opening, a shorter sentence that multiplies it, and a long, even close that moves from the past to the present.",
+    "narrativeFunction": "Gives the scale of the canal's biggest cutting through one man's daily quota and the ground it left behind.",
+    "whyItWorks": "One number, one duration, and then no number at all. The listener multiplies the daily quota without being asked, and the road built on the spoil turns a sum nobody could picture into a place everybody in the town knows.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-p-ninety-days-of-food",
+    "version": 1,
+    "text": "The sledge party left the ship with ninety days of food. They turned for home on the sixtieth day, a little later than they had planned. They were back at the ship on the hundred and fourth. None of their diaries says much about the last two weeks.",
+    "category": "numbers",
+    "quality": "excellent",
+    "traits": [
+      "chronology",
+      "number_in_context",
+      "trust_the_viewer",
+      "tension",
+      "human_stakes",
+      "restraint",
+      "source_as_detective_work",
+      "reveal_not_announce"
+    ],
+    "strengths": [
+      "the arithmetic is left to the listener",
+      "every number is a moment in the journey",
+      "the silence of the diaries is the climax"
+    ],
+    "weaknesses": [
+      "a listener who misses the first number misses the point, so it needs a clear read and perhaps a date on screen"
+    ],
+    "spokenRhythm": "Four sentences of similar length, each with one number at most, the last one dropping its voice.",
+    "narrativeFunction": "Tells the story of a near-fatal sledge journey through its rations and its dates.",
+    "whyItWorks": "Ninety days of food and a return on the hundred and fourth leave a gap the listener works out for themselves. The narrator never says starving. The diaries that go quiet at exactly that point say it instead.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-p-soup-kitchen-list-grows",
+    "version": 1,
+    "text": "The soup kitchen's first list, drawn up in November, had forty families on it. The list for January had three hundred and twelve. The subscription had been raised with the first list in mind.",
+    "category": "numbers",
+    "quality": "excellent",
+    "traits": [
+      "chronology",
+      "number_in_context",
+      "scale",
+      "dry_humour",
+      "cause_and_effect",
+      "restraint",
+      "tension",
+      "trust_the_viewer"
+    ],
+    "strengths": [
+      "two dated counts carry the whole crisis",
+      "the third sentence turns a number into a problem without another number",
+      "dry without being flippant"
+    ],
+    "weaknesses": [
+      "an exact figure is harder to hear than a round one, and works here only because a list is an exact thing"
+    ],
+    "spokenRhythm": "A longer opener, a short count, and a plain close that lands quietly.",
+    "narrativeFunction": "Shows a hungry winter outrunning the relief that was raised for it.",
+    "whyItWorks": "The leap from forty to three hundred and twelve is felt at once. The narration never says the money ran short. Its last sentence says what the money was raised for, and the listener does the rest.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "numbers-p-ten-thousand-on-the-bank",
+    "version": 1,
+    "text": "The town's own history says ten thousand people came to see the bridge opened. The toll keeper's book for that day records just under nine hundred crossings. Both figures may well be right. It cost nothing to stand on the bank and watch.",
+    "category": "numbers",
+    "quality": "excellent",
+    "traits": [
+      "legend_vs_record",
+      "source_as_detective_work",
+      "dry_humour",
+      "hedge_natural",
+      "number_in_context",
+      "curiosity",
+      "memorable_line"
+    ],
+    "strengths": [
+      "sets the tradition against the record without mocking either",
+      "the resolution is practical, not a debunking",
+      "one number per sentence"
+    ],
+    "weaknesses": [
+      "the last line must be read straight to keep the humour dry"
+    ],
+    "spokenRhythm": "Two even sentences with a number each, then two shorter ones that loosen the tension.",
+    "narrativeFunction": "Tests the town's story about the bridge's opening against the toll book, and reconciles them.",
+    "whyItWorks": "The narrator puts two figures side by side and resists the easy debunking. The practical answer is funnier and fairer than calling the town's history wrong, and it shows the listener what each source was able to count.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

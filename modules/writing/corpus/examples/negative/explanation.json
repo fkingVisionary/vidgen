@@ -1,0 +1,144 @@
+[
+  {
+    "id": "explanation-n-imagine-gold-dust",
+    "version": 1,
+    "text": "Imagine you've just spent three months knee-deep in a freezing creek, and you finally have a pouch of gold dust in your hand. So what is it actually worth? The answer? It depends. The assay office would melt it down, weigh it and test its purity, and only then would you know.",
+    "category": "explanation",
+    "quality": "bad",
+    "traits": [
+      "imagine_opener",
+      "rhetorical_question",
+      "qa_pair"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "casts the listener as a prospector",
+      "asks a question and answers it with a fragment",
+      "it depends delays the explanation it then gives",
+      "most of the length is staging"
+    ],
+    "spokenRhythm": "A long second-person opener, a quick run of question and answer like a quiz, then the actual content squeezed into the last sentence.",
+    "narrativeFunction": "Meant to explain how a miner learned what his gold was worth, but spends itself on setting the scene.",
+    "whyItFails": "Imagine puts the listener in a costume instead of telling them about someone. The question and its one-word reply are the quiz-show rhythm of generic history videos, and it depends is filler. The only explanation is in the final sentence, and the rest is delay.",
+    "rewrite": "A miner might spend three months in a freezing creek for a pouch of gold dust. He didn't know what it was worth until the assay office had melted it down, weighed it and tested its purity.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-n-delve-coffee-house",
+    "version": 1,
+    "text": "Let's delve into the fascinating world of the coffee house. Remarkably, these were far more than places to drink coffee — they were a rich tapestry of commerce, gossip and ideas — the beating heart of the city's trade. Merchants gathered there to read the shipping lists and strike deals, a testament to the power of a simple cup.",
+    "category": "explanation",
+    "quality": "bad",
+    "traits": [
+      "stock_phrase",
+      "hype_adverb",
+      "em_dash",
+      "contrast_formula",
+      "metaphor_stack"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "delve, tapestry and a testament to in three sentences",
+      "remarkably as an opener",
+      "a far-more-than reframe that claims importance",
+      "two dashes and two figures of speech in one sentence",
+      "the power of a simple cup says nothing"
+    ],
+    "spokenRhythm": "Bright and breathless like a presenter's intro, with dashes the voice cannot speak and a flourish to finish.",
+    "narrativeFunction": "Meant to explain what coffee houses were for, but buries its two facts in decoration.",
+    "whyItFails": "Nearly every phrase comes from the stock lexicon of generated narration. The reframe claims significance instead of showing it, the dashes are page syntax, and tapestry and beating heart are two figures fighting over one sentence. The only explanation, that merchants read the shipping lists and made deals there, is hidden in the middle of the last line.",
+    "rewrite": "Merchants went to the coffee houses to read the shipping lists, swap gossip and strike deals.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-n-heres-the-thing-telegraph",
+    "version": 1,
+    "text": "Here's the thing about the telegraph. It wasn't just a wire. It was a revolution. Before it, news from the capital took four days to reach the coast. After it, minutes. The truth is, it didn't just carry messages. It carried power.",
+    "category": "explanation",
+    "quality": "bad",
+    "traits": [
+      "truth_reveal",
+      "contrast_formula",
+      "trailer_language"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "here's the thing and the truth is announce a revelation",
+      "two wasn't-just reframes in seven sentences",
+      "revolution and power are claims, not explanation"
+    ],
+    "spokenRhythm": "Choppy and emphatic, one short claim after another, with the single real fact squeezed into the middle.",
+    "narrativeFunction": "Meant to explain why the telegraph mattered, but asserts its importance instead of showing it.",
+    "whyItFails": "Here's the thing and the truth is promise a revelation and deliver a slogan. The not-just formula appears twice, which turns it into a tic. Four days against minutes already says everything, and the lines around it only shout over the fact.",
+    "rewrite": "Before the telegraph, news from the capital took four days to reach the coast. Afterwards it took minutes.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-n-dread-and-tar-barrels",
+    "version": 1,
+    "text": "In the sweltering streets of the crowded city, a palpable sense of dread hung in the air like a thick fog. Doctors in long black coats hurried from door to door, their faces etched with worry. They believed the fever was carried by bad air rising from the rotting rubbish, so the council paid men to burn tar barrels on the street corners to cleanse it.",
+    "category": "explanation",
+    "quality": "bad",
+    "traits": [
+      "emotion_explained",
+      "visual_description",
+      "metaphor_stack"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "a palpable sense of dread tells the listener what to feel",
+      "hurrying doctors and worried faces are the picture's job",
+      "dread hanging like fog puts a figure on top of a feeling",
+      "the explanation waits until the last sentence"
+    ],
+    "spokenRhythm": "Two heavy atmospheric sentences, then a long informative one left to do all the work.",
+    "narrativeFunction": "Meant to explain how the city tried to fight the fever, but opens on mood and pictures.",
+    "whyItFails": "The listener is told to feel dread before being given a reason to, and the coats and faces describe what any reconstruction would show. The real content, a wrong theory and the action it led to, is interesting on its own, and here it arrives last.",
+    "rewrite": "The doctors believed the fever was carried by bad air rising from the rotting rubbish in the streets. So the council paid men to burn tar barrels on the street corners, to clean the air.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "explanation-n-pepper-sixty-million",
+    "version": 1,
+    "text": "Pepper bought for two shillings a pound at the far end of the voyage sold for thirty at home, a markup of fourteen hundred percent. In today's money, a single ship carrying two hundred tons of it was worth more than sixty million dollars. It's no wonder merchants were willing to risk everything. But the sea would demand its price.",
+    "category": "explanation",
+    "quality": "bad",
+    "traits": [
+      "micro_hook",
+      "trailer_language"
+    ],
+    "strengths": [],
+    "weaknesses": [
+      "three numbers in one breath",
+      "an invented modern conversion stated as fact",
+      "it's no wonder tells the listener what to conclude",
+      "risk everything is trailer language",
+      "ends on a tease instead of a consequence"
+    ],
+    "spokenRhythm": "A dense sentence of figures, a bigger figure, a cliché, then a portentous closing line.",
+    "narrativeFunction": "Meant to explain why merchants risked long spice voyages, but piles up numbers and ends on a threat.",
+    "whyItFails": "No listener can hold a price, a resale price and a percentage in one breath. The conversion into modern dollars is invented arithmetic dressed as fact, and it says nothing about what the cargo meant to anyone at the time. The last line withholds the consequence it promises, which is the micro-hook habit of generated scripts.",
+    "rewrite": "At the far end of the voyage, pepper cost two shillings a pound. At home it sold for thirty. A single ship might bring back two hundred tons of it, and the records give no reliable way to turn that into modern money.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

@@ -1,0 +1,153 @@
+[
+  {
+    "id": "economics-n-pepper-in-todays-money",
+    "version": 1,
+    "text": "Incredibly, a single shipload of pepper could be worth over ten thousand ducats — that's roughly fifteen million dollars in today's money! For the merchants of the port, it was nothing short of a jackpot.",
+    "category": "economics",
+    "quality": "bad",
+    "traits": [
+      "hype_adverb",
+      "em_dash",
+      "stock_phrase"
+    ],
+    "strengths": [
+      "ten thousand ducats for one cargo is a genuine point of interest"
+    ],
+    "weaknesses": [
+      "invents a modern conversion and states it as fact",
+      "Incredibly does the listener's reacting for them",
+      "jackpot is a flippant modern word for a merchant venture"
+    ],
+    "spokenRhythm": "A breathless sentence broken by a dash and ending in an exclamation, then a short verdict built on a stock phrase.",
+    "narrativeFunction": "Meant to show how valuable the pepper trade was, but swaps context for an invented headline number.",
+    "whyItFails": "No reliable rate turns old ducats into modern dollars, so the fifteen million is made up, and it is the number the listener will remember. The dash and the exclamation mark belong on a page. Incredibly and jackpot tell the audience how to react instead of giving them anything to react to.",
+    "rewrite": "A single shipload of pepper could be worth more than ten thousand ducats to the merchants of the port. The surviving records give us no reliable way to say what that would mean today.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-n-share-price-quiz",
+    "version": 1,
+    "text": "The cost of a single canal share? Fifty pounds. The average worker's annual salary? Less than thirty. This wasn't just an investment. It was a gamble. A gamble with everything they had.",
+    "category": "economics",
+    "quality": "bad",
+    "traits": [
+      "qa_pair",
+      "rhetorical_question",
+      "contrast_formula",
+      "fragment_run",
+      "length_repetition"
+    ],
+    "strengths": [
+      "sets the share price beside a wage, which is the right comparison"
+    ],
+    "weaknesses": [
+      "two questions the narrator answers at once",
+      "average worker's annual salary is a modern statistic, not a period wage",
+      "three short sentences hammer a single idea"
+    ],
+    "spokenRhythm": "Question, answer, question, answer, then three clipped sentences that repeat the same beat.",
+    "narrativeFunction": "Meant to show how much a canal share cost an ordinary person, but turns the comparison into a quiz.",
+    "whyItFails": "The comparison is sound, but the question and answer pattern makes the narrator a quizmaster, and the run of short lines says one idea three times. Average and salary are words from a modern statistics office, and they blur which people actually bought the shares.",
+    "rewrite": "A single share in the canal cost fifty pounds. A working man earned less than thirty in a year. For anyone on a wage like that, buying one meant risking everything he had.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-n-picture-the-dockworker",
+    "version": 1,
+    "text": "Picture this. You're a dockworker in a bustling whaling port, earning nine shillings a week. Then your landlord raises the rent to four. You stare down at the handful of coins in your calloused palm, a palpable sense of dread washing over you.",
+    "category": "economics",
+    "quality": "bad",
+    "traits": [
+      "imagine_opener",
+      "stock_phrase",
+      "visual_description",
+      "emotion_explained"
+    ],
+    "strengths": [
+      "the rent is set against a weekly wage, which is the right measure"
+    ],
+    "weaknesses": [
+      "casts the viewer as a character instead of telling them about one",
+      "describes coins and a palm the picture would show",
+      "names the feeling the numbers already carry"
+    ],
+    "spokenRhythm": "A two-word command, a scene-setting sentence, a short jolt, and a long sentence that piles physical detail onto emotion.",
+    "narrativeFunction": "Meant to show what a rise in rent did to a working family, but turns history into role-play.",
+    "whyItFails": "The two figures make the point on their own. Picture this and the second person put the viewer in costume, and bustling is decoration. The coins in the palm are a picture the narration has no business describing, and a palpable sense of dread tells the listener what to feel about a sum they have barely heard.",
+    "rewrite": "A dockworker in the whaling port earned nine shillings a week. When his landlord raised the rent to four shillings, the rent alone took close to half of it.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-n-dark-secret-behind-the-counter",
+    "version": 1,
+    "text": "The bank's ledgers showed deposits of over forty thousand pounds, a staggering fortune for a sleepy market town. But behind the polished mahogany counters lay a dark secret. The money was gone, and nobody knew. And that was only the beginning.",
+    "category": "economics",
+    "quality": "bad",
+    "traits": [
+      "mystery_language",
+      "visual_description",
+      "stock_phrase",
+      "dramatic_transition",
+      "micro_hook"
+    ],
+    "strengths": [
+      "the gap between the ledgers and the vault is a genuine reveal"
+    ],
+    "weaknesses": [
+      "staggering replaces any measure of what forty thousand pounds meant",
+      "dark secret and mahogany counters dress a fact up as a thriller",
+      "ends on a tease instead of the next fact"
+    ],
+    "spokenRhythm": "A long sentence that tails off into adjectives, a portentous middle, a plain fact, and a teasing close.",
+    "narrativeFunction": "Meant to reveal that the bank's deposits had gone, but buries the reveal in mood and a cliffhanger.",
+    "whyItFails": "The sum is called staggering instead of being measured against anything. Sleepy and mahogany are set dressing, the dark secret announces a reveal before giving it, and the last line teases the next scene instead of trusting the audience to want it.",
+    "rewrite": "The bank's ledgers showed deposits of over forty thousand pounds. The money itself was gone, and nobody in the town knew.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-n-salt-white-gold",
+    "version": 1,
+    "text": "To truly understand the medieval economy, we need to delve into the salt trade. Salt wasn't just a seasoning — it was white gold, the lifeblood of kingdoms, a currency in its own right. Its soaring price was a testament to the immense power it held.",
+    "category": "economics",
+    "quality": "bad",
+    "traits": [
+      "stock_phrase",
+      "contrast_formula",
+      "em_dash",
+      "metaphor_stack"
+    ],
+    "strengths": [
+      "why salt was valuable is a good subject for an economic explanation"
+    ],
+    "weaknesses": [
+      "announces an explanation instead of giving one",
+      "three metaphors for one idea",
+      "offers no price, wage or place a listener could hold on to"
+    ],
+    "spokenRhythm": "A throat-clearing opener, a long sentence split by a dash into a stack of images, and a vague abstract close.",
+    "narrativeFunction": "Meant to explain why salt was valuable, but offers only labels.",
+    "whyItFails": "Delve and a testament to are stock phrases, and to truly understand is the narrator promising an explanation instead of making one. The not just X frame and the run of white gold, lifeblood and currency stack three images on one claim, and none of them gives the listener a price or a person. Claims that sweeping would also need sources the sentence never names.",
+    "rewrite": "Salt was expensive in the medieval economy. In some markets it changed hands almost like money.",
+    "source": {
+      "type": "generated_comparison"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

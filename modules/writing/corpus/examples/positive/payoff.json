@@ -1,0 +1,195 @@
+[
+  {
+    "id": "payoff-p-lamp-not-yet-arrived",
+    "version": 1,
+    "text": "The lamp was lit for the first time the following October. That winter the keeper recorded the weather every night, and not one ship was lost on the reef. His entries for the eleven months before are in the same book. Every one of them says that the lamp has not yet arrived.",
+    "category": "payoff",
+    "quality": "excellent",
+    "traits": [
+      "callback",
+      "payoff",
+      "dry_humour",
+      "source_as_detective_work",
+      "restraint",
+      "trust_the_viewer"
+    ],
+    "strengths": [
+      "the callback arrives through a document, not a reminder",
+      "the achievement and the absurdity sit side by side",
+      "no sentence points back at the earlier scene"
+    ],
+    "weaknesses": [
+      "depends on the film having opened with the dark lighthouse",
+      "the final line needs a level read or it tips into a punchline"
+    ],
+    "spokenRhythm": "Four sentences of steady length, the last one quietly restating the problem the film began with.",
+    "narrativeFunction": "Lands the opening detail of the lamp that had not arrived at the moment the lighthouse finally works.",
+    "whyItWorks": "The audience remembers the eleven months, and the narrator lets them make the connection. The success is stated plainly, then the log turns back a few pages, and the dry joke from the opening returns with its weight changed.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "payoff-p-first-dividend-from-dues",
+    "version": 1,
+    "text": "The docks opened years late and far over their estimate. By their tenth year they were handling more cargo than all the old river wharves put together, and that year the company paid a dividend out of the ships' dues. It was the first one that hadn't started out as the shareholders' own money.",
+    "category": "payoff",
+    "quality": "good",
+    "traits": [
+      "callback",
+      "payoff",
+      "cause_and_effect",
+      "chronology",
+      "dry_humour",
+      "restraint"
+    ],
+    "strengths": [
+      "the success is told without a word of praise",
+      "the final sentence recalls the opening without saying so",
+      "the only number is a date in the docks' own life, so nothing competes with the callback"
+    ],
+    "weaknesses": [
+      "the first sentence covers years of the film in a single breath",
+      "the comparison with the old river wharves needs a source behind it"
+    ],
+    "spokenRhythm": "A short summary sentence, a long one that carries both the growth and the dividend, and a medium close that does the callback.",
+    "narrativeFunction": "Closes the dock company's finances by returning to the dividends it paid before any ship had used its quays.",
+    "whyItWorks": "The payoff sits in the word first. A listener who heard the opening knows where the earlier dividends came from, and the narrator trusts them to remember instead of reminding them.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "payoff-p-tide-tables-in-string",
+    "version": 1,
+    "text": "When the printer died, the appraisers listed everything in his shop. They counted his presses, weighed his type and wrote his debts down by name. The last thing on their list is a bundle of tide tables done up in string, each with the wrong month printed at the top. In forty years he had neither sold them nor thrown them away.",
+    "category": "payoff",
+    "quality": "excellent",
+    "traits": [
+      "callback",
+      "payoff",
+      "concrete_detail",
+      "human_stakes",
+      "source_as_detective_work",
+      "restraint",
+      "memorable_line"
+    ],
+    "strengths": [
+      "the callback hides at the end of a dry document",
+      "the narrator never names the printer's feelings",
+      "three plain verbs give the whole shop its texture in one breath"
+    ],
+    "weaknesses": [
+      "needs the botched first commission to have been set up clearly early in the film"
+    ],
+    "spokenRhythm": "A plain opener, a sentence of three quick actions, a long sentence that slows for the bundle, and a medium close.",
+    "narrativeFunction": "Ends the printer's story by returning to the spoiled first job the film opened with.",
+    "whyItWorks": "The inventory is a cold document, which is why the bundle at the end of it moves the listener. The narrator does not say the printer was sentimental, ashamed or stubborn. Anyone who remembers his first job supplies the feeling for themselves.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "payoff-p-pest-house-nobody-bought",
+    "version": 1,
+    "text": "For nineteen years, the pest-house outside the walls stood empty. The council tried twice to sell it, and nobody would buy a building with that name. When the fever came back, it was the only place in the district ready to take the sick.",
+    "category": "payoff",
+    "quality": "good",
+    "traits": [
+      "callback",
+      "payoff",
+      "dry_humour",
+      "cause_and_effect",
+      "human_stakes",
+      "restraint",
+      "chronology"
+    ],
+    "strengths": [
+      "the council's failure to sell becomes the town's good fortune without anyone saying so",
+      "the humour sits in the building's name, not in the narrator's tone",
+      "one number, early, with nothing after it to compete"
+    ],
+    "weaknesses": [
+      "the film must have explained what a pest-house was when it was built",
+      "the last sentence carries the whole payoff and cannot be rushed"
+    ],
+    "spokenRhythm": "A short sentence of time, a medium one with its dry joke at the end, and a longer close that turns the joke round.",
+    "narrativeFunction": "Pays off the council's long, faintly comic attempt to get rid of the empty pest-house at the moment the town needs it.",
+    "whyItWorks": "The audience smiled at the unwanted building earlier, and here the same facts change their meaning. The narrator never says irony, luck or vindication. The building is simply ready, and the listener understands why.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "payoff-p-name-in-the-margin",
+    "version": 1,
+    "text": "The first message about the wreck reached the city just before dawn. It was unsigned, and it had not come from any station. Whoever sent it had walked up the line to where the wire was still whole, climbed a pole and tapped straight in. The operator who took it down wrote a name in the margin anyway.",
+    "category": "payoff",
+    "quality": "excellent",
+    "traits": [
+      "callback",
+      "payoff",
+      "reveal_not_announce",
+      "trust_the_viewer",
+      "human_stakes",
+      "tension",
+      "memorable_line"
+    ],
+    "strengths": [
+      "the callback is carried by a single word",
+      "how the message was sent is told as plain fact, so the listener knows no station could vouch for it",
+      "the reveal is left for the listener to complete"
+    ],
+    "weaknesses": [
+      "works only if the film has already shown that operators knew one another by the way they sent"
+    ],
+    "spokenRhythm": "A short sentence of time, a short one of fact, a long one of how it was sent, and a medium close that turns on its last word.",
+    "narrativeFunction": "Pays off the earlier explanation that telegraph operators could recognise each other's sending, at the moment it matters most.",
+    "whyItWorks": "The film explained earlier that operators knew one another by the rhythm of their keys, and here it never mentions that again. The word anyway does all the work, and the listener has the pleasure of understanding before anyone explains.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "payoff-p-beef-extract-untouched",
+    "version": 1,
+    "text": "The relief ship reached the hut in the second spring. The flour, the lamp oil and the last of the sugar had all gone. What was left, almost untouched, was the sponsor's beef extract. The men had given up on it in the first month, and two winters had not made them hungry enough to start again.",
+    "category": "payoff",
+    "quality": "good",
+    "traits": [
+      "callback",
+      "payoff",
+      "dry_humour",
+      "human_stakes",
+      "concrete_detail",
+      "rhythm_variation"
+    ],
+    "strengths": [
+      "the hardship is measured by what had run out",
+      "the joke is entirely in the facts",
+      "the sponsor returns without being named again"
+    ],
+    "weaknesses": [
+      "the humour sits close to real suffering and the read has to stay level",
+      "relies on the sponsor's tins having been introduced"
+    ],
+    "spokenRhythm": "A plain opener, a list of three that empties the shelves, a short turn, and a long dry close.",
+    "narrativeFunction": "Ends the expedition's ordeal by returning to the sponsor's product the film mentioned when the ship was loaded.",
+    "whyItWorks": "The callback is told as an inventory, and the comedy comes from what the men would not eat. It also says how hard the two winters were without describing a single hardship.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

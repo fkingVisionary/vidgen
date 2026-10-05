@@ -1,0 +1,207 @@
+[
+  {
+    "id": "uncertainty-p-ferryman-blank-page",
+    "version": 1,
+    "text": "On the night the river broke its banks, the village says, the ferryman kept crossing until every family was over. His fare book for that month survives, and the night of the flood is blank. Nobody pays a fare to be rescued, so the empty page can't tell us whether he was out on the water or at home in bed.",
+    "category": "uncertainty",
+    "quality": "excellent",
+    "traits": [
+      "legend_vs_record",
+      "source_as_detective_work",
+      "hedge_natural",
+      "dry_humour",
+      "concrete_detail",
+      "curiosity",
+      "rhythm_variation",
+      "restraint"
+    ],
+    "strengths": [
+      "the legend is told at full strength, and the village is named as its source in passing",
+      "the one surviving record turns out to be silent for a reason the listener can see",
+      "nobody pays a fare to be rescued is dry and comes straight from the logic of the evidence",
+      "never calls the ferryman a hero or a liar"
+    ],
+    "weaknesses": [
+      "the last sentence is the longest and needs an unhurried read so the two possibilities land separately",
+      "at home in bed tips toward a joke, so nothing should push it further"
+    ],
+    "spokenRhythm": "A long telling of the legend with its source tucked inside it, a steady sentence about the record, then a long closing sentence that weighs both readings.",
+    "narrativeFunction": "Opens an investigation by setting the village's favourite story against the one record that might have tested it, and showing why it can't.",
+    "whyItWorks": "It lets the legend stand before touching it, then finds the doubt inside the evidence instead of in a disclaimer. The blank page is explained by ordinary common sense, and the narrator leaves both readings open without pretending to know which is true.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-p-two-counts",
+    "version": 1,
+    "text": "Two men wrote down what happened at the north shaft that morning, and their accounts don't agree. The mine captain's report gives eleven dead. The parish clerk entered each burial by name, and his register has fourteen. Nobody at the time seems to have asked which of them was wrong.",
+    "category": "uncertainty",
+    "quality": "excellent",
+    "traits": [
+      "source_as_detective_work",
+      "hedge_natural",
+      "number_in_context",
+      "human_stakes",
+      "one_idea_per_sentence",
+      "memorable_line",
+      "tension",
+      "restraint"
+    ],
+    "strengths": [
+      "the disagreement is stated as a fact of the record",
+      "one number per sentence, each tied to the man who wrote it",
+      "a register kept name by name gives the higher count its weight without comment",
+      "the last line arises from the evidence"
+    ],
+    "weaknesses": [
+      "the closing line carries a quiet judgment on the men in charge, so nothing more should be added after it"
+    ],
+    "spokenRhythm": "A long framing sentence, two short matched sentences carrying one number each, then a closing line that slows down.",
+    "narrativeFunction": "Turns a casualty figure into a question about who was counting and why the difference mattered so little at the time.",
+    "whyItWorks": "The two counts sit side by side and the listener does the arithmetic. The detail that the clerk wrote down every name says which number to trust without saying it, and the final sentence turns the uncertainty into human stakes in plain words.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-p-struck-through",
+    "version": 1,
+    "text": "The bank's partners met in the back parlour on the Thursday afternoon. What was said there is lost. The cashier's ledger survives, and the brewery's loan is entered in it that same morning. Before the week was out, someone had struck it through in a different ink.",
+    "category": "uncertainty",
+    "quality": "good",
+    "traits": [
+      "hedge_natural",
+      "source_as_detective_work",
+      "concrete_detail",
+      "chronology",
+      "reveal_not_announce",
+      "trust_the_viewer",
+      "curiosity"
+    ],
+    "strengths": [
+      "admits the gap in four plain words",
+      "moves at once from what is lost to what survives",
+      "the morning entry and the later strike-through put the meeting between them without saying so",
+      "someone leaves the hand unnamed, which is honest"
+    ],
+    "weaknesses": [
+      "if the edit shows the ledger, the narration must not start describing the page",
+      "three markers of time in four sentences, so the read has to keep them distinct"
+    ],
+    "spokenRhythm": "A plain sentence of setting, a very short admission, a longer sentence that hands over the evidence, then a measured close on the ink.",
+    "narrativeFunction": "Marks the limit of what can be known about a private meeting and points the film toward the paperwork that outlived it.",
+    "whyItWorks": "The gap in the record is admitted without apology, the way a researcher would say it to a colleague. The narrator then hands over two dated facts and lets the listener place the meeting between them and wonder whose hand changed the ledger.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-p-no-wage-recorded",
+    "version": 1,
+    "text": "The abbey's accounts put the cargo of salt at nine marks. A carter on the same estate was paid two marks for the whole year. The women who boiled the brine on the estuary don't appear in the wage lists at all. They may have been paid in salt, or in food, or in nothing the clerk thought worth writing down.",
+    "category": "uncertainty",
+    "quality": "good",
+    "traits": [
+      "number_in_context",
+      "money_context",
+      "hedge_natural",
+      "human_stakes",
+      "source_as_detective_work",
+      "restraint",
+      "dry_humour"
+    ],
+    "strengths": [
+      "the price is measured against a wage from the same accounts",
+      "one number per sentence",
+      "the silence in the record becomes part of the story",
+      "the hedge offers real possibilities rather than a shrug"
+    ],
+    "weaknesses": [
+      "the carter's wage is the only yardstick, so a second comparison nearby would crowd it",
+      "the closing jab at the clerk works once, and a film full of them would turn sour"
+    ],
+    "spokenRhythm": "Two crisp sentences with a number each, a longer one that widens the frame, and a final sentence that runs through three possibilities and slows into its dry ending.",
+    "narrativeFunction": "Gives a price human scale and then shows who the record leaves out.",
+    "whyItWorks": "The money arrives with a comparison from the same accounts, so the listener feels it without any modern conversion. The uncertainty about the women's pay is stated as a set of real possibilities, and the last phrase points at the clerk's priorities without lecturing.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-p-ships-dog-twice",
+    "version": 1,
+    "text": "In the whaling port, people said the crew had been reduced to eating their dog before the relief ship found them. The surgeon kept a diary through that whole winter. Hunger is on almost every page. The dog appears twice, both times because it had got into the biscuit.",
+    "category": "uncertainty",
+    "quality": "excellent",
+    "traits": [
+      "legend_vs_record",
+      "source_as_detective_work",
+      "dry_humour",
+      "rhythm_variation",
+      "trust_the_viewer",
+      "memorable_line",
+      "restraint"
+    ],
+    "strengths": [
+      "legend first, record second",
+      "concedes the real hunger before the story is tested",
+      "the dry last line is simply what the diary says",
+      "no verdict is announced, since two mentions cannot prove what happened later"
+    ],
+    "weaknesses": [
+      "a line this neat should not be followed by an explanation of the joke",
+      "the diary cannot rule the story out, so the next line must not claim it has"
+    ],
+    "spokenRhythm": "A long sentence for the legend, a medium one to introduce the witness, then two shorter sentences that let the evidence land.",
+    "narrativeFunction": "Separates what the port remembered from what someone on board wrote down, without making the hardship any smaller.",
+    "whyItWorks": "It takes the legend seriously enough to check it, and it is fair to the crew by saying the hunger was real. The humour is dry because it comes straight from the diary, and the listener is trusted to see how the story may have grown in the telling.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "uncertainty-p-coin-in-the-ash",
+    "version": 1,
+    "text": "For a century, the layer of ash under the old market was read as the night the city fell. A later dig found a coin in that ash, struck some forty years after the city was supposed to have fallen. Either it worked its way down from a later floor, or the ash and the date don't belong together. The excavators are still arguing about which.",
+    "category": "uncertainty",
+    "quality": "good",
+    "traits": [
+      "legend_vs_record",
+      "source_as_detective_work",
+      "cause_and_effect",
+      "hedge_natural",
+      "curiosity",
+      "chronology",
+      "plain_language"
+    ],
+    "strengths": [
+      "states the old reading fairly",
+      "one new piece of evidence, one number",
+      "allows for the dull explanation before the exciting one",
+      "ends on a live argument, not a tease"
+    ],
+    "weaknesses": [
+      "the ash and the date don't belong together folds two possibilities into one phrase, so the film may need to unpack it",
+      "the either-or sentence wants a clear pause at the comma"
+    ],
+    "spokenRhythm": "Two steady sentences of setup and evidence, a balanced either-or, then a short plain close.",
+    "narrativeFunction": "Shows how one find can unsettle a long-held story and leaves the question open for the film to explore.",
+    "whyItWorks": "The uncertainty comes from evidence, not mood. It gives the listener the ordinary explanation and the unsettling one in plain words, and ends by saying the specialists disagree, which is curious and honest rather than dramatic.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]

@@ -3,7 +3,8 @@ import { ProviderError, type ObjectGenerationRequest, type ObjectGenerationResul
 import { EvidenceBase } from '@docengine/story/shared';
 import { FakeStoryAI, fakeEvidenceInput } from '@docengine/story/testing';
 import { derive, normalizeBlock, renumber, type DraftBlock, type DraftSection, type ScriptDraft } from './draft.ts';
-import type { FactCheckOutput, PerformanceOutput, PlannerOutput, RefineOutput, ScriptEditorOutput, WriterBlock, WriterOutput } from './schemas.ts';
+import { describesPicture } from '@docengine/writing';
+import type { FactCheckOutput, NarrationOutput, PerformanceOutput, PlannerOutput, RefineOutput, ScriptEditorOutput, WriterBlock, WriterOutput } from './schemas.ts';
 import { buildScope, type ScriptScope } from './scope.ts';
 
 /**
@@ -221,7 +222,7 @@ export function fakeRefine(prompt: string): RefineOutput {
 
 /** The script editor's answers when the prompt has a refinement checklist (every question: YES, better). */
 export function fakeChecklist(prompt: string): ScriptEditorOutput['assessment'] {
-  const start = prompt.search(/^# Refinement checklist/m);
+  const start = prompt.search(/^# (?:Refinement|Narration) checklist/m);
   if (start < 0) return [];
   const questions = [...prompt.slice(start).matchAll(/^\d+\. (.+)$/gm)].map((m) => m[1]!).slice(0, 13);
   return questions.map((question) => ({ question, answer: 'YES' as const, comparedToPrevious: 'BETTER' as const, note: 'Reads as spoken (test).' }));
@@ -250,6 +251,65 @@ export function fakePerformance(prompt: string): PerformanceOutput {
   };
 }
 
+/** The needs the narration prompt lists: block ref → what it needs ("dramatic_transition", "money context (M1)"). */
+export function parseNeeds(prompt: string): Map<string, string> {
+  const start = prompt.search(/^# What the diagnostics found/m);
+  if (start < 0) return new Map();
+  const out = new Map<string, string>();
+  for (const line of prompt.slice(start).split('\n').slice(1)) {
+    if (/^# /.test(line)) break;
+    const m = /^- (\d+\.\d+) needs: (.*)$/.exec(line);
+    if (m) out.set(m[1]!, m[2]!);
+  }
+  return out;
+}
+
+/** The money contexts the narration prompt offers: id → explanation. */
+export function parseMoneyContexts(prompt: string): Map<string, string> {
+  return new Map([...prompt.matchAll(/^- money context (M\d+): .+? — (.+?)\. Rests on /gm)].map((m) => [m[1]!, m[2]!]));
+}
+
+const HYPE = /^(?:and then|but then|incredibly|remarkably|astonishingly|shockingly|unbelievably|amazingly),?\s+/i;
+const TEASE = /^(?:but )?(?:that|this|it|everything|things) (?:was|were) about to change\.?$|^or so (?:they|he|she) thought\.?$|^but this was only the beginning\.?$|^but not for long\.?$/i;
+
+/**
+ * The fake narration editor: for each block the diagnostics flag, the
+ * sentences that describe the picture and the teasing closers are cut, hype
+ * openers are dropped, and a sum the evidence can contextualise gets its
+ * context ("That was about four years' pay…"). Deterministic and idempotent:
+ * a fixed block has no needs left, so a second pass edits nothing.
+ */
+export function fakeNarration(prompt: string): NarrationOutput {
+  const needs = parseNeeds(prompt);
+  const money = parseMoneyContexts(prompt);
+  const blocks = new Map(parseScript(prompt).map((b) => [b.ref, b]));
+  const edits: NarrationOutput['edits'] = [];
+  for (const [ref, need] of needs) {
+    const b = blocks.get(ref);
+    if (!b || b.speaker) continue;
+    const moved: string[] = [];
+    const kept = b.text
+      .split(/(?<=[.!?])\s+/)
+      .filter((x) => {
+        if (describesPicture(x)) {
+          moved.push(x);
+          return false;
+        }
+        return !TEASE.test(x.trim());
+      })
+      .map((x) => {
+        const t = x.replace(HYPE, '');
+        return t.charAt(0).toUpperCase() + t.slice(1);
+      });
+    const ids = [...need.matchAll(/money context \(([M\d, ]+)\)/g)].flatMap((m) => m[1]!.split(',').map((x) => x.trim())).filter((id) => money.has(id));
+    if (ids.length) kept.push(`That was ${money.get(ids[0]!)}.`);
+    const text = kept.join(' ').trim();
+    if (!text || text === b.text) continue;
+    edits.push({ ref, text, reason: 'Plainer: the facts carry it (test).', fixes: ids.length ? ['AI_PATTERN', 'CONTEXT'] : ['AI_PATTERN'], moneyContext: ids.slice(0, 1), visualNote: moved.length ? moved.join(' ') : null });
+  }
+  return { verdict: 'Plain where it was theatrical (test).', edits, kept: [] };
+}
+
 const SCORE = { score: 7, why: 'Solid (test).' };
 
 export class FakeScriptAI extends FakeStoryAI {
@@ -266,6 +326,8 @@ export class FakeScriptAI extends FakeStoryAI {
   /** The fact checker's review (default: no issues). */
   factChecker: (prompt: string) => FactCheckOutput = () => ({ verdict: 'Every block matches its evidence (test).', issues: [], edits: [], removals: [], insertions: [] });
   performance: (prompt: string) => PerformanceOutput = fakePerformance;
+  /** The narration editor (Human Narration Pass): default, the deterministic fake above. */
+  narrator: (prompt: string) => NarrationOutput = fakeNarration;
 
   override async generateObject<T>(req: ObjectGenerationRequest<T>): Promise<ObjectGenerationResult<T>> {
     if (!req.task.startsWith('script.')) return super.generateObject(req);
@@ -302,6 +364,8 @@ export class FakeScriptAI extends FakeStoryAI {
         const out = fakeRefine(user);
         return this.refineTransform ? this.refineTransform(out) : out;
       }
+      case 'script.narrate':
+        return this.narrator(user);
       case 'script.edit':
         return this.editor(user);
       case 'script.factCheck':
@@ -574,3 +638,4 @@ export function syntheticDraft(scope: ScriptScope, sections: SyntheticBlock[][])
   };
 }
 
+export type { NarrationOutput, WriterOutput } from './schemas.ts';

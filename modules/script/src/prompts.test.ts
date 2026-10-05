@@ -1,5 +1,6 @@
+import { styleBibleText } from '@docengine/writing';
 import { describe, expect, it } from 'vitest';
-import { REFINEMENT_CHECKLIST, factCheckSystemPrompt, performanceSystemPrompt, plannerSystemPrompt, refineSystemPrompt, rewriteSystemPrompt, scriptEditorSystemPrompt, writerSystemPrompt } from './prompts.ts';
+import { NARRATION_CHECKLIST, REFINEMENT_CHECKLIST, factCheckSystemPrompt, narrationSystemPrompt, performanceSystemPrompt, plannerSystemPrompt, refineSystemPrompt, rewriteSystemPrompt, scriptEditorSystemPrompt, writerSystemPrompt } from './prompts.ts';
 
 /**
  * Production prompts are generic: they shape every documentary, so no fact,
@@ -15,6 +16,7 @@ const prompts = {
   editor: scriptEditorSystemPrompt(),
   factCheck: factCheckSystemPrompt(),
   performance: performanceSystemPrompt(),
+  narration: narrationSystemPrompt(),
 };
 const TOPIC = /tulip|bulb|guilder|stuiver|florist|haarlem|amsterdam|alkmaar|holland|dutch|semper|augustus|mackay|switser|thijs|pamphlet|1636|1637/i;
 
@@ -22,6 +24,7 @@ describe('script prompts', () => {
   it('carry no facts of any particular documentary', () => {
     for (const [name, text] of Object.entries(prompts)) expect([name, TOPIC.exec(text)?.[0] ?? null]).toEqual([name, null]);
     expect(REFINEMENT_CHECKLIST.join(' ')).not.toMatch(TOPIC);
+    expect(NARRATION_CHECKLIST.join(' ')).not.toMatch(TOPIC);
   });
 
   it('make the house style the refinement default, complete without any director instructions, ranked under the evidence rules', () => {
@@ -82,6 +85,49 @@ describe('script prompts', () => {
       expect(prompts[name]).toContain('Probability words ("probably", "most likely", "what probably happened") belong to PROBABLE claims only');
       expect(prompts[name]).toContain('what a real person did, said or owned rests on a claim about them that the block cites');
     }
+  });
+
+  it('ask the narration pass the human-writer question, and to polish only what the diagnostics flag', () => {
+    const n = prompts.narration;
+    // The system prompt takes nothing: no slot for a topic, a director or a script.
+    expect(narrationSystemPrompt()).toBe(n);
+    expect(n).toContain('THE QUESTION THAT DECIDES EVERY CHANGE\nIf a listener heard this as narration in a high-quality historical documentary, would they naturally assume a competent human documentary writer wrote it?');
+    // The house style bible, in full, before the evidence rules.
+    const bible = styleBibleText();
+    expect(bible.length).toBeGreaterThan(500);
+    expect(n).toContain(bible);
+    expect(n.indexOf(bible)).toBeLessThan(n.indexOf('THE EVIDENCE BOUNDARY'));
+    for (const rule of [
+      // Only the flagged blocks; everything else is settled, and a second pass finds nothing.
+      'Only the blocks the diagnostics list as needing work may change; every other block is settled — leave it exactly as it is.',
+      'a second pass over your own work should find nothing to do',
+      // Money context only from the list, cited by id.
+      'Adds missing context — only from the money context listed in the prompt: never a comparison of your own, never an exchange rate, never a modern conversion.',
+      'give its id in moneyContext',
+      'the honest line is that the records give no reliable equivalent',
+      // Names, quotations, figures, hedges.
+      'It never respells or westernises a name.',
+      'It never touches a quotation or a speaker\'s line.',
+      'the same figures written the same way, the same names spelled the same way, the same claims, the same uncertainty, the same class',
+      // Pictures to the visual layer, not the narration.
+      'put that description in visualNote',
+      // How each edit is judged: the guard's invariants, a polish not a rewrite.
+      'every figure kept, every name kept, every hedge kept, every line to keep kept, no new machine habit, money context only from the list, and a polish rather than a rewrite',
+      'The lines listed to keep are untouchable.',
+    ])
+      expect([rule, n.includes(rule)]).toEqual([rule, true]);
+    // The same evidence rules as every other writer.
+    for (const part of ['THE EVIDENCE BOUNDARY', 'INFORMATION CLASSES', 'REAL PEOPLE', 'THE INVARIANTS — no change may weaken them, however much better it reads']) expect(n).toContain(part);
+    expect(n).toContain('Probability words ("probably", "most likely", "what probably happened") belong to PROBABLE claims only');
+  });
+
+  it('give the script editor a narration checklist that starts with the human-writer question', () => {
+    expect(NARRATION_CHECKLIST[0]).toBe('If you heard this as narration in a high-quality historical documentary, would you naturally assume a competent human documentary writer wrote it?');
+    expect(NARRATION_CHECKLIST.every((q) => q.endsWith('?'))).toBe(true);
+    expect(new Set(NARRATION_CHECKLIST).size).toBe(NARRATION_CHECKLIST.length);
+    expect(NARRATION_CHECKLIST).toContain('Is every figure, name and hedge of the previous version still there, unchanged?');
+    expect(NARRATION_CHECKLIST).toContain('Do sums of money and other numbers arrive with the context the evidence gives, and only that context?');
+    expect(NARRATION_CHECKLIST.at(-1)).toBe('Is the script still historically defensible?');
   });
 
   it('give the script editor thirteen yes-is-good questions', () => {

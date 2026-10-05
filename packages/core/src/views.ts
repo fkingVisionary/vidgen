@@ -31,6 +31,12 @@ import type {
   RetrievalStatus,
   SourceType,
   StoryType,
+  AiPattern,
+  DeliveryMark,
+  RubricDimension,
+  WritingCategory,
+  WritingExampleStatus,
+  WritingQuality,
 } from './enums.ts';
 import type { QualityReport, ResearchDossierContent } from './contracts/research.ts';
 import type {
@@ -47,6 +53,7 @@ import type {
   StoryPackContent,
 } from './contracts/story.ts';
 import type { ScriptAssessmentItem, ScriptBlockContent, ScriptChangeLog, ScriptContent, ScriptSectionPlan } from './contracts/script.ts';
+import type { CorpusManifest, Diagnostics, NarrationRecord, ScriptChangeReport, WritingCorpusExample } from './contracts/writing.ts';
 import type { AvailableActions } from './pipeline.ts';
 import type { ScriptTiming } from './script.ts';
 import type { StageView } from './stages.ts';
@@ -554,6 +561,8 @@ export interface ScriptEditorialActions {
   revise: { allowed: boolean; reason: string | null };
   /** Refine the shown version's narration (the whole script, story and evidence unchanged). */
   refine: { allowed: boolean; reason: string | null };
+  /** The Human Narration Pass on the shown version (Writing Engine 2: targeted edits, evidence unchanged). */
+  narrate: { allowed: boolean; reason: string | null };
   /** Edit blocks and review sections of the shown version. */
   edit: { allowed: boolean; reason: string | null };
   approve: { allowed: boolean; reason: string | null };
@@ -604,4 +613,74 @@ export interface ScriptCompareView {
   assessment: ScriptAssessmentItem[];
   /** Evidence from a to b: claims cited and figures said, added or dropped (a refinement should change neither). */
   evidence: { claimsAdded: string[]; claimsRemoved: string[]; figuresAdded: string[]; figuresRemoved: string[] };
+  /** Block by block, a → b: original, revised, why, and what each change did (Writing Engine 2). */
+  changeReport: ScriptChangeReport | null;
+}
+
+// ── Writing Engine 2 ─────────────────────────────────────────────────────────
+
+/** One block in its semantic layers: only the narration is ever spoken. */
+export interface LayeredBlockView {
+  key: string;
+  section: number;
+  narration: string;
+  visual: { intent: string; note: string; mustShow: string[] };
+  delivery: { mark: DeliveryMark | null; pace: string; energy: string; emotion: string; pauses: string[] };
+  evidence: { claimKeys: string[]; presentation: string[] };
+  /** Why it changed in the run that made the version (the change ledger). */
+  editorial: string[];
+  /** Production metadata found inside the narration (should be empty). */
+  leaks: string[];
+}
+
+/** A version through the writing engine: the narration pass that made it, what it is now, and how it differs from its base. */
+export interface ScriptEditorialView {
+  version: number;
+  origin: ScriptOrigin;
+  baseVersion: number | null;
+  /** The record of the narration pass of the run that made it (null before Writing Engine 2, or when the pass did not run). */
+  record: NarrationRecord | null;
+  /** Measured now, from the text as it stands. */
+  diagnostics: Diagnostics;
+  /** Against the version it was made from (null for a first draft). */
+  report: ScriptChangeReport | null;
+  layers: LayeredBlockView[];
+}
+
+export interface WritingExampleView {
+  id: string;
+  exampleId: string;
+  version: number;
+  status: WritingExampleStatus;
+  text: string;
+  category: WritingCategory;
+  quality: WritingQuality;
+  traits: string[];
+  narrativeFunction: string;
+  spokenRhythm: string;
+  whyItWorks: string | null;
+  whyItFails: string | null;
+  projectId: string | null;
+  scriptVersion: number | null;
+  blockKey: string | null;
+  sourceReference: string | null;
+  createdBy: string;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+  createdAt: string;
+}
+
+/** The house-style corpus as the dashboard shows it. */
+export interface WritingCorpusView {
+  version: string;
+  manifest: CorpusManifest;
+  styleBible: { version: string; sections: { title: string; lead?: string; rules: string[] }[] };
+  rubric: { version: string; dimensions: { dimension: RubricDimension; question: string }[] };
+  patterns: { pattern: AiPattern; kind: 'HARD' | 'DENSITY'; looksLike: string; warns: string }[];
+  examples: (WritingCorpusExample & { polarity: 'positive' | 'negative' | 'borderline' | 'house_style'; origin: 'FILE' | 'HOUSE'; file: string | null })[];
+  /** Examples that failed validation (should be none). */
+  errors: string[];
+  /** House-style examples from approved scripts: candidates waiting for a person, and the ones decided. */
+  house: WritingExampleView[];
 }

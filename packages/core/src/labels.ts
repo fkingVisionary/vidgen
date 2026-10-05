@@ -42,6 +42,14 @@ import type {
   PronunciationTermKind,
   VoiceGenerationStatus,
   VoiceRunKind,
+  AiPattern,
+  BlockChangeStatus,
+  MoneyComparisonType,
+  RubricDimension,
+  WritingCategory,
+  WritingExampleStatus,
+  WritingQuality,
+  WritingSourceType,
 } from './enums.ts';
 
 /** Human-readable labels for the dashboard. Kept out of the enums so copy can change freely. */
@@ -403,6 +411,7 @@ export const SCRIPT_ORIGIN_LABELS: Record<ScriptOrigin, string> = {
   REVISION: 'Revision',
   RESTORE: 'Restored',
   REFINEMENT: 'Narrative refinement',
+  NARRATION: 'Narration pass (Writing Engine 2)',
 };
 
 export const SCRIPT_SCORE_LABELS: Record<ScriptScore, string> = {
@@ -435,3 +444,70 @@ export const CHUNK_BOUNDARY_LABELS: Record<ChunkBoundary, string> = { SECTION_EN
 export const PRONUNCIATION_STATUS_LABELS: Record<PronunciationStatus, string> = { PENDING: 'To check', APPROVED: 'Approved', FLAGGED: 'Heard wrong' };
 export const PRONUNCIATION_METHOD_LABELS: Record<PronunciationMethod, string> = { DEFAULT: "The voice's own reading", ALIAS: 'Say it as (alias)', IPA: 'Phonemes (IPA)', CMU: 'Phonemes (CMU Arpabet)' };
 export const PRONUNCIATION_TERM_KIND_LABELS: Record<PronunciationTermKind, string> = { NAME: 'Name', PLACE: 'Place', ORGANISATION: 'Organisation', FOREIGN: 'Foreign word', TERM: 'Term', ABBREVIATION: 'Abbreviation' };
+
+// ── Writing Engine 2 ─────────────────────────────────────────────────────────
+
+export const WRITING_CATEGORY_LABELS: Record<WritingCategory, string> = {
+  hook: 'Hook',
+  explanation: 'Historical explanation',
+  transition: 'Transition',
+  character: 'Character',
+  economics: 'Money and economics',
+  numbers: 'Numbers',
+  uncertainty: 'Uncertainty',
+  scene: 'Scene',
+  dialogue_adjacent: 'Around a quotation',
+  payoff: 'Payoff',
+  ending: 'Ending',
+  context: 'Context',
+  other: 'Other',
+};
+export const WRITING_QUALITY_LABELS: Record<WritingQuality, string> = { excellent: 'Excellent', good: 'Good', borderline: 'Borderline', bad: 'Bad (to avoid)' };
+export const WRITING_SOURCE_TYPE_LABELS: Record<WritingSourceType, string> = {
+  house: 'House writing',
+  public_domain: 'Public domain',
+  licensed: 'Licensed',
+  user_provided: 'Provided by the editor',
+  generated_comparison: 'Written as a contrast',
+};
+export const WRITING_EXAMPLE_STATUS_LABELS: Record<WritingExampleStatus, string> = { CANDIDATE: 'Candidate', APPROVED: 'In the house corpus', REJECTED: 'Rejected', RETIRED: 'Retired' };
+export const AI_PATTERN_LABELS: Record<AiPattern, string> = {
+  stock_phrase: 'Stock phrase',
+  dramatic_transition: 'Fake dramatic beat',
+  hype_adverb: 'Hype adverb',
+  imagine_opener: '"Imagine…" opener',
+  trailer_language: 'Trailer language',
+  mystery_language: 'Generic mystery language',
+  emotion_explained: 'Emotion explained',
+  truth_reveal: '"The truth is…"',
+  micro_hook: 'Micro-hook ending',
+  contrast_formula: '"Not X, but Y" formula',
+  qa_pair: 'Question answered by a fragment',
+  fragment_run: 'Run of fragments',
+  em_dash: 'Em-dashes',
+  metaphor_stack: 'Stacked metaphors',
+  rhetorical_question: 'Rhetorical questions',
+  repeated_ending: 'Repeated endings',
+  length_repetition: 'Same-length sentences',
+  visual_description: 'Describes the picture',
+};
+export const RUBRIC_DIMENSION_LABELS: Record<RubricDimension, string> = {
+  HUMANITY: 'Humanity',
+  CLARITY: 'Clarity',
+  SPOKEN_RHYTHM: 'Spoken rhythm',
+  HISTORICAL_CONTEXT: 'Historical context',
+  NARRATIVE_RESTRAINT: 'Narrative restraint',
+  INFORMATION_DENSITY: 'Information density',
+  NARRATIVE_PROGRESSION: 'Narrative progression',
+  VISUAL_SEPARATION: 'Narration and pictures kept apart',
+  AI_FINGERPRINT_RISK: 'AI-fingerprint risk (10 = none)',
+  PRONUNCIATION_FRIENDLINESS: 'Pronunciation friendliness',
+};
+export const MONEY_COMPARISON_TYPE_LABELS: Record<MoneyComparisonType, string> = {
+  CONTEMPORARY_WAGE: 'A contemporary wage',
+  INCOME: 'An income',
+  HOUSEHOLD_EXPENSE: 'A household expense',
+  ASSET: 'An asset',
+  MODERN_ESTIMATE: 'A modern estimate (approximate)',
+};
+export const BLOCK_CHANGE_STATUS_LABELS: Record<BlockChangeStatus, string> = { UNCHANGED: 'Unchanged', REWRITTEN: 'Rewritten', REMOVED: 'Removed', ADDED: 'Added' };

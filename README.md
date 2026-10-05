@@ -263,6 +263,21 @@ Once the story architecture is approved (Story Engine 2.0), the project's
 `SCRIPT_MAX_COST_USD=15` stops a script job whose recorded spend passes it;
 `SCRIPT_MODELS` (optional) sets a model per step.
 
+**Writing Engine 2.** Every script job now runs a *Human Narration Pass*
+between the writer and the script editor: the writing engine measures each
+block (machine habits, rhythm, sums of money without context, narration
+describing the picture), retrieves a few examples from the house-style corpus
+for exactly those needs, and a narration editor edits only the blocks that
+need it — each edit kept only if every figure, name, hedge, claim and strong
+line survives. *Human Narration Pass on vN* on the Script page runs it alone on
+a version (v N stays as it was); the **Editorial** tab shows the version through
+the engine: the measurements before and after, the read-aloud rubric, money
+context from the evidence, names (historical, display, spoken), the semantic
+layers and, block by block, ORIGINAL → REVISED → WHY. The **House style** page
+(top right) holds the style bible, the rubric, the AI-pattern glossary, the
+corpus, and the candidates proposed from approved scripts, which join the
+corpus only when you approve them.
+
 `GET /api/health` lists the stages that are real (`realStages`). Progress
 appears in the project's Activity panel. (A full run with real Claude has not
 been timed yet; expect tens of minutes — about 45 documents are read.) The

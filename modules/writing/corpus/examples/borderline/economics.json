@@ -1,0 +1,99 @@
+[
+  {
+    "id": "economics-b-keepers-oil-question",
+    "version": 1,
+    "text": "The board charged the keeper for every gallon of oil he burned over his allowance. In the hard winter, the bill came to eleven pounds. And what was eleven pounds to a man paid thirty a year? More than four months of his wages, stopped out of the next year's pay.",
+    "category": "economics",
+    "quality": "borderline",
+    "traits": [
+      "rhetorical_question",
+      "qa_pair",
+      "money_context",
+      "number_in_context",
+      "human_stakes"
+    ],
+    "strengths": [
+      "the bill is measured against the keeper's own salary",
+      "the question invites the listener to do the sum"
+    ],
+    "weaknesses": [
+      "the narrator asks and answers in the same breath",
+      "the answer is a sentence fragment"
+    ],
+    "spokenRhythm": "Two plain sentences, a rising question, and a falling answer that lands on the deduction.",
+    "narrativeFunction": "Turns a lighthouse board's charge for oil into months of a keeper's working life.",
+    "whyItWorks": "Used once, a question can slow the listener down at the moment a sum matters most. This one makes them weigh eleven pounds against thirty before the answer comes, and the answer is concrete.",
+    "whyItFails": "A question the narrator answers at once is one of the most familiar devices in generated narration, and the second time a film uses it, it becomes a habit. The plain version gives the same sum without the quiz, and the listener does the arithmetic anyway.",
+    "rewrite": "The board charged the keeper for every gallon of oil he burned over his allowance. In the hard winter, the bill came to eleven pounds. He was paid thirty a year, and the board stopped the whole sum out of the next year's wages.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-b-business-at-the-tables",
+    "version": 1,
+    "text": "For most of the fair, very little coin changed hands. Merchants sold on credit and wrote each debt in a book. The fair's real business wasn't done at the stalls. It was done in the last few days, at the money-changers' tables, where a season's debts were set against one another and only the difference was paid.",
+    "category": "economics",
+    "quality": "borderline",
+    "traits": [
+      "contrast_formula",
+      "visual_separation",
+      "cause_and_effect",
+      "money_context",
+      "chronology",
+      "plain_language"
+    ],
+    "strengths": [
+      "the turn moves attention from the stalls the pictures will show to where the money actually moved",
+      "the clearing of debts is explained in one plain clause"
+    ],
+    "weaknesses": [
+      "the wasn't-X-was-Y frame is the most familiar contrast in generated narration",
+      "real business overstates, since goods were sold at the stalls every day of the fair"
+    ],
+    "spokenRhythm": "Two plain sentences of set-up, a short negative, and a long answering sentence that slows for the mechanism.",
+    "narrativeFunction": "Explains how trade on credit at a fair was settled, by sending the viewer from the stalls to the changers' tables.",
+    "whyItWorks": "Once in a film, the contrast can correct an assumption the pictures invite. A viewer watching bales and stalls will think that is where the trade happened, and the turn sends them to the tables where the debts were cleared.",
+    "whyItFails": "The frame is so common in generated scripts that the listener may hear the formula before the idea, and a second use anywhere in the film makes it a tic. It also buys its neatness with an overstatement. The plain version gives the same sequence without staging a reversal.",
+    "rewrite": "For most of the fair, very little coin changed hands. Merchants sold on credit and wrote each debt in a book. In the last few days, they brought their books to the money-changers' tables, where a season's debts were set against one another and only the difference was paid.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  },
+  {
+    "id": "economics-b-estimate-in-todays-money",
+    "version": 1,
+    "text": "The cargo was valued at nine thousand crowns. One economic historian's estimate puts that at several million in today's money. Figures like that are built from the price of bread and ale, and they tell us very little about what a cargo meant to the men who owned it.",
+    "category": "economics",
+    "quality": "borderline",
+    "traits": [
+      "hedge_natural",
+      "money_context",
+      "source_as_detective_work",
+      "plain_language"
+    ],
+    "strengths": [
+      "the modern figure is attributed, not asserted",
+      "the narrator explains its limits in plain words"
+    ],
+    "weaknesses": [
+      "a modern figure lodges in the memory more firmly than the caveat that follows it",
+      "one economic historian is a vague attribution unless the film names the source",
+      "spends a sentence undermining the sentence before it"
+    ],
+    "spokenRhythm": "A short statement, a medium attribution, and a long explanatory close.",
+    "narrativeFunction": "Gives a sense of a cargo's size while warning the viewer against reading it as modern money.",
+    "whyItWorks": "When the film's research holds a real published estimate, naming it once and saying what it measures is honest. The limits are explained the way a curious person would explain them, not as a disclaimer, and the listener learns why such figures are shaky.",
+    "whyItFails": "The house puts a modern estimate last, behind a wage, an income, a household expense or an asset, and even hedged, several million is the number the viewer keeps. An unnamed historian is no better than no source, so the estimate must be traceable to the research and never generated. Used more than once in a film, the hedged conversion becomes a habit, and a narrator without such a source should say the records give no reliable equivalent.",
+    "rewrite": "The cargo was valued at nine thousand crowns. The surviving records give no reliable modern equivalent, and figures built from the price of bread and ale say very little about what a cargo meant to the men who owned it.",
+    "source": {
+      "type": "house"
+    },
+    "copyrightSafe": true,
+    "approvedForRetrieval": true
+  }
+]
