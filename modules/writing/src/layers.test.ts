@@ -84,6 +84,9 @@ describe('directionLeaks: production metadata inside the narration', () => {
     expect(directionLeaks('Note the date on the contract: the third of February.')).toEqual([]);
     expect(directionLeaks('By 1637 the visual arts of Haarlem were famous: painters bought bulbs too.')).toEqual([]);
     expect(directionLeaks('The C-major chord in bar 12 was copied by hand.')).toEqual([]);
+    // Inside a quotation the words are the record's: an editorial elision or "[sic]" is not a direction.
+    expect(directionLeaks('One buyer wrote that "a single bulb [...] fetched more than a house".')).toEqual([]);
+    expect(directionLeaks('The clerk wrote “We [the growers] were ruin’d [sic]” and signed it.')).toEqual([]);
   });
 
   it('reports each kind of leak once, in a stable order, however often it occurs', () => {

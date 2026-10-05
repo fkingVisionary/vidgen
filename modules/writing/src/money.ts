@@ -117,7 +117,7 @@ function lastSum(text: string): { text: string; amount: number } | null {
 export function moneyMentions(text: string, currencies: ReadonlySet<string>): MoneyMention[] {
   const out: MoneyMention[] = [];
   const words = [...currencies].flatMap((c) => [c, `${c}s`, c.endsWith('y') ? `${c.slice(0, -1)}ies` : null].filter(Boolean)).sort((a, b) => b!.length - a!.length);
-  const named = new RegExp(String.raw`\b(${NUM})\s+(?:(?:gold|silver|copper|paper)\s+)?(${words.join('|')})\b`, 'gi');
+  const named = new RegExp(String.raw`\b(${NUM})\s+(?:(?:gold|silver|copper|paper)\s+)?(${words.map((w) => w!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\b`, 'gi');
   const symbol = new RegExp(String.raw`([£$€¥])\s?(${DIGITS})`, 'gi');
   for (const s of sentences(maskQuotes(text))) {
     for (const m of s.matchAll(named)) {
@@ -191,7 +191,9 @@ function classify(sentence: string): MoneyComparisonType | 'PRICE' {
 
 /** The currencies of a dossier: the engine's own list and the ones its price evidence names. */
 export function currenciesOf(evidence: EvidenceBase): Set<string> {
-  return new Set([...BASE_CURRENCIES, ...evidence.content.priceEvidence.map((p) => singular(p.currency.trim().split(/\s+/).at(-1) ?? '')).filter((c) => c.length > 1)]);
+  // The research writes the currency freely ("thalers (Imperial thalers)", "livres tournois / livres"): each named alternative's last word.
+  const named = evidence.content.priceEvidence.flatMap((p) => p.currency.split(/[(),/;]|\bor\b/).map((part) => part.match(/\p{L}+/gu)?.at(-1) ?? ''));
+  return new Set([...BASE_CURRENCIES, ...named.map(singular).filter((c) => c.length > 1)]);
 }
 
 /** Every sum of money the cited claims state, with what it is (a price, a wage, an income…). */

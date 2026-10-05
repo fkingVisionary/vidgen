@@ -64,6 +64,8 @@ export function scriptNames(draft: ScriptDraft, scope: ScriptScope): NameEntry[]
 export function editorialFindings(draft: ScriptDraft, scope: ScriptScope, out: ScriptFinding[]): void {
   const blocks = narrationBlocks(draft);
   for (const b of allBlocks(draft)) {
+    // A cast member's line is the record's words (an editorial "[…]" in it is not a direction).
+    if (b.speakerId) continue;
     const leaks = directionLeaks(b.text);
     if (leaks.length) out.push({ kind: 'DIRECTION_IN_NARRATION', ref: b.key, detail: `Block ${b.key} has ${leaks.join(', ')} in its narration: the voice would speak it — directions belong in the delivery and visual layers` });
   }

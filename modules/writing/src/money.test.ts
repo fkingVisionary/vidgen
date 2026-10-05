@@ -169,6 +169,16 @@ describe('currenciesOf: what counts as money in a dossier', () => {
     expect(c.has('rijksdaalder')).toBe(true);
     expect(c.has('dutch')).toBe(false);
   });
+
+  it('reads every alternative a free-written currency names, and never breaks on its punctuation', () => {
+    const price = (currency: string): PriceEvidence => ({ item: 'a cask', price: '12', currency, date: '1720', context: 'market', reliability: 'high', claimKeys: [] });
+    const c = currenciesOf(dossier([], [price('florins (Rhenish thalers)'), price('livres tournois / écus'), price('marks or [sic] kreuzer?')]));
+    for (const w of ['florin', 'thaler', 'tournoi', 'écu', 'mark', 'kreuzer']) expect(c.has(w), w).toBe(true);
+    expect([...c].every((w) => /^\p{L}+$/u.test(w))).toBe(true);
+    // A currency word with regex punctuation in it is matched literally, not compiled.
+    expect(moneyMentions('He paid 300 thalers and 12 écus.', c).map((m) => [m.amount, m.currency])).toEqual([[300, 'thaler'], [12, 'écu']]);
+    expect(() => moneyMentions('He paid 300 thalers.', new Set(['thaler)', 'mark(']))).not.toThrow();
+  });
 });
 
 describe('moneyFacts: every sum the cited claims state, and what it is', () => {
