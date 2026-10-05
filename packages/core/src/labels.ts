@@ -35,6 +35,13 @@ import type {
   StageState,
   StoryType,
   TimeJump,
+  ChunkBoundary,
+  PerformanceStrategy,
+  PronunciationMethod,
+  PronunciationStatus,
+  PronunciationTermKind,
+  VoiceGenerationStatus,
+  VoiceRunKind,
 } from './enums.ts';
 
 /** Human-readable labels for the dashboard. Kept out of the enums so copy can change freely. */
@@ -53,6 +60,7 @@ export const STATUS_LABELS: Record<ProjectStatus, string> = {
   SCRIPT_REVIEW: 'Script review',
   SCRIPT_APPROVED: 'Script approved',
   VOICE_GENERATING: 'Voice generating',
+  VOICE_REVIEW: 'Voice review',
   VOICE_COMPLETE: 'Voice complete',
   VISUAL_PLANNING: 'Visual planning',
   STORYBOARD_REVIEW: 'Storyboard review',
@@ -106,6 +114,7 @@ export const GATE_LABELS: Record<ApprovalGate, string> = {
   RESEARCH: 'Research dossier',
   STORY: 'Story architecture',
   SCRIPT: 'Script',
+  VOICE: 'Narration (voice)',
   STORYBOARD: 'Storyboard',
   VISUAL_ASSETS: 'Generated visual assets',
   FINAL_VIDEO: 'Final video',
@@ -403,3 +412,26 @@ export const SCRIPT_SCORE_LABELS: Record<ScriptScore, string> = {
   EMOTIONAL_SCORE: 'Emotional pull',
   ENDING_SCORE: 'Ending and payoff',
 };
+
+// ── Voice ────────────────────────────────────────────────────────────────────
+
+export const VOICE_RUN_KIND_LABELS: Record<VoiceRunKind, string> = { AUDITION: 'Audition', SECTION: 'Section', BLOCKS: 'Blocks', RANGE: 'Range', FULL: 'Full narration' };
+export const VOICE_GENERATION_STATUS_LABELS: Record<VoiceGenerationStatus, string> = {
+  PENDING: 'Pending',
+  GENERATING: 'Generating',
+  GENERATED: 'To review',
+  FAILED: 'Failed',
+  REJECTED: 'Rejected',
+  APPROVED: 'Approved',
+  SUPERSEDED: 'Superseded',
+};
+export const PERFORMANCE_STRATEGY_LABELS: Record<PerformanceStrategy, string> = { PLAIN: 'Plain text', RESTRAINED: 'Restrained (house style)', DIRECTED: 'Over-directed (comparison only)' };
+export const PERFORMANCE_STRATEGY_HELP: Record<PerformanceStrategy, string> = {
+  PLAIN: 'No performance directions: the voice reads the words as written.',
+  RESTRAINED: "A few directions, only where the script's delivery changes — a documentary narrator, not an audiobook character.",
+  DIRECTED: 'A direction on every sentence — kept to hear what over-direction sounds like, never the default.',
+};
+export const CHUNK_BOUNDARY_LABELS: Record<ChunkBoundary, string> = { SECTION_END: 'section end', SPEAKER: 'change of speaker', PAUSE: 'scripted pause', PERFORMANCE: 'change of delivery', PARAGRAPH: 'paragraph end', SENTENCE: 'sentence end' };
+export const PRONUNCIATION_STATUS_LABELS: Record<PronunciationStatus, string> = { PENDING: 'To check', APPROVED: 'Approved', FLAGGED: 'Heard wrong' };
+export const PRONUNCIATION_METHOD_LABELS: Record<PronunciationMethod, string> = { DEFAULT: "The voice's own reading", ALIAS: 'Say it as (alias)', IPA: 'Phonemes (IPA)', CMU: 'Phonemes (CMU Arpabet)' };
+export const PRONUNCIATION_TERM_KIND_LABELS: Record<PronunciationTermKind, string> = { NAME: 'Name', PLACE: 'Place', ORGANISATION: 'Organisation', FOREIGN: 'Foreign word', TERM: 'Term', ABBREVIATION: 'Abbreviation' };

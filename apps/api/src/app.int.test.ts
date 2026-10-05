@@ -14,7 +14,7 @@ import { ALL_MOCK, createProviders } from '@docengine/providers';
 import { FAKE_CORPUS_GATE, FakeResearchAI, FakeResearchProvider } from '@docengine/research/testing';
 import { FakeStoryAI, seedFakeDossier } from '@docengine/story/testing';
 import { FakeScriptAI } from '@docengine/script/testing';
-import { StoryArchitectureContent, type ResearchView, type ScriptCompareView, type ScriptView, type StoryView, type VoiceRenderPlan } from '@docengine/core';
+import { StoryArchitectureContent, type ResearchView, type ScriptCompareView, type ScriptView, type StoryView, type VoiceMomentView, type VoicePlanView, type VoiceRenderPlan, type VoiceView } from '@docengine/core';
 import { Prisma } from '@docengine/database';
 
 const db = useTestDatabase();
@@ -148,7 +148,7 @@ describe('HTTP API', () => {
 describe('research dossier API', () => {
   it('serves the dossier with claims, citations, sources, quality report and cost, and links the approval', async () => {
     const { app, c } = await start({}, { fakeResearch: true });
-    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH', 'STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES', 'SCRIPT']);
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH', 'STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES', 'SCRIPT', 'VOICE']);
     const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
     expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/research` })).json<ResearchView>()).toEqual({ versions: [], dossier: null });
 
@@ -198,7 +198,7 @@ describe('story API', () => {
 
   it('mines, lets the editor curate, checks the selection, builds and reviews the architecture', async () => {
     const { app, c } = await start({}, { fakeStory: true });
-    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES', 'SCRIPT']);
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES', 'SCRIPT', 'VOICE']);
     const p = await researched(app);
     expect(await story(app, p.id)).toMatchObject({ packs: [], pack: null, architecture: null, editable: false, selection: { count: 0, problem: 'No story pack yet' } });
 
@@ -730,5 +730,114 @@ describe('demo seed', () => {
     expect(second).toEqual({ created: false, projectId: first.projectId });
     const p = await db.project.findUniqueOrThrow({ where: { slug: DEMO_PROJECT_SLUG } });
     expect(p).toMatchObject({ title: 'Tulip Mania', workingTitle: 'The Bubble That Became a Legend', category: 'Economic History', status: 'RESEARCHING' });
+  });
+});
+
+describe('voice API', () => {
+  const SIX = ['The Semper Augustus price', 'The ruin that never happened', 'Proefman in court', 'The tavern colleges', 'Striped tulips', 'The courts step back'];
+  const voice = async (app: FastifyInstance, id: string, q = '') => (await app.inject({ method: 'GET', url: `/api/projects/${id}/voice${q}` })).json<VoiceView>();
+
+  /** A project with an approved script v1 (synthetic dossier, fake model). */
+  async function approvedScript(app: FastifyInstance, c: AppContainer) {
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: { ...tulipInput, targetMinutesMin: 2, targetMinutesMax: 4 } })).json<ProjectDetailView>();
+    await db.project.update({ where: { id: p.id }, data: { status: 'RESEARCH_COMPLETE', phaseSeq: 2 } });
+    await seedFakeDossier(db, p.id);
+    await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/mine`, payload: {} });
+    await c.runner.drain();
+    const pack = await db.storyPack.findFirstOrThrow({ where: { projectId: p.id }, orderBy: { version: 'desc' } });
+    await db.storyCandidate.updateMany({ where: { packId: pack.id }, data: { selected: false } });
+    await db.storyCandidate.updateMany({ where: { packId: pack.id, title: { in: SIX } }, data: { selected: true } });
+    (c.providers.ai as FakeScriptAI).architectOptions = { secondsPerSequence: 30, composite: { name: 'Pieter Graanhout' } };
+    await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture`, payload: {} });
+    await c.runner.drain();
+    await app.inject({ method: 'POST', url: `/api/projects/${p.id}/approvals`, payload: { gate: 'STORY', decision: 'APPROVED' } });
+    await app.inject({ method: 'POST', url: `/api/projects/${p.id}/script`, payload: {} });
+    await c.runner.drain();
+    const approved = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/approvals`, payload: { gate: 'SCRIPT', decision: 'APPROVED' } });
+    expect(approved.json<ProjectDetailView>().status).toBe('SCRIPT_APPROVED');
+    return p.id;
+  }
+
+  it('plans and generates an audition, streams takes with byte ranges, answers "what is said at", takes decisions and keeps the gate shut for an audition', async () => {
+    const { app, c } = await start({}, { fakeScript: true });
+    const id = await approvedScript(app, c);
+    let v = await voice(app, id);
+    expect(v).toMatchObject({ script: { version: 1 }, provider: { name: 'mock', mock: true, durableStorage: false }, runs: [], run: null, editorial: { generate: { allowed: true } } });
+
+    const plan = await app.inject({ method: 'POST', url: `/api/projects/${id}/voice/plan`, payload: { scope: { kind: 'AUDITION', seconds: 60 } } });
+    expect(plan.statusCode).toBe(200);
+    const planned = plan.json<VoicePlanView>();
+    expect(planned).toMatchObject({ blocked: null, estimate: { costBasis: 'MOCK' }, profile: { provider: 'mock', version: 1 } });
+    expect(planned.chunks.length).toBeGreaterThan(1);
+
+    const created = await app.inject({ method: 'POST', url: `/api/projects/${id}/voice/runs`, payload: { scope: { kind: 'AUDITION', seconds: 60 } } });
+    expect(created.statusCode).toBe(202);
+    expect(created.json<{ job: JobView; run: number }>()).toMatchObject({ job: { type: 'VOICE', status: 'QUEUED' }, run: 1 });
+    await c.runner.drain();
+    v = await voice(app, id);
+    expect(v.project.status).toBe('VOICE_REVIEW');
+    const run = v.run!;
+    expect(run).toMatchObject({ number: 1, kind: 'AUDITION', chunkCount: planned.chunks.length });
+
+    // Audio: the whole file, then a byte range (players seek with ranges).
+    const audioUrl = run.chunks[0]!.current!.audioUrl!;
+    const full = await app.inject({ method: 'GET', url: audioUrl });
+    expect(full.statusCode).toBe(200);
+    expect(full.headers['content-type']).toBe('audio/wav');
+    expect(full.headers['accept-ranges']).toBe('bytes');
+    expect(full.headers['x-audio-mock']).toBe('true');
+    const part = await app.inject({ method: 'GET', url: audioUrl, headers: { range: 'bytes=0-99' } });
+    expect(part.statusCode).toBe(206);
+    expect(part.headers['content-range']).toBe(`bytes 0-99/${full.rawPayload.length}`);
+    expect(part.rawPayload.length).toBe(100);
+    expect((await app.inject({ method: 'GET', url: audioUrl, headers: { range: `bytes=${full.rawPayload.length + 10}-` } })).statusCode).toBe(416);
+    const assembled = await app.inject({ method: 'GET', url: run.assembly!.audioUrl });
+    expect(assembled.statusCode).toBe(200);
+    expect(assembled.rawPayload.length).toBeGreaterThan(full.rawPayload.length);
+
+    // "What is being said at 00:01?" and the timeline contract.
+    const moment = await app.inject({ method: 'GET', url: `/api/projects/${id}/voice/moment?run=1&at=00:01` });
+    expect(moment.json<VoiceMomentView>()).toMatchObject({ run: 1, chunk: 1, between: false });
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${id}/voice/moment?run=1&at=later` })).statusCode).toBe(409);
+    const timeline = (await app.inject({ method: 'GET', url: `/api/projects/${id}/voice/timeline?run=1` })).json<{ entries: unknown[]; timeline: { scriptBlock: { key: string }; visualHints: unknown }[] }>();
+    expect(timeline.entries).toHaveLength(run.chunkCount);
+    expect(timeline.timeline[0]).toMatchObject({ scriptBlock: { key: run.chunks[0]!.blockKeys[0] } });
+
+    // Decisions: approve one take, regenerate another (the first take is kept).
+    const take = run.chunks[0]!.current!;
+    expect((await app.inject({ method: 'POST', url: `/api/voice/generations/${take.id}/decision`, payload: { action: 'APPROVE' } })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: `/api/voice/runs/${run.id}/regenerate`, payload: { chunkIds: [run.chunks[1]!.id] } })).statusCode).toBe(202);
+    await c.runner.drain();
+    v = await voice(app, id);
+    expect(v.run!.chunks[0]!.current).toMatchObject({ status: 'APPROVED' });
+    expect(v.run!.chunks[1]!.generations.map((g) => g.generation)).toEqual([2, 1]);
+
+    // An audition is not the narration.
+    const gate = await app.inject({ method: 'POST', url: `/api/projects/${id}/approvals`, payload: { gate: 'VOICE', decision: 'APPROVED' } });
+    expect(gate.statusCode).toBe(409);
+    expect(gate.json<{ message: string }>().message).toMatch(/No full narration of script v1/);
+
+    // A new profile version becomes the active one; the old one is kept.
+    const profile = await app.inject({ method: 'POST', url: `/api/projects/${id}/voice/profiles`, payload: { settings: { stability: 0.4 }, notes: 'A little more expressive (test).' } });
+    expect(profile.statusCode).toBe(201);
+    v = await voice(app, id);
+    expect(v.profiles.map((p) => [p.version, p.active, p.config.settings.stability])).toEqual([
+      [2, true, 0.4],
+      [1, false, 0.5],
+    ]);
+    // Pronunciation decisions are validated.
+    const term = v.pronunciations[0];
+    if (term) {
+      expect((await app.inject({ method: 'PATCH', url: `/api/voice/pronunciations/${term.id}`, payload: { method: 'IPA', status: 'APPROVED' } })).statusCode).toBe(400);
+      expect((await app.inject({ method: 'PATCH', url: `/api/voice/pronunciations/${term.id}`, payload: { method: 'DEFAULT', status: 'APPROVED' } })).statusCode).toBe(200);
+    }
+  });
+
+  it('refuses to plan narration where there is no real script stage', async () => {
+    const { app } = await start();
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
+    const res = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/voice/plan`, payload: { scope: { kind: 'AUDITION', seconds: 60 } } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ message: string }>().message).toMatch(/needs a real script stage/);
   });
 });

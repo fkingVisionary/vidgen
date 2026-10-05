@@ -30,6 +30,7 @@ export const PROJECT_STATUSES = [
   'SCRIPT_REVIEW', // human approval gate #3 (script)
   'SCRIPT_APPROVED',
   'VOICE_GENERATING',
+  'VOICE_REVIEW', // human approval gate (assembled narration of the approved script)
   'VOICE_COMPLETE',
   'VISUAL_PLANNING',
   'STORYBOARD_REVIEW', // human approval gate #4 (storyboard) — before any paid generation
@@ -94,6 +95,7 @@ export const APPROVAL_GATES = [
   'RESEARCH',
   'STORY',
   'SCRIPT',
+  'VOICE',
   'STORYBOARD',
   'VISUAL_ASSETS',
   'FINAL_VIDEO',
@@ -427,6 +429,43 @@ export type ScriptChangeStatus = (typeof SCRIPT_CHANGE_STATUSES)[number];
 /** How sure a pronunciation note is. Anything below HIGH is flagged for human review. */
 export const PRONUNCIATION_CONFIDENCES = ['HIGH', 'MEDIUM', 'LOW'] as const;
 export type PronunciationConfidence = (typeof PRONUNCIATION_CONFIDENCES)[number];
+
+// ---------------------------------------------------------------------------
+// Voice
+// ---------------------------------------------------------------------------
+
+/** What a voice run narrates: the opening (audition), one section, chosen blocks, a range of blocks, or the whole script. */
+export const VOICE_RUN_KINDS = ['AUDITION', 'SECTION', 'BLOCKS', 'RANGE', 'FULL'] as const;
+export type VoiceRunKind = (typeof VOICE_RUN_KINDS)[number];
+
+/** Lifecycle of one take of one chunk. Takes are never deleted: a newer current take supersedes the one before. */
+export const VOICE_GENERATION_STATUSES = ['PENDING', 'GENERATING', 'GENERATED', 'FAILED', 'REJECTED', 'APPROVED', 'SUPERSEDED'] as const;
+export type VoiceGenerationStatus = (typeof VOICE_GENERATION_STATUSES)[number];
+
+/**
+ * How much performance direction goes to the voice: none (plain text), the
+ * house style (a few marks where the script's delivery changes), or
+ * over-directed (a mark on every sentence — for comparison only).
+ */
+export const PERFORMANCE_STRATEGIES = ['PLAIN', 'RESTRAINED', 'DIRECTED'] as const;
+export type PerformanceStrategy = (typeof PERFORMANCE_STRATEGIES)[number];
+
+/** Why a chunk ends where it does. */
+export const CHUNK_BOUNDARIES = ['SECTION_END', 'SPEAKER', 'PAUSE', 'PERFORMANCE', 'PARAGRAPH', 'SENTENCE'] as const;
+export type ChunkBoundary = (typeof CHUNK_BOUNDARIES)[number];
+
+/** A term in the pronunciation review list: still to check, confirmed, or heard wrong in an audition. */
+export const PRONUNCIATION_STATUSES = ['PENDING', 'APPROVED', 'FLAGGED'] as const;
+export type PronunciationStatus = (typeof PRONUNCIATION_STATUSES)[number];
+/** How a term is said: the voice's own reading, a spoken alias, or phonemes (IPA or CMU Arpabet). */
+export const PRONUNCIATION_METHODS = ['DEFAULT', 'ALIAS', 'IPA', 'CMU'] as const;
+export type PronunciationMethod = (typeof PRONUNCIATION_METHODS)[number];
+export const PRONUNCIATION_TERM_KINDS = ['NAME', 'PLACE', 'ORGANISATION', 'FOREIGN', 'TERM', 'ABBREVIATION'] as const;
+export type PronunciationTermKind = (typeof PRONUNCIATION_TERM_KINDS)[number];
+
+/** Written forms the narrator must not read as written: they are given a spoken form before generation. */
+export const SPOKEN_FORM_KINDS = ['YEAR', 'DECADE', 'NUMBER', 'CURRENCY', 'ORDINAL', 'DATE', 'PERCENT', 'DECIMAL', 'RANGE', 'ABBREVIATION', 'ALIAS'] as const;
+export type SpokenFormKind = (typeof SPOKEN_FORM_KINDS)[number];
 
 // ---------------------------------------------------------------------------
 // Visuals, infographics, media

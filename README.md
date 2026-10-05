@@ -36,9 +36,15 @@ no meta-narration, people and devices introduced plainly, what is said about
 a person resting on a claim about them, deliberate repetition kept, where to
 cut when it runs long); the editor edits, approves or rejects sections,
 regenerates single sections, refines the narration and approves the whole
-script. Every later stage (voice, visuals,
-edit, publish) is still a clearly labelled **MOCK**. First test
-episode: *Tulip Mania — The Bubble That Became a Legend*.
+script; then narrates the approved script — in small chunks of natural
+speech with ElevenLabs Eleven v4 (audio tags, never SSML), an opening
+audition first, every take kept and reviewed on its own, numbers and names
+given a checked spoken form, performance directions translated from the
+script (restrained by default), timestamps mapped back to the script's words,
+the takes assembled on the clock of the audio itself, and a human approval of
+the whole narration. Every later stage (visuals, edit, publish) is still a
+clearly labelled **MOCK**. First test episode: *Tulip Mania — The Bubble That
+Became a Legend*.
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design, data model, providers, jobs, decisions
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Railway, environment variables, operations
@@ -48,8 +54,9 @@ episode: *Tulip Mania — The Bubble That Became a Legend*.
 
 TypeScript (Node 22) · Fastify 5 · PostgreSQL 16 + Prisma 7 · React 19 + Vite 8
 + Tailwind 4 · zod · pino · Vitest · Docker · Railway · Anthropic (Claude) ·
-Tavily (search + extraction). Planned: ElevenLabs (voice), Higgsfield (video),
-Cloudflare R2 (storage), FFmpeg + Remotion (rendering), YouTube Data API.
+Tavily (search + extraction) · ElevenLabs (voice, Eleven v4) · S3-compatible
+storage (a Railway bucket). Planned: Higgsfield (video), FFmpeg + Remotion
+(rendering), YouTube Data API.
 
 ## Repository
 
@@ -239,9 +246,19 @@ Once the story architecture is approved (Story Engine 2.0), the project's
 5. **Approve Entire Script** — refused while the gate has blocking findings
    (fiction presented as documented fact, invented words for a real person,
    an unsupported figure, a myth told as fact, a missing sequence…) or a
-   section is rejected. Nothing is voiced: the **Pronunciation & voice** tab
-   shows the pronunciation notes (every model pronunciation is flagged for a
-   person to check) and what the ElevenLabs adapter would be sent.
+   section is rejected. Nothing is voiced on the Script page: the
+   **Pronunciation & voice** tab shows the pronunciation notes (every model
+   pronunciation is flagged for a person to check).
+6. **Voice** (once a version is approved; needs `VOICE_PROVIDER=elevenlabs`
+   and a bucket for real audio — see DEPLOYMENT.md, otherwise every take is a
+   labelled MOCK beep): **Plan** an opening audition (the chunks, the exact
+   text each would send, characters, estimated cost, what it covers), then
+   generate it. Each chunk: play, approve, reject, regenerate (optionally with
+   your own directions), compare and restore earlier takes, see what was
+   sent. Compare plain / restrained / over-directed, or three chunk sizes, on
+   the same passage. Decide the pronunciation list, version the voice
+   profile, ask "what is said at 02:43". The whole narration (a full run,
+   every take approved, nothing blocking) is approved at the VOICE gate.
 
 `SCRIPT_MAX_COST_USD=15` stops a script job whose recorded spend passes it;
 `SCRIPT_MODELS` (optional) sets a model per step.

@@ -38,6 +38,7 @@ import {
 } from '@docengine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
+import { Link } from 'react-router';
 import { api } from '../api.ts';
 import { formatUsd } from '../format.ts';
 import { ClaimRefs, Section } from './evidence.tsx';
@@ -640,8 +641,6 @@ export function ReviewChangesSection({ changes }: { changes: ScriptReviewChange[
 // ── Pronunciation and the voice plan ─────────────────────────────────────────
 
 export function VoiceTab({ projectId, script: s }: { projectId: string; script: ScriptVersionView }) {
-  const [show, setShow] = useState(false);
-  const plan = useQuery({ queryKey: ['script', 'voice', projectId, s.version], queryFn: () => api.voicePlan(projectId, s.version), enabled: show });
   const p = s.content?.pronunciations ?? [];
   return (
     <div className="space-y-4">
@@ -680,32 +679,14 @@ export function VoiceTab({ projectId, script: s }: { projectId: string; script: 
         )}
         <p className="mt-2 text-xs text-stone-500">Pronunciations are not guessed silently: anything not confirmed is flagged for a person to check, and only confirmed ones would be sent to the voice provider.</p>
       </Section>
-      <Section title={`Voice plan — ${s.voice.provider} (no audio generated)`}>
+      <Section title="Narration">
         <p className="text-sm text-stone-600">
-          {s.voice.segments} request(s), {s.voice.characters.toLocaleString()} characters
-          {s.voice.pendingPronunciations ? ` · ${s.voice.pendingPronunciations} pronunciation(s) to confirm first` : ''}. This is what the voice adapter would send; the voice stage is a later milestone.
+          Narration is generated on the{' '}
+          <Link to={`/projects/${projectId}/voice`} className="underline">
+            Voice page
+          </Link>{' '}
+          once a version is approved: in small chunks of natural speech, auditioned first, each take reviewed on its own. The pronunciation notes above start its pronunciation review list; nothing here is sent to a voice.
         </p>
-        {!show ? (
-          <button onClick={() => setShow(true)} className={`${button} mt-2 bg-white text-stone-800 ring-1 ring-stone-300 hover:bg-stone-50`}>
-            Show the requests
-          </button>
-        ) : plan.data ? (
-          <div className="mt-2 space-y-2">
-            {plan.data.unsupported.length > 0 && <p className="text-xs text-amber-900">Not expressible for this provider (kept in the script): {plan.data.unsupported.join('; ')}</p>}
-            <ol className="space-y-2">
-              {plan.data.segments.map((seg, i) => (
-                <li key={i} className="rounded border border-stone-200 p-2 text-xs">
-                  <p className="text-stone-500">
-                    {seg.sectionKey} · blocks {seg.blockKeys.join(', ')} · speed {seg.speed} · {seg.characters} characters
-                  </p>
-                  <p className="mt-1 font-mono break-words whitespace-pre-wrap text-stone-800">{seg.text}</p>
-                </li>
-              ))}
-            </ol>
-          </div>
-        ) : (
-          <p className="text-sm text-stone-500">Loading…</p>
-        )}
       </Section>
     </div>
   );

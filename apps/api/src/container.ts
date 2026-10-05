@@ -5,6 +5,7 @@ import { createProviders, describeProviders, type ProviderSet } from '@docengine
 import { createResearchStage, type ResearchConfig } from '@docengine/research';
 import { ScriptEditing, createScriptStage, parseScriptModels, type ScriptConfig } from '@docengine/script';
 import { createStoryAnglesStage, createStoryArchitectureStage, createStoryMiningStage, type StoryConfig } from '@docengine/story';
+import { VoiceService, createVoiceStage, voiceGate, type VoiceStageConfig } from '@docengine/voice';
 import type { Logger } from 'pino';
 import { providerSelection, providerSettings, type Env } from './env.ts';
 
@@ -22,6 +23,8 @@ export interface AppContainer {
   runner: JobRunner;
   /** The editor's changes to the script under review. */
   scripts: ScriptEditing;
+  /** Narration: voice runs, takes, decisions, pronunciations, profiles. */
+  voice: VoiceService;
   /** Stages backed by real implementations (all others are MOCK placeholders). */
   realStages: JobType[];
   close(): Promise<void>;
@@ -30,7 +33,7 @@ export interface AppContainer {
 export function createContainer(
   env: Env,
   logger: Logger,
-  overrides: { db?: Database; providers?: ProviderSet; researchConfig?: Partial<ResearchConfig>; storyConfig?: Partial<StoryConfig>; scriptConfig?: Partial<ScriptConfig> } = {},
+  overrides: { db?: Database; providers?: ProviderSet; researchConfig?: Partial<ResearchConfig>; storyConfig?: Partial<StoryConfig>; scriptConfig?: Partial<ScriptConfig>; voiceConfig?: Partial<VoiceStageConfig> } = {},
 ): AppContainer {
   const db = overrides.db ?? createDatabase({ connectionString: env.DATABASE_URL, maxConnections: env.DATABASE_POOL_SIZE });
   // Fails fast with a clear message if a provider is configured that is not implemented.
@@ -41,6 +44,7 @@ export function createContainer(
     logger,
     jobMaxAttempts: env.JOB_MAX_ATTEMPTS,
     onJobQueued: (job) => queue.notify(job),
+    gateHooks: { VOICE: voiceGate() },
   });
   // Real stages replace MOCK placeholders when the providers they need are real.
   const handlers = createMockStageHandlers();
@@ -53,6 +57,8 @@ export function createContainer(
     handlers.STORY_ARCHITECTURE = createStoryArchitectureStage(story);
     handlers.STORY_ANGLES = createStoryAnglesStage(story);
     handlers.SCRIPT = createScriptStage({ maxCostUsd: env.SCRIPT_MAX_COST_USD, models: parseScriptModels(env.SCRIPT_MODELS), ...overrides.scriptConfig });
+    // Narration needs a real script; with a MOCK voice provider its takes are labelled MOCK (beep and silence).
+    handlers.VOICE = createVoiceStage({ maxCharacters: env.VOICE_MAX_CHARACTERS, concurrency: env.VOICE_CONCURRENCY, ...overrides.voiceConfig });
   }
   const realStages = Object.values(handlers).filter((h) => !h.mock).map((h) => h.type);
   const runner = new JobRunner({
@@ -80,6 +86,7 @@ export function createContainer(
     projects,
     runner,
     scripts: new ScriptEditing(db),
+    voice: new VoiceService({ db, projects, providers, config: { confirmCharacters: env.VOICE_CONFIRM_CHARACTERS, maxCharacters: env.VOICE_MAX_CHARACTERS } }),
     realStages,
     async close() {
       await runner.stop();

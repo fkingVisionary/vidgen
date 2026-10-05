@@ -104,7 +104,7 @@ Creating eight empty packages today would be ceremony without content.
 ## 4. Pipeline and state machine
 
 The project `status` is the master pipeline phase (linear, as in the brief,
-plus two added review statuses — see §16, D5–D6). Dashboard stages are derived.
+plus three added review statuses — see §17, D5–D6, D77). Dashboard stages are derived.
 
 | Status | Dashboard stage | Jobs that run here | Leaves by |
 |---|---|---|---|
@@ -120,7 +120,8 @@ plus two added review statuses — see §16, D5–D6). Dashboard stages are deri
 | SCRIPT_DRAFT | Script | SCRIPT | → SCRIPT_REVIEW |
 | SCRIPT_REVIEW | Script (awaiting approval) | — | **gate SCRIPT**: approve → SCRIPT_APPROVED, reject → SCRIPT_DRAFT |
 | SCRIPT_APPROVED | Script ✓ | — | START → VOICE_GENERATING |
-| VOICE_GENERATING | Voice | VOICE | → VOICE_COMPLETE |
+| VOICE_GENERATING | Voice | VOICE (a voice run, a comparison, or new takes) | → VOICE_REVIEW |
+| VOICE_REVIEW | Voice (review takes; awaiting approval) | — | **gate VOICE** (a full run of the approved script, every current take approved, nothing blocking): approve → VOICE_COMPLETE, reject → VOICE_GENERATING. New takes re-enter VOICE_GENERATING by the reject path (no decision recorded). |
 | VOICE_COMPLETE | Voice ✓ | — | START → VISUAL_PLANNING |
 | VISUAL_PLANNING | Storyboard | VISUAL_PLAN | → STORYBOARD_REVIEW |
 | STORYBOARD_REVIEW | Storyboard (awaiting approval) | — | **gate STORYBOARD**: approve → VISUAL_GENERATING, reject → VISUAL_PLANNING |
@@ -154,7 +155,7 @@ failed) are not thrown away.
 
 ## 5. Data model
 
-30 tables. Fields that are filtered/joined/queried are typed columns; creative
+36 tables. Fields that are filtered/joined/queried are typed columns; creative
 payloads still evolving (story sequences, shot direction, infographic specs,
 timeline tracks, QA findings) are JSONB validated by zod contracts in
 `packages/core/src/contracts`. Primary keys are UUIDv7. Timestamps are
@@ -229,9 +230,20 @@ erDiagram
 |---|---|
 | `scripts` | Versioned (`unique(project_id, version)`, gate SCRIPT): `story_id` (the approved architecture it tells), `engine_version` (1 = Script Engine 1.0), `content` (`ScriptContent`: narrator, central question with the blocks that pose and answer it, pronunciations, the script editor's and fact checker's reviews, provenance — origin, base version, sections written, brief, who asked, the writer's change log), `quality_report`, `quality_passed`, `stats` (models, prompt version, timing, classes, findings, resumed steps), `target_duration_sec`, `estimated_duration_sec`, `word_count`, `notes` (the brief), `revision_of_id`, `job_id`. Approvals link the exact version (`approvals.script_id`). |
 | `scenes` | **The script is language-neutral structure; the words are per language.** One per architecture sequence: `scene_key` ("SC01"), `sequence_number`, title, `content` (the planner's section plan), the editor's `review_status` (PENDING / APPROVED / REJECTED), `editor_notes`, `reviewed_by` / `reviewed_at`. |
-| `scene_narrations` | One per scene and language: the section's full text, word count and estimated duration (audio asset and word timestamps later, from the voice stage). |
+| `scene_narrations` | One per scene and language: the section's full text, word count and estimated duration. Narration audio and timestamps live in the Voice Engine's tables (§16), per take. |
 | `script_blocks` | The narration blocks of a section, in `sort_order`: `block_key` ("3.4"), `text`, `generated_text` (what the model wrote; kept when the editor changes `text`), `info_class` (DOCUMENTED / RECONSTRUCTION / UNCERTAIN / FICTION / FRAMING), `beat_ids` (the architecture beats it tells), `speaker_id` + `speech_kind` (RECORDED_QUOTE / INVENTED), `fictional_device`, `delivery` (pace, energy, emotion, emphasis, pauses before and after with a reason), `visual` (intent, must show with claim keys, must avoid, priority, note), `presentation` (how uncertain claims must be worded), word count, estimated duration, `edited_by` / `edited_at`. |
 | `script_block_claims` | Block ↔ dossier claim (FK), like the candidates' and opportunities' links. |
+
+### Narration (Voice Engine 1.0, §16)
+
+| Table | Notes |
+|---|---|
+| `voice_profiles` | Provider, voice, model, language, output format and `config` (voice settings, performance strategy, chunking, context, number style). Never edited: a change is a new version; one active per provider and language. |
+| `voice_runs` | One run ("Voice Run 3") of one approved script version with one profile: scope (audition, section, blocks, range, full), strategy and chunk/context settings used; `experiment` + `variant` group the runs of a comparison. |
+| `voice_chunks` | The smallest generation unit: whole sentences of one section (spans into blocks), canonical `source_text`, its `text_hash`, each source block's hash (stale detection), why it ends where it does, the script's delivery, the current take. |
+| `voice_generations` | Every take of a chunk (Generation 1, 2, 3…), never deleted: status PENDING → GENERATING → GENERATED → APPROVED / REJECTED / SUPERSEDED (or FAILED); canonical, spoken and performance text; the derived representation and its checks; seed; context sent; audio asset; measured duration; word and character timestamps; QA; ledger link. |
+| `voice_assemblies` | A run's current takes in order on the measured clock (`entries`), the pauses between them, the narration `timeline` (the downstream contract), QA, the joined audio file once built. A new version whenever a current take changes; the approved full assembly is what the VOICE gate approves (`approvals.voice_assembly_id`). |
+| `voice_pronunciations` | The project's pronunciation review list: term, kind, method (the voice's own reading, alias, IPA, CMU), pronunciation, status (to check, approved, heard wrong), source and hint. |
 
 ### Creative artifacts (schema only — no code writes them yet)
 
@@ -259,9 +271,9 @@ under `projects/{id}/{lang}/…` (`buildAssetKey`).
 |---|---|---|
 | `AIProvider` | `generateText`, `generateObject(zodSchema)` | **Anthropic** (implemented): Claude, `claude-opus-5-5` by default, streaming, structured outputs (JSON schema from zod, re-validated), adaptive thinking with per-task effort, prompt caching of shared system prompts |
 | `ResearchProvider` | `search`, `fetchDocuments(urls)` | **Tavily** (implemented): `/search` + `/extract` (full text as markdown, batches of 20). Planned alternatives: Exa, Claude server-side web search |
-| `VoiceProvider` | `getVoices`, `generateNarration` (with timestamps, prev/next text for continuity), `getAudioMetadata` | ElevenLabs |
+| `VoiceProvider` | `capabilities(model)`, `render(segments, model)` (pure: the model's own markup), `getVoices`, `generateNarration` (one small chunk; character timestamps, neighbouring text or request stitching for continuity, seed, phoneme dictionary), `getAudioMetadata` | **ElevenLabs** (implemented): `/v1/text-to-speech/{voice}/with-timestamps`, Eleven v4 by default (audio tags, no SSML), see §16 |
 | `VideoProvider` | `createImage`, `createVideo`, `getGenerationStatus`, `downloadAsset` (+ `waitForGeneration` helper) | Higgsfield |
-| `StorageProvider` | `put`, `get`, `head`, `delete`, `list`, `getSignedUrl` | S3-compatible (Cloudflare R2) |
+| `StorageProvider` | `put`, `get`, `head`, `delete`, `list`, `getSignedUrl` | **S3-compatible** (implemented): plain HTTPS with Signature V4 (verified against AWS's worked examples) — Railway Storage Buckets, Cloudflare R2, AWS S3, MinIO |
 | `RenderProvider` | `renderTimeline`, `renderGraphic`, `getRenderStatus` | FFmpeg (assembly, mixing, loudness) + Remotion (infographics) |
 | `PublishingProvider` | `uploadVideo` (privacy defaults to private; synthetic-media disclosure flag), `getPublishStatus` | YouTube Data API |
 
@@ -273,7 +285,7 @@ times the call, prices usage with the provider's rate card and logs it.
 **Adding a vendor** = one class implementing the interface + one entry in
 `FACTORIES` in `packages/providers/src/registry.ts` + run the matching
 `run…Contract()` suite from `packages/providers/src/contract` against it.
-Configuring a planned-but-unbuilt provider (e.g. `VOICE_PROVIDER=elevenlabs`)
+Configuring a planned-but-unbuilt provider (e.g. `VIDEO_PROVIDER=higgsfield`)
 fails at startup with an explicit "planned but not implemented yet" error.
 
 **Mock behaviour** (all labelled `MOCK`, all $0 but with realistic usage so
@@ -284,8 +296,9 @@ cost code is exercised):
   against the schema.
 - Research: results on `https://mock.invalid/...`.
 - Voice: a real WAV (short beep + silence) whose length matches the words at
-  150 wpm × speed, with evenly spaced word timestamps — usable for developing
-  timeline and subtitle timing without credits.
+  150 wpm × speed, with character timestamps shaped like a tag-aware
+  provider's (markup takes no time, pause tags leave silence) — the whole
+  Voice Engine runs on it without credits, every take labelled MOCK.
 - Video: async lifecycle simulated across polls; downloads a labelled SVG
   placeholder (`placeholder: true`); never video bytes.
 - Storage: in-memory, lost on restart; signed URLs use `mock-storage://`.
@@ -1059,8 +1072,9 @@ at the provider's 3 s), the neighbouring text as `previousText` /
 `nextText`, and a pronunciation dictionary of **confirmed** entries only (the
 rest listed as pending). What the provider cannot express per block (emphasis,
 energy, emotion) is listed, not dropped silently. `GET …/script/voice-plan`
-shows the plan; no voice call is made — automated voice production is a
-later milestone.
+still returns that plan (an SSML-era summary for Multilingual v2); narration
+itself is the Voice Engine's (§16), which chunks smaller, renders Eleven v4's
+audio tags instead of `<break>`, and never changes the script.
 
 **Visual handoff.** Each block carries visual intent (CINEMATIC_RECONSTRUCTION,
 DOCUMENT, MAP, DATA, TIMELINE, ARCHIVAL, PORTRAIT, ENVIRONMENT,
@@ -1233,7 +1247,173 @@ hands…") passes them; assertion linking matches word stems, so a synonym
 claims, not by what it means — the fact checker and the editor remain the
 judges of meaning.
 
-## 16. Decisions
+## 16. Voice Engine 1.0
+
+Narration is the first temporal production layer: everything downstream is
+timed against the audio it produces, not against a words-per-minute
+estimate. A script is never sent to a voice as one request.
+
+```
+approved script version → sections → blocks → chunks (small, natural speech)
+  → takes (generations): spoken forms → performance directions → provider markup → checks → TTS
+  → stored audio + character timestamps → per-take QA
+  → assembly on the measured clock (+ scripted pauses) → narration timeline → VOICE gate
+```
+
+Module `modules/voice`; provider code in `packages/providers` (ElevenLabs,
+S3 storage, MP3/WAV tools). Pages: the dashboard's Voice page.
+
+### Chunks
+
+`planChunks` cuts each section's sentences (exact character offsets; never
+inside a sentence, never across a section, a change of speaker or blocks that
+are not adjacent) by dynamic programming over every possible cut, so it is
+deterministic and explained (each chunk records why it ends: section end,
+speaker, scripted pause, change of delivery, paragraph, sentence).
+
+- Preferred cuts: a paragraph (block) end; a scripted pause (long ≫ medium ≫
+  short); a change in the script's delivery — major (two steps in pace,
+  energy or emotion, or one step in all three) far more than minor.
+- Avoided cuts: between a question and its answer, a setup ("…", "—", ":")
+  and its payoff, before a very short sentence, before a sentence that
+  continues the last ("And…", "But…", "Which…").
+- Size: a cost for every word under the minimum or over the maximum, a hard
+  ceiling at 1.5 × the maximum for several sentences, and a fixed cost per
+  chunk, so a passage is not shattered into tiny clips because the delivery
+  shifts slightly. House default 25–80 words; 20–40, 40–80 and 80–120 are the
+  comparison settings (the engine should later adapt size to structure).
+
+Each chunk keeps its spans (block, character range), canonical text, its
+SHA-256, and each source block's whole-text hash.
+
+### Spoken forms, performance, markup, checks
+
+1. **Spoken forms** (`toSpoken`): years ("1637" → "sixteen thirty-seven"),
+   decades, ranges, dates, ordinals, percentages, decimals, "c. 1610",
+   amounts with currency signs ("ƒ5,500" → "five thousand five hundred
+   guilders") and numbers, in UK or US style; approved pronunciation aliases
+   are spoken in place of their terms. Every replacement is recorded against
+   the canonical range; a guess (a four-digit number nothing marks as a
+   year) is MEDIUM confidence and flagged for a listen.
+2. **Performance** (`performanceMarks`): provider-neutral intents (emotion,
+   delivery, intensity, pacing, vocal action — open words, not a closed list)
+   translated from the script's own delivery marks. Strategies: PLAIN (none),
+   RESTRAINED (house style: only where the script's delivery changes, at
+   most two per chunk, six words or more apart, a short reset to the plain
+   register when a marked passage is followed by plain narration — a
+   direction carries forward; no vocal actions unless the director asks) and
+   DIRECTED (every sentence, loud — a comparison only). A director's
+   directions for one chunk replace the strategy's.
+3. **Markup** (`VoiceProvider.render`, pure): tag models get one bracket of
+   plain words before the sentence (`[curious]`, `[quiet]`) and `[pause]` /
+   `[long pause]`; SSML models get `<break time="…"/>` (≤ 3 s); a model the
+   provider does not know gets line breaks only. Speed is applied only where
+   the model takes one (not v4); what a model cannot express is reported, not
+   sent.
+4. **Checks** (`checkTake`, before anything is sent; a FAIL means not sent):
+   the spoken text is the canonical text plus recorded forms only; the sent
+   text has exactly the spoken words in order; every sentence is verbatim;
+   directions only before a sentence and pauses only between sentences;
+   never inside a quotation; directions are a few lower-case words (no
+   dialogue, numbers or names); density within the strategy; a warning for
+   a direction on narration the script marks as plain.
+
+The canonical text, the spoken text and the performance text (exactly what
+was sent, marked derived) are all stored with the take, with the spoken
+forms, marks, pauses, context, settings, seed, dictionary rules and checks.
+
+### Takes, context, alignment, QA
+
+The VOICE job generates a run's pending takes (two at a time; one at a time
+when stitching), each through `ctx.callProvider` (ledger row linked to the
+take). Context: the neighbouring chunks' last/first whole sentences within
+the run's character limits (`previous_text` / `next_text`), or — when
+stitching is chosen and the model supports it — the previous chunk's
+request id (taken within two hours, same model). The seed is derived from
+the text hash and the take number: a take is reproducible, a regeneration
+differs. Audio goes to the `StorageProvider` (a `media_assets` row per
+file); duration is measured from the file (MP3 frames, WAV samples).
+
+`alignTake` maps the provider's character timestamps back through the
+markup and the spoken forms to the canonical words ("1637" gets the time of
+"sixteen thirty-seven"); words it cannot find are counted, never invented.
+`takeQa`: no audio, no timestamps (blocking: the timeline needs them),
+unmatched words (blocking over 10%), a speaking rate outside 70–260 words a
+minute (blocking) or 100–200 (warning), silence over 1.2 s before the first
+word, 1.5 s after the last, 2.5 s between words, spoken forms to hear,
+performance warnings, MOCK audio.
+
+A new take becomes its chunk's current take; the one before is SUPERSEDED
+(an approval is remembered, so restoring brings it back approved). Takes are
+never deleted or overwritten. A failed take is recorded and the run goes on;
+an error no take would get past (rejected key, no credits, no access,
+unknown voice) stops the job, leaving untried takes pending for a retry.
+Real (non-mock) narration is refused while storage is in memory.
+
+### Assembly, timeline, gate
+
+`assemble` puts the current takes in chunk order on their measured
+durations; the silence between two takes is what the script asks for there
+(a breath between sentences, a paragraph, a scripted pause, a section
+change) minus the silence already at the end of one clip and the start of
+the next, never below zero. Duplicate or missing chunks are blocking. The
+narration timeline — per block part: block, chunk, take, start, end, words
+with times, the script's delivery and visual hints — is the contract the
+storyboard will be timed against ("what is said at 02:43?" is a lookup on
+it). The joined audio file is built on first request (MP3 frames with
+silent frames for the pauses, or WAV samples) and stored.
+
+Run QA (live): failed, rejected or unreviewed current takes; a take of
+other text than its chunk; the run's script no longer the approved one
+("Audio generated from Script v4 — current script is v5"); a source block
+changed (by its hash); blocks of the script without narration; unresolved
+pronunciations. A stale run cannot be regenerated: a new run is made for the
+new script. The **VOICE gate** approves only the latest assembly of a full
+run of the approved script with every current take approved and nothing
+blocking; earlier approved narrations are kept, superseded.
+
+### Profiles, pronunciation, cost
+
+A voice profile (provider, voice, model, language, output format, voice
+settings, strategy, chunking, context, number style) is never edited: a
+change is a new version, active from then on, and every take points at the
+version that made it. The first one is created from the configured defaults
+(ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID — `eleven_v4`, no automatic
+fallback — and ELEVENLABS_OUTPUT_FORMAT).
+
+The pronunciation review list starts from the script's pronunciation notes
+(an editor-confirmed note with IPA is approved; the rest are to check) and
+adds foreign spellings, names with particles and abbreviations found in the
+narration. Approved aliases are spoken by the engine; approved IPA/CMU
+phonemes go to a provider pronunciation dictionary (created once per rule
+set). The whole narration is generated only once every term is decided;
+auditions may run with terms still to check (that is how they are heard).
+
+Cost: every request is a ledger row. ElevenLabs reports characters (the
+`character-cost` header), not dollars, so cost is an ESTIMATE from the
+reported characters (or the characters sent, noted as such) × the
+documented list price per model or ELEVENLABS_USD_PER_1K_CHARS; a model with
+no price is UNPRICED; the mock is MOCK. Plans show characters and the
+estimate before generating; anything above VOICE_CONFIRM_CHARACTERS (and the
+whole script, and every comparison) must be confirmed; VOICE_MAX_CHARACTERS
+caps one job.
+
+### Limits (stated)
+
+- No transcoding: MP3, WAV or raw PCM output only; clips of one run share a
+  format. Encoder delay leaves a few tens of milliseconds between joined MP3
+  clips.
+- Directions are translated from the script's delivery marks; there is no
+  model pass that proposes directions yet.
+- The term list detects foreign spellings and particles, not every name an
+  English voice may stress wrongly; the script's notes cover the rest.
+- Request ids for stitching are only kept two hours by ElevenLabs; older
+  takes fall back to text context.
+- Whether audio tags are billed, and whether they appear in the timestamps,
+  is not documented: characters sent include the tags, and the alignment
+  skips them either way.
+
+## 17. Decisions
 
 | # | Decision | Why | Alternative |
 |---|---|---|---|
@@ -1313,3 +1493,12 @@ judges of meaning.
 | D75 | A callback needs direction, purpose and distinctiveness; a passenger is judged by what it contributes and whether a later section builds on it, and is a candidate, never an automatic cut | In v3 repeated hedges and a recurring source name were protected as callbacks while the passenger rule found nothing; repetition is good when it pays off, bad when it only repeats | Phrase repetition as callbacks; deleting flagged passengers |
 | D76 | The quality report separates measurements from model judgments | Model judgments must never look like objective measurements; the gate stays deterministic | Reviewer verdicts as PASS/WARN checks beside the rules |
 | D65 | The writer step gets the model's full output budget | Measured: about 46k of 64k for a 15-minute draft, thinking included; a truncated script fails the job, an unused budget costs nothing | Keep 64k and risk a failed run |
+| D77 | A VOICE gate (`VOICE_REVIEW`) between narration and visual planning | Narration is the clock everything downstream is timed against; an audition or an unreviewed take must not become it | Advance to VOICE_COMPLETE when a voice job succeeds |
+| D78 | Small chunks of whole sentences, cut by a deterministic cost over every possible cut | One request per script (or per section) makes every fix a full regeneration and drifts in delivery; a cost function makes the cuts explainable and stable | Fixed word windows; one request per block |
+| D79 | Canonical, spoken and performance text are stored side by side, and the derived text is checked word for word before sending | The script must never change, and nothing the voice says may differ from it except recorded spoken forms | Write numbers and tags into the script |
+| D80 | Performance is provider-neutral words translated from the script's delivery marks; restrained by default | "Human documentary narrator, not AI trying to sound emotional": directions only where the script asks for a delivery, rendered by each provider in its own markup | Tags on every sentence; a closed emotion enum |
+| D81 | Eleven v4 by default, never SSML for it, no automatic model fallback | V4 is the recommended expressive model and disables `<break>`; a silent fallback would change the voice of a film without anyone deciding it | Multilingual v2 with break tags |
+| D82 | Takes are never deleted; a new take supersedes, an approval survives being superseded | Comparing and going back must be free; nothing paid for is thrown away | Overwrite the chunk's audio |
+| D83 | The assembly's clock is the takes' measured durations; pauses between takes are inserted in assembly, less the silence the clips already hold | The script's 150 wpm is a planning estimate; exact silence at a chunk boundary is more reliable than asking a model for a pause | Trust the estimate; pauses only as markup |
+| D84 | Audio is stored through the StorageProvider (S3-compatible: a Railway bucket), never in Postgres; paid narration refuses in-memory storage | Durable, cheap, private; the API streams it with byte ranges behind the dashboard's auth | Blobs in Postgres; a Railway volume |
+| D85 | Stale audio is detected by block hashes and never reused | A take of other words than the approved script's must not reach the edit; regenerating a stale run is refused in favour of a new run | Re-use takes whose text happens to match |

@@ -20,6 +20,8 @@ import {
   selectionProblem,
   startsNewPhaseRun,
   type AngleRef,
+  type ApprovalDecision,
+  type ApprovalGate,
   type ApprovalInput,
   type EnqueueJobInput,
   type JobType,
@@ -32,6 +34,13 @@ import { ConflictError, NotFoundError } from './errors.ts';
 import { EVENT } from './events.ts';
 import { silentLogger, type Logger } from './logger.ts';
 
+/**
+ * A stage's own checks at its approval gate, run inside the approval's
+ * transaction: throw a ConflictError to refuse the decision; return the
+ * artifact the decision is about so the approval records it.
+ */
+export type GateHook = (tx: Tx, project: Project, decision: ApprovalDecision, actor: Actor) => Promise<{ voiceAssemblyId?: string | null }>;
+
 export interface ProjectServiceOptions {
   db: Database;
   logger?: Logger;
@@ -39,6 +48,8 @@ export interface ProjectServiceOptions {
   jobMaxAttempts?: number;
   /** Called after a job is committed as QUEUED (lets a queue transport wake workers). */
   onJobQueued?: (job: Job) => void | Promise<void>;
+  /** Gate checks owned by a stage module (the VOICE gate's are the voice module's). */
+  gateHooks?: Partial<Record<ApprovalGate, GateHook>>;
 }
 
 /** Who performed an action, recorded on events and approvals. */
@@ -66,12 +77,14 @@ export class ProjectService {
   private readonly logger: Logger;
   private readonly jobMaxAttempts: number;
   private readonly onJobQueued: ProjectServiceOptions['onJobQueued'];
+  private readonly gateHooks: NonNullable<ProjectServiceOptions['gateHooks']>;
 
   constructor(opts: ProjectServiceOptions) {
     this.db = opts.db;
     this.logger = opts.logger ?? silentLogger;
     this.jobMaxAttempts = opts.jobMaxAttempts ?? 3;
     this.onJobQueued = opts.onJobQueued;
+    this.gateHooks = opts.gateHooks ?? {};
   }
 
   // ── Commands ──────────────────────────────────────────────────────────────
@@ -217,6 +230,8 @@ export class ProjectService {
         }
       }
 
+      const hooked = (await this.gateHooks[input.gate]?.(tx, project, input.decision, actor)) ?? {};
+
       const approval = await tx.approval.create({
         data: {
           projectId,
@@ -228,6 +243,7 @@ export class ProjectService {
           dossierId,
           storyId,
           scriptId,
+          voiceAssemblyId: hooked.voiceAssemblyId ?? null,
         },
       });
       await this.event(tx, projectId, EVENT.APPROVAL_RECORDED, `${input.gate}: ${input.decision}`, {
@@ -426,6 +442,35 @@ export class ProjectService {
       }
       const languageVersionId = await this.resolveLanguageVersionId(tx, project);
       return this.insertJob(tx, project, 'SCRIPT', languageVersionId, input as Prisma.InputJsonValue, actor);
+    });
+    await this.onJobQueued?.(job);
+    return job;
+  }
+
+  /**
+   * Enqueue a VOICE job (a voice run, a comparison, or new takes), entering
+   * VOICE_GENERATING first when needed: START from SCRIPT_APPROVED, the VOICE
+   * gate's send-back path from VOICE_REVIEW (classified REJECT; no gate
+   * decision is recorded), REWIND from VOICE_COMPLETE, RECOVER from a failed
+   * voice run. `prepare` creates the run's rows in the same transaction.
+   */
+  async voiceJob(projectId: string, actor: Actor, reason: string, prepare: (tx: Tx, project: Project) => Promise<Record<string, unknown>>): Promise<Job> {
+    const job = await this.db.$transaction(async (tx) => {
+      let project = await this.lockProject(tx, projectId);
+      const failedVoice = project.status === 'FAILED' && project.failedFromStatus === 'VOICE_GENERATING';
+      if (!['SCRIPT_APPROVED', 'VOICE_GENERATING', 'VOICE_REVIEW', 'VOICE_COMPLETE'].includes(project.status) && !failedVoice) {
+        throw new ConflictError(`Narration is generated once the script is approved and before visual planning starts (the project is ${project.status})`);
+      }
+      const active = await tx.job.findFirst({ where: { projectId, type: 'VOICE', status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } });
+      if (active) throw new ConflictError(`A voice job is already queued or running (${active.id}): wait for it to finish`);
+      const input = await prepare(tx, project);
+      if (project.status !== 'VOICE_GENERATING') {
+        const kind = getTransitionKind(project.status, 'VOICE_GENERATING', { failedFrom: project.failedFromStatus });
+        if (kind !== 'START' && kind !== 'REWIND' && kind !== 'RECOVER' && kind !== 'REJECT') throw new ConflictError(`Cannot generate narration from ${project.status}`);
+        project = await this.transition(tx, project, 'VOICE_GENERATING', actor, reason);
+      }
+      const languageVersionId = await this.resolveLanguageVersionId(tx, project);
+      return this.insertJob(tx, project, 'VOICE', languageVersionId, input as Prisma.InputJsonValue, actor);
     });
     await this.onJobQueued?.(job);
     return job;

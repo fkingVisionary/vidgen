@@ -52,6 +52,7 @@ describe('mocked pipeline, end to end', () => {
     await run('SCRIPT');
     await approve('SCRIPT');
     await run('VOICE');
+    await approve('VOICE');
     await run('VISUAL_PLAN');
     await approve('STORYBOARD');
     await run('VISUAL_GENERATION');
@@ -72,6 +73,7 @@ describe('mocked pipeline, end to end', () => {
       'STORY_APPROVED',
       'SCRIPT_REVIEW', // enqueueing SCRIPT starts SCRIPT_DRAFT; the job completes it
       'SCRIPT_APPROVED',
+      'VOICE_REVIEW', // narration generated; a human approves the assembled narration
       'VOICE_COMPLETE',
       'STORYBOARD_REVIEW',
       'VISUAL_GENERATING',
@@ -105,6 +107,7 @@ describe('mocked pipeline, end to end', () => {
       'RESEARCH@RESEARCH_REVIEW',
       'STORY@STORY_REVIEW',
       'SCRIPT@SCRIPT_REVIEW',
+      'VOICE@VOICE_REVIEW',
       'STORYBOARD@STORYBOARD_REVIEW',
       'VISUAL_ASSETS@VISUAL_REVIEW',
       'FINAL_VIDEO@QA',

@@ -10,6 +10,8 @@ export interface CallProviderOptions<T> {
   /** Summary of the response for the ledger; defaults to none (responses can be large). */
   summarize?: (result: T) => unknown;
   shotId?: string;
+  /** Receives the ledger row's id once the call is recorded (succeeded or failed), to link it to what it produced. */
+  onRecorded?: (callId: string) => void;
 }
 
 /** Everything a stage handler may use. Handlers never construct providers or DB clients themselves. */
@@ -137,6 +139,7 @@ export function createStageContext(args: {
           },
         });
         logger.info({ provider: meta.provider, operation, model: meta.model, durationMs, mock: meta.mock, costUsd: price.estimatedCostUsd, costBasis: price.costBasis }, 'provider call succeeded');
+        opts.onRecorded?.(call.id);
         return result;
       } catch (err) {
         const durationMs = Math.round(performance.now() - started);
@@ -163,6 +166,7 @@ export function createStageContext(args: {
           },
         });
         logger.warn({ provider: info.name, operation, durationMs, err: errorMessage(err) }, 'provider call failed');
+        opts.onRecorded?.(call.id);
         throw err;
       }
     },

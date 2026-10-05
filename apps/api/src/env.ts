@@ -46,6 +46,32 @@ export const EnvSchema = z
     /** $/credit for cost estimates: pay-as-you-go 0.008; monthly plans 0.005–0.0075. */
     TAVILY_USD_PER_CREDIT: opt(z.coerce.number().min(0).max(1).default(0.008)),
 
+    // ElevenLabs (VOICE_PROVIDER=elevenlabs)
+    ELEVENLABS_API_KEY: opt(z.string().optional()),
+    /** Default voice for new voice profiles (chosen per profile; never hard-coded). */
+    ELEVENLABS_VOICE_ID: opt(z.string().trim().optional()),
+    /** Production default: Eleven v4. No automatic fallback to another model. */
+    ELEVENLABS_MODEL_ID: opt(z.string().trim().default('eleven_v4')),
+    ELEVENLABS_OUTPUT_FORMAT: opt(z.string().trim().regex(/^(mp3_\d+_\d+|pcm_\d+|wav_\d+)$/, 'use an mp3_*, wav_* or pcm_* output format').default('mp3_44100_128')),
+    /** Optional: your plan's price per 1,000 characters (defaults to ElevenLabs' documented API list price per model). */
+    ELEVENLABS_USD_PER_1K_CHARS: opt(z.coerce.number().min(0).max(10).optional()),
+    // S3-compatible storage (STORAGE_PROVIDER=s3): a Railway bucket, Cloudflare R2, AWS S3…
+    S3_ENDPOINT: opt(z.url().optional()),
+    S3_REGION: opt(z.string().default('auto')),
+    S3_BUCKET: opt(z.string().optional()),
+    S3_ACCESS_KEY_ID: opt(z.string().optional()),
+    S3_SECRET_ACCESS_KEY: opt(z.string().optional()),
+    S3_FORCE_PATH_STYLE: opt(z.stringbool().default(false)),
+    S3_SIGNED_URL_TTL_SEC: opt(z.coerce.number().int().min(60).max(604_800).default(3600)),
+
+    // Voice stage
+    /** Above this many characters a voice run or regeneration needs an explicit confirmation. */
+    VOICE_CONFIRM_CHARACTERS: opt(z.coerce.number().int().min(100).max(200_000).default(3_000)),
+    /** Hard ceiling on the characters one voice job may send (a full documentary is ~15,000–25,000). */
+    VOICE_MAX_CHARACTERS: opt(z.coerce.number().int().min(500).max(500_000).default(40_000)),
+    /** Takes generated at the same time within one job. */
+    VOICE_CONCURRENCY: opt(z.coerce.number().int().min(1).max(5).default(2)),
+
     // Research stage
     /** Hard ceiling on one research run's estimated provider spend (USD). */
     RESEARCH_MAX_COST_USD: opt(z.coerce.number().min(0.5).max(500).default(40)),
@@ -114,6 +140,22 @@ export function providerSettings(env: Env): ProviderSettings {
       keyless: env.TAVILY_ACCESS_MODE === 'keyless',
       usdPerCredit: env.TAVILY_USD_PER_CREDIT,
       ...(env.TAVILY_API_KEY && env.TAVILY_ACCESS_MODE !== 'keyless' ? { apiKey: env.TAVILY_API_KEY } : {}),
+    },
+    elevenlabs: {
+      model: env.ELEVENLABS_MODEL_ID,
+      outputFormat: env.ELEVENLABS_OUTPUT_FORMAT,
+      ...(env.ELEVENLABS_API_KEY ? { apiKey: env.ELEVENLABS_API_KEY } : {}),
+      ...(env.ELEVENLABS_VOICE_ID ? { voiceId: env.ELEVENLABS_VOICE_ID } : {}),
+      ...(env.ELEVENLABS_USD_PER_1K_CHARS !== undefined ? { usdPer1kChars: env.ELEVENLABS_USD_PER_1K_CHARS } : {}),
+    },
+    s3: {
+      region: env.S3_REGION,
+      forcePathStyle: env.S3_FORCE_PATH_STYLE,
+      signedUrlTtlSec: env.S3_SIGNED_URL_TTL_SEC,
+      ...(env.S3_ENDPOINT ? { endpoint: env.S3_ENDPOINT } : {}),
+      ...(env.S3_BUCKET ? { bucket: env.S3_BUCKET } : {}),
+      ...(env.S3_ACCESS_KEY_ID ? { accessKeyId: env.S3_ACCESS_KEY_ID } : {}),
+      ...(env.S3_SECRET_ACCESS_KEY ? { secretAccessKey: env.S3_SECRET_ACCESS_KEY } : {}),
     },
   };
 }

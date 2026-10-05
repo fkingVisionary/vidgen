@@ -98,11 +98,20 @@ export const STATUS_DEFINITIONS: Record<ProjectStatus, StatusDefinition> = {
   },
   SCRIPT_APPROVED: { stage: 'SCRIPT', stageState: 'COMPLETE', jobs: [], next: 'VOICE_GENERATING' },
 
+  // Narration is generated in small chunks, auditioned and reviewed take by
+  // take; the assembled narration of the whole approved script needs a human
+  // approval before anything is timed against it.
   VOICE_GENERATING: {
     stage: 'VOICE',
     stageState: 'IN_PROGRESS',
     jobs: ['VOICE'],
-    onJobsComplete: 'VOICE_COMPLETE',
+    onJobsComplete: 'VOICE_REVIEW',
+  },
+  VOICE_REVIEW: {
+    stage: 'VOICE',
+    stageState: 'AWAITING_APPROVAL',
+    jobs: [],
+    gate: { gate: 'VOICE', onApprove: 'VOICE_COMPLETE', onReject: 'VOICE_GENERATING' },
   },
   VOICE_COMPLETE: { stage: 'VOICE', stageState: 'COMPLETE', jobs: [], next: 'VISUAL_PLANNING' },
 

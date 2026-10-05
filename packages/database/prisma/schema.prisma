@@ -46,6 +46,7 @@ enum ProjectStatus {
   SCRIPT_REVIEW
   SCRIPT_APPROVED
   VOICE_GENERATING
+  VOICE_REVIEW
   VOICE_COMPLETE
   VISUAL_PLANNING
   STORYBOARD_REVIEW
@@ -88,6 +89,7 @@ enum ApprovalGate {
   RESEARCH
   STORY
   SCRIPT
+  VOICE
   STORYBOARD
   VISUAL_ASSETS
   FINAL_VIDEO
@@ -370,6 +372,45 @@ enum LanguageVersionStatus {
   FAILED
 }
 
+/// What a voice run narrates.
+enum VoiceRunKind {
+  AUDITION
+  SECTION
+  BLOCKS
+  RANGE
+  FULL
+}
+
+/// Lifecycle of one take of one chunk (takes are never deleted).
+enum VoiceGenerationStatus {
+  PENDING
+  GENERATING
+  GENERATED
+  FAILED
+  REJECTED
+  APPROVED
+  SUPERSEDED
+}
+
+enum PerformanceStrategy {
+  PLAIN
+  RESTRAINED
+  DIRECTED
+}
+
+enum PronunciationStatus {
+  PENDING
+  APPROVED
+  FLAGGED
+}
+
+enum PronunciationMethod {
+  DEFAULT
+  ALIAS
+  IPA
+  CMU
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Project spine
 // ─────────────────────────────────────────────────────────────────────────────
@@ -415,6 +456,8 @@ model Project {
   contentOpportunities ContentOpportunity[]
   storyExplorations    StoryExploration[]
   scripts              Script[]
+  voiceRuns            VoiceRun[]
+  voicePronunciations  VoicePronunciation[]
   storyboards          Storyboard[]
   infographics         Infographic[]
   timelines            Timeline[]
@@ -446,6 +489,7 @@ model LanguageVersion {
   project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   jobs          Job[]
   narrations    SceneNarration[]
+  voiceRuns     VoiceRun[]
   timelines     Timeline[]
   renders       Render[]
   assets        MediaAsset[]
@@ -495,6 +539,7 @@ model Job {
   stories           StoryArchitecture[]
   storyExplorations StoryExploration[]
   scripts           Script[]
+  voiceGenerations  VoiceGeneration[]
 
   @@index([status, runAfter])
   @@index([projectId, type, status])
@@ -515,6 +560,7 @@ model Approval {
   dossierId         String?          @map("dossier_id") @db.Uuid
   storyId           String?          @map("story_id") @db.Uuid
   scriptId          String?          @map("script_id") @db.Uuid
+  voiceAssemblyId   String?          @map("voice_assembly_id") @db.Uuid
   storyboardId      String?          @map("storyboard_id") @db.Uuid
   renderId          String?          @map("render_id") @db.Uuid
   createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -524,6 +570,7 @@ model Approval {
   dossier         ResearchDossier?   @relation(fields: [dossierId], references: [id], onDelete: SetNull)
   story           StoryArchitecture? @relation(fields: [storyId], references: [id], onDelete: SetNull)
   script          Script?            @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  voiceAssembly   VoiceAssembly?     @relation(fields: [voiceAssemblyId], references: [id], onDelete: SetNull)
   storyboard      Storyboard?        @relation(fields: [storyboardId], references: [id], onDelete: SetNull)
   render          Render?            @relation(fields: [renderId], references: [id], onDelete: SetNull)
 
@@ -589,6 +636,7 @@ model ProviderCall {
   languageVersion LanguageVersion? @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
   shot            Shot?            @relation(fields: [shotId], references: [id], onDelete: SetNull)
   outputAsset     MediaAsset?      @relation(fields: [outputAssetId], references: [id], onDelete: SetNull)
+  voiceGeneration VoiceGeneration?
 
   @@index([projectId])
   @@index([jobId])
@@ -620,6 +668,8 @@ model MediaAsset {
   project          Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   languageVersion  LanguageVersion? @relation(fields: [languageVersionId], references: [id], onDelete: Cascade)
   narration        SceneNarration?
+  voiceGeneration  VoiceGeneration?
+  voiceAssembly    VoiceAssembly?
   selectedForShots Shot[]
   producedBy       ProviderCall[]
   infographics     Infographic[]
@@ -1098,6 +1148,7 @@ model Script {
   job         Job?               @relation(fields: [jobId], references: [id], onDelete: SetNull)
   scenes      Scene[]
   blocks      ScriptBlock[]
+  voiceRuns   VoiceRun[]
   storyboards Storyboard[]
   approvals   Approval[]
 
@@ -1220,6 +1271,235 @@ model ScriptBlockClaim {
   @@id([blockId, claimId])
   @@index([claimId])
   @@map("script_block_claims")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Voice
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A narrator: provider, voice, model, language, output format and everything else that shapes a take
+/// (VoiceProfileConfig: voice settings, performance strategy, chunking, context, number style).
+/// Never edited once created: a change is a new version, so every take keeps the exact profile it used.
+model VoiceProfile {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  /// Shared by every version ("House narrator").
+  name         String
+  version      Int
+  provider     String
+  voiceId      String   @map("voice_id")
+  modelId      String   @map("model_id")
+  language     String
+  outputFormat String   @map("output_format")
+  config       Json
+  /// The profile new runs use (one active version per name).
+  active       Boolean  @default(true)
+  notes        String?
+  createdBy    String?  @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  runs        VoiceRun[]
+  generations VoiceGeneration[]
+  assemblies  VoiceAssembly[]
+
+  @@unique([name, version])
+  @@map("voice_profiles")
+}
+
+/// One voice run ("Voice Run 3"): a scope of one approved script version narrated with one profile.
+/// Its chunks are fixed when it is created; their takes, decisions and assemblies accumulate.
+model VoiceRun {
+  id                String              @id @default(uuid(7)) @db.Uuid
+  projectId         String              @map("project_id") @db.Uuid
+  languageVersionId String              @map("language_version_id") @db.Uuid
+  scriptId          String              @map("script_id") @db.Uuid
+  profileId         String              @map("profile_id") @db.Uuid
+  /// Per project: Voice Run 1, 2, 3…
+  number            Int
+  kind              VoiceRunKind
+  /// The VoiceScope asked for, and the block keys it resolved to.
+  scope             Json
+  strategy          PerformanceStrategy
+  /// Chunking and context used (the profile's, with the run's overrides).
+  settings          Json
+  /// A comparison: runs narrating the same scope different ways share an experiment name and carry a variant label.
+  experiment        String?
+  variant           String?
+  notes             String?
+  createdBy         String?             @map("created_by")
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project         Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion @relation(fields: [languageVersionId], references: [id], onDelete: Cascade)
+  script          Script          @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  profile         VoiceProfile    @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  chunks          VoiceChunk[]
+  generations     VoiceGeneration[]
+  assemblies      VoiceAssembly[]
+
+  @@unique([projectId, number])
+  @@index([scriptId])
+  @@map("voice_runs")
+}
+
+/// A chunk of natural speech: whole sentences of one section, from one or more blocks (or part of one),
+/// the smallest unit generated, reviewed and regenerated. The script's text is copied, never changed.
+model VoiceChunk {
+  id                  String   @id @default(uuid(7)) @db.Uuid
+  runId               String   @map("run_id") @db.Uuid
+  sceneId             String   @map("scene_id") @db.Uuid
+  /// Order within the run (0-based).
+  chunkIndex          Int      @map("chunk_index")
+  sectionKey          String   @map("section_key")
+  /// Blocks spoken, in order; the first is the chunk's source block.
+  blockKeys           String[] @map("block_keys")
+  sourceBlockId       String   @map("source_block_id") @db.Uuid
+  /// ChunkSpan[]: block id/key and character range of each part.
+  spans               Json
+  /// The canonical text (the script's words, exactly).
+  sourceText          String   @map("source_text")
+  /// SHA-256 of sourceText: a take of other text is never reused silently.
+  textHash            String   @map("text_hash")
+  /// SHA-256 of each source block's whole text, keyed by block key (stale detection against later script versions).
+  blockHashes         Json     @map("block_hashes")
+  words               Int
+  /// Why the chunk ends here (ChunkBoundary).
+  boundary            String
+  /// ChunkPerformance: the script's delivery for the chunk, and its pauses.
+  performance         Json
+  /// The take the assembly uses.
+  currentGenerationId String?  @unique @map("current_generation_id") @db.Uuid
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  run         VoiceRun          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  generations VoiceGeneration[] @relation("ChunkGenerations")
+  current     VoiceGeneration?  @relation("ChunkCurrent", fields: [currentGenerationId], references: [id], onDelete: SetNull)
+
+  @@unique([runId, chunkIndex])
+  @@map("voice_chunks")
+}
+
+/// One take of one chunk (Generation 1, 2, 3…): exactly what was sent, with what, what came back and what
+/// the editor decided. Never deleted or overwritten; a newer current take supersedes the one before.
+model VoiceGeneration {
+  id                String                @id @default(uuid(7)) @db.Uuid
+  chunkId           String                @map("chunk_id") @db.Uuid
+  runId             String                @map("run_id") @db.Uuid
+  projectId         String                @map("project_id") @db.Uuid
+  jobId             String?               @map("job_id") @db.Uuid
+  /// 1, 2, 3… per chunk.
+  generation        Int
+  status            VoiceGenerationStatus @default(PENDING)
+  profileId         String                @map("profile_id") @db.Uuid
+  provider          String
+  model             String
+  voiceId           String                @map("voice_id")
+  strategy          PerformanceStrategy
+  /// The script's words this take speaks, and their hash at generation time.
+  canonicalText     String                @map("canonical_text")
+  textHash          String                @map("text_hash")
+  /// Derived: numbers, dates and aliases as spoken.
+  spokenText        String?               @map("spoken_text")
+  /// Derived: the exact text sent to the provider (spoken text plus its performance markup). Never the script.
+  performanceText   String?               @map("performance_text")
+  /// PreparedNarration: spoken forms, performance marks, pauses, context, settings, seed, dictionary, checks.
+  prepared          Json?
+  /// The editor's directions for this take (DirectorMark[]), if any.
+  directions        Json?
+  audioAssetId      String?               @unique @map("audio_asset_id") @db.Uuid
+  durationMs        Int?                  @map("duration_ms")
+  /// NarrationAlignment: word timings in the canonical text, and the provider's character timestamps.
+  alignment         Json?
+  /// VoiceQaFinding[] for this take.
+  qa                Json?
+  providerCallId    String?               @unique @map("provider_call_id") @db.Uuid
+  providerRequestId String?               @map("provider_request_id")
+  characters        Int?
+  error             String?
+  note              String?
+  decidedBy         String?               @map("decided_by")
+  decidedAt         DateTime?             @map("decided_at") @db.Timestamptz(3)
+  /// Approved at some point (kept when the take is superseded, so restoring it restores the approval).
+  approvedAt        DateTime?             @map("approved_at") @db.Timestamptz(3)
+  createdBy         String?               @map("created_by")
+  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt       DateTime?             @map("completed_at") @db.Timestamptz(3)
+
+  chunk        VoiceChunk    @relation("ChunkGenerations", fields: [chunkId], references: [id], onDelete: Cascade)
+  currentOf    VoiceChunk?   @relation("ChunkCurrent")
+  run          VoiceRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  job          Job?          @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  profile      VoiceProfile  @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  audioAsset   MediaAsset?   @relation(fields: [audioAssetId], references: [id], onDelete: SetNull)
+  providerCall ProviderCall? @relation(fields: [providerCallId], references: [id], onDelete: SetNull)
+
+  @@unique([chunkId, generation])
+  @@index([runId, status])
+  @@map("voice_generations")
+}
+
+/// The assembled narration of a run: its current takes in order, where each starts and ends, the pauses
+/// between them, and the narration timeline. A new version whenever a current take changes; the
+/// approved full-script assembly is what the VOICE gate approves.
+model VoiceAssembly {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  runId           String         @map("run_id") @db.Uuid
+  projectId       String         @map("project_id") @db.Uuid
+  scriptId        String         @map("script_id") @db.Uuid
+  profileId       String         @map("profile_id") @db.Uuid
+  /// Per run.
+  version         Int
+  status          ArtifactStatus @default(DRAFT)
+  /// AssemblyEntry[] in order.
+  entries         Json
+  /// NarrationTimelineEntry[]: block parts, words and visual hints on the assembled clock.
+  timeline        Json
+  totalDurationMs Int            @map("total_duration_ms")
+  /// Covers every block of the script version.
+  complete        Boolean        @default(false)
+  /// VoiceQaFinding[] when it was assembled.
+  qa              Json
+  /// The assembled audio file, built on first request.
+  audioAssetId    String?        @unique @map("audio_asset_id") @db.Uuid
+  createdBy       String?        @map("created_by")
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  run        VoiceRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  profile    VoiceProfile @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  audioAsset MediaAsset?  @relation(fields: [audioAssetId], references: [id], onDelete: SetNull)
+  approvals  Approval[]
+
+  @@unique([runId, version])
+  @@map("voice_assemblies")
+}
+
+/// The project's pronunciation review list: names, places, foreign words and abbreviations in the narration,
+/// and how each is said. The script keeps the written form; aliases are spoken instead of it, phonemes go
+/// to the provider's pronunciation dictionary.
+model VoicePronunciation {
+  id            String              @id @default(uuid(7)) @db.Uuid
+  projectId     String              @map("project_id") @db.Uuid
+  language      String
+  term          String
+  /// PronunciationTermKind.
+  kind          String
+  method        PronunciationMethod @default(DEFAULT)
+  /// IPA / CMU phonemes, or the alias spoken instead (null for the voice's own reading).
+  pronunciation String?
+  status        PronunciationStatus @default(PENDING)
+  /// SCRIPT (the script's pronunciation notes), DETECTED (found in the narration) or EDITOR.
+  source        String
+  /// The script's respelling hint ("YOHST van KOYK"), when it has one.
+  hint          String?
+  notes         String?
+  updatedBy     String?             @map("updated_by")
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, language, term])
+  @@map("voice_pronunciations")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

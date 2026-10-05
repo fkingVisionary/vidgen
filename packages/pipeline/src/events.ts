@@ -33,6 +33,16 @@ export const EVENT = {
   SCRIPT_RESTORED: 'SCRIPT_RESTORED',
   /** An earlier approved script was superseded by approving a newer version. */
   SCRIPT_SUPERSEDED: 'SCRIPT_SUPERSEDED',
+  /** The editor asked for narration: a voice run, a comparison, or new takes of some chunks. */
+  VOICE_RUN_REQUESTED: 'VOICE_RUN_REQUESTED',
+  /** The editor approved, rejected or restored a take. */
+  VOICE_TAKE_DECIDED: 'VOICE_TAKE_DECIDED',
+  /** The editor decided how a term in the pronunciation list is said. */
+  VOICE_PRONUNCIATION_UPDATED: 'VOICE_PRONUNCIATION_UPDATED',
+  /** A new voice profile version was created. */
+  VOICE_PROFILE_CREATED: 'VOICE_PROFILE_CREATED',
+  /** An earlier approved narration was superseded by approving a newer assembly. */
+  VOICE_ASSEMBLY_SUPERSEDED: 'VOICE_ASSEMBLY_SUPERSEDED',
   /** A mock job succeeded where the transition requires real providers (e.g. publishing). */
   PHASE_BLOCKED_MOCK: 'PHASE_BLOCKED_MOCK',
 } as const;

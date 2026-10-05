@@ -1,0 +1,25 @@
+{
+  "name": "@docengine/voice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Voice stage: narrates an approved script in small chunks of natural speech \u2014 spoken forms, provider-neutral performance, takes reviewed one by one, assembled on the actual audio clock \u2014 through any VoiceProvider.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@docengine/core": "workspace:*",
+    "@docengine/database": "workspace:*",
+    "@docengine/pipeline": "workspace:*",
+    "@docengine/providers": "workspace:*",
+    "zod": "catalog:",
+    "@docengine/script": "workspace:*"
+  },
+  "devDependencies": {
+    "@docengine/story": "workspace:*"
+  }
+}

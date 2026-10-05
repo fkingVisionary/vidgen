@@ -46,6 +46,25 @@ export interface ProviderSettings {
     /** Price used to estimate cost from reported credits. */
     usdPerCredit: number;
   };
+  elevenlabs?: {
+    apiKey?: string;
+    /** Default model for new voice profiles (eleven_v4). */
+    model: string;
+    /** Default voice for new voice profiles; voices are chosen per profile, never hard-coded. */
+    voiceId?: string;
+    outputFormat: string;
+    /** Overrides the documented list price (USD per 1,000 characters). */
+    usdPer1kChars?: number;
+  };
+  s3?: {
+    endpoint?: string;
+    region: string;
+    bucket?: string;
+    accessKeyId?: string;
+    secretAccessKey?: string;
+    forcePathStyle: boolean;
+    signedUrlTtlSec: number;
+  };
 }
 
 export class ProviderError extends Error {

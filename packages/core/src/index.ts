@@ -10,6 +10,8 @@ export * from './contracts/infographic.ts';
 export * from './contracts/research.ts';
 export * from './contracts/script.ts';
 export * from './contracts/story.ts';
+export * from './contracts/voice.ts';
 export * from './story.ts';
 export * from './script.ts';
 export * from './views.ts';
+export * from './voice-views.ts';

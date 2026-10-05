@@ -1,6 +1,7 @@
 import type { ProviderKind, ProviderStatusView } from '@docengine/core';
 import type { AIProvider } from './ai.ts';
 import { AnthropicAIProvider } from './anthropic/anthropic.ts';
+import { ElevenLabsVoiceProvider } from './elevenlabs/elevenlabs.ts';
 import { MockAIProvider } from './mock/ai.ts';
 import { MockPublishingProvider } from './mock/publishing.ts';
 import { MockRenderProvider } from './mock/render.ts';
@@ -8,6 +9,7 @@ import { MockResearchProvider } from './mock/research.ts';
 import { MockStorageProvider } from './mock/storage.ts';
 import { MockVideoProvider } from './mock/video.ts';
 import { MockVoiceProvider } from './mock/voice.ts';
+import { S3StorageProvider } from './s3/s3.ts';
 import { TavilyResearchProvider } from './tavily/tavily.ts';
 import type { PublishingProvider } from './publishing.ts';
 import type { RenderProvider } from './render.ts';
@@ -51,6 +53,13 @@ type OtherSlot = Exclude<ProviderSlot, 'storage'>;
  */
 const STORAGE_FACTORIES: Record<string, (ctx: BaseContext) => StorageProvider> = {
   mock: () => new MockStorageProvider(),
+  s3: ({ settings }) => {
+    const s3 = settings.s3;
+    if (!s3?.endpoint || !s3.bucket || !s3.accessKeyId || !s3.secretAccessKey) {
+      throw new ProviderConfigError('STORAGE_PROVIDER=s3 needs S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY (a Railway bucket provides them as variable references)');
+    }
+    return new S3StorageProvider({ endpoint: s3.endpoint, region: s3.region, bucket: s3.bucket, accessKeyId: s3.accessKeyId, secretAccessKey: s3.secretAccessKey, forcePathStyle: s3.forcePathStyle, signedUrlTtlSec: s3.signedUrlTtlSec });
+  },
 };
 
 const FACTORIES: { [S in OtherSlot]: Record<string, (ctx: FactoryContext) => ProviderSet[S]> } = {
@@ -68,7 +77,14 @@ const FACTORIES: { [S in OtherSlot]: Record<string, (ctx: FactoryContext) => Pro
       return new TavilyResearchProvider(settings.tavily);
     },
   },
-  voice: { mock: () => new MockVoiceProvider() },
+  voice: {
+    mock: () => new MockVoiceProvider(),
+    elevenlabs: ({ settings }) => {
+      const e = settings.elevenlabs;
+      if (!e?.apiKey) throw new ProviderConfigError('VOICE_PROVIDER=elevenlabs needs ELEVENLABS_API_KEY');
+      return new ElevenLabsVoiceProvider({ apiKey: e.apiKey, model: e.model, voiceId: e.voiceId ?? null, outputFormat: e.outputFormat, ...(e.usdPer1kChars !== undefined ? { usdPer1kChars: e.usdPer1kChars } : {}) });
+    },
+  },
   video: { mock: () => new MockVideoProvider() },
   render: { mock: (ctx) => new MockRenderProvider(ctx.storage) },
   publishing: { mock: () => new MockPublishingProvider() },
@@ -78,9 +94,9 @@ const FACTORIES: { [S in OtherSlot]: Record<string, (ctx: FactoryContext) => Pro
 export const PLANNED_PROVIDERS: Record<ProviderSlot, readonly string[]> = {
   ai: [],
   research: ['exa', 'anthropic-web-search'],
-  voice: ['elevenlabs'],
+  voice: [],
   video: ['higgsfield'],
-  storage: ['s3'],
+  storage: [],
   render: ['ffmpeg'],
   publishing: ['youtube'],
 };

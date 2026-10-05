@@ -25,13 +25,14 @@ const tail = (s: string, n: number) => (s.length > n ? s.slice(s.length - n) : s
 const head = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s);
 
 /**
- * ElevenLabs (multilingual / turbo / flash v2 models), as documented by the
- * provider: pauses as `<break time="1.2s" />` (up to 3 s), one speed per
- * request (0.7–1.2), neighbouring text for continuous prosody, and
- * pronunciation dictionaries (alias or IPA rules). Emphasis, energy and
- * emotion have no markup in these models: they are reported as unsupported
- * and kept in the script for a later adapter. Not yet exercised against the
- * live API — no ElevenLabs provider exists in this system yet.
+ * ElevenLabs Multilingual / Flash v2 models (SSML era): pauses as
+ * `<break time="1.2s" />` (up to 3 s), one speed per request (0.7–1.2),
+ * neighbouring text for continuous prosody, and pronunciation dictionaries
+ * (alias or IPA rules). Emphasis, energy and emotion have no markup in these
+ * models: they are reported as unsupported. This is the Script page's
+ * read-only voice summary; narration itself goes through the Voice Engine
+ * (modules/voice), which chunks smaller and renders each model's own markup
+ * through the provider (audio tags and no SSML for Eleven v4).
  */
 export class ElevenLabsScriptAdapter implements VoiceScriptAdapter {
   readonly provider = 'elevenlabs';

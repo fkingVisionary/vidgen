@@ -1,5 +1,7 @@
-import type { ProjectDetailView, ProjectStatus } from '@docengine/core';
+import { PROJECT_STATUSES, type ProjectDetailView, type ProjectStatus } from '@docengine/core';
 import { NavLink } from 'react-router';
+
+const PROJECT_ORDER: readonly ProjectStatus[] = PROJECT_STATUSES;
 
 const STORY_STATUSES: readonly ProjectStatus[] = ['RESEARCH_COMPLETE', 'STORY_MINING', 'STORY_SELECTION', 'STORY_ARCHITECTING', 'STORY_REVIEW', 'STORY_APPROVED'];
 
@@ -49,6 +51,29 @@ function scriptNote(p: ProjectDetailView): string | null {
   }
 }
 
+const VOICE_STATUSES: readonly ProjectStatus[] = ['SCRIPT_APPROVED', 'VOICE_GENERATING', 'VOICE_REVIEW', 'VOICE_COMPLETE'];
+
+/** True once a script is approved (narration can be generated). */
+export function hasVoicePage(p: ProjectDetailView): boolean {
+  const status = p.status === 'FAILED' ? p.failedFromStatus : p.status;
+  return status !== null && (VOICE_STATUSES.includes(status) || PROJECT_ORDER.indexOf(status) > PROJECT_ORDER.indexOf('VOICE_COMPLETE'));
+}
+
+function voiceNote(p: ProjectDetailView): string | null {
+  switch (p.status) {
+    case 'SCRIPT_APPROVED':
+      return 'ready to audition';
+    case 'VOICE_GENERATING':
+      return 'generating…';
+    case 'VOICE_REVIEW':
+      return 'review takes';
+    case 'VOICE_COMPLETE':
+      return 'approved';
+    default:
+      return null;
+  }
+}
+
 interface NavItem {
   to: string;
   label: string;
@@ -71,6 +96,9 @@ export function ProjectNav({ project: p }: { project: ProjectDetailView }) {
   }
   if (hasScriptPage(p)) {
     items.push({ to: `${base}/script`, label: 'Script', note: scriptNote(p), attention: p.status === 'SCRIPT_REVIEW' || (p.status === 'STORY_APPROVED' && !p.script) });
+  }
+  if (hasVoicePage(p)) {
+    items.push({ to: `${base}/voice`, label: 'Voice', note: voiceNote(p), attention: p.status === 'SCRIPT_APPROVED' || p.status === 'VOICE_REVIEW' });
   }
   return (
     <nav aria-label="Project pages" className="mt-3 flex flex-wrap gap-2">

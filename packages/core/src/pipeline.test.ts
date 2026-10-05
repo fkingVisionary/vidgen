@@ -58,9 +58,9 @@ describe('pipeline definition', () => {
     for (const s of HAPPY_PATH) expect(STATUS_DEFINITIONS[s].stage, s).not.toBeNull();
   });
 
-  it('has exactly the six human review points, each with approve and reject targets', () => {
+  it('has exactly the seven human review points, each with approve and reject targets', () => {
     const gated = PROJECT_STATUSES.filter((s) => STATUS_DEFINITIONS[s].gate);
-    expect(gated).toEqual(['RESEARCH_REVIEW', 'STORY_REVIEW', 'SCRIPT_REVIEW', 'STORYBOARD_REVIEW', 'VISUAL_REVIEW', 'QA']);
+    expect(gated).toEqual(['RESEARCH_REVIEW', 'STORY_REVIEW', 'SCRIPT_REVIEW', 'VOICE_REVIEW', 'STORYBOARD_REVIEW', 'VISUAL_REVIEW', 'QA']);
     for (const s of gated) {
       const gate = STATUS_DEFINITIONS[s].gate!;
       // Rejection always goes back, approval always goes forward.

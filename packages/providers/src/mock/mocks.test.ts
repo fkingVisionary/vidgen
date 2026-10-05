@@ -83,23 +83,24 @@ describe('mock providers are clearly labelled and never fake success', () => {
 });
 
 describe('mock voice timing', () => {
-  it('derives duration from word count and speed', async () => {
+  it('derives duration from word count and speed (plus a short tail of silence), measured from the WAV it returns', async () => {
     const voice = new MockVoiceProvider();
     const text = Array.from({ length: 150 }, (_, i) => `word${i}`).join(' ');
-    expect((await voice.generateNarration({ text, language: 'en', settings })).durationMs).toBe(60_000);
-    expect((await voice.generateNarration({ text, language: 'en', settings: { ...settings, speed: 1.2 } })).durationMs).toBe(50_000);
+    expect((await voice.generateNarration({ text, language: 'en', settings })).durationMs).toBe(60_200);
+    expect((await voice.generateNarration({ text, language: 'en', settings: { ...settings, speed: 1.2 } })).durationMs).toBe(50_200);
     expect(MOCK_WORDS_PER_MINUTE).toBe(150);
   });
 
-  it('returns evenly spaced word timestamps that end at the audio duration', async () => {
-    const r = await new MockVoiceProvider().generateNarration({ text: 'one two three four', language: 'en', settings, withTimestamps: true });
+  it('returns character timestamps shaped like a tag-aware provider: words evenly spaced, markup taking no time, pauses leaving silence', async () => {
+    const r = await new MockVoiceProvider().generateNarration({ text: '[curious] one two [pause] three four', language: 'en', settings, withTimestamps: true });
     expect(r.alignment).toEqual([
       { word: 'one', startMs: 0, endMs: 400 },
       { word: 'two', startMs: 400, endMs: 800 },
-      { word: 'three', startMs: 800, endMs: 1200 },
-      { word: 'four', startMs: 1200, endMs: 1600 },
+      { word: 'three', startMs: 1300, endMs: 1700 },
+      { word: 'four', startMs: 1700, endMs: 2100 },
     ]);
-    expect(r.durationMs).toBe(1600);
+    expect(r.characters!.chars.join('')).toBe('[curious] one two [pause] three four');
+    expect(r.durationMs).toBe(2300);
   });
 });
 

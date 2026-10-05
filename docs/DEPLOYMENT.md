@@ -7,14 +7,14 @@ access (see [Enabling real research](#enabling-real-research)).
 
 ## Services
 
-Exactly two Railway services:
+Two Railway services, plus a bucket once narration is real:
 
 | Service | What | Required now |
 |---|---|---|
 | **app** (e.g. `vidgen`) | This whole repository as **one** service, built from the root `Dockerfile` | Yes |
 | **Postgres** | Railway PostgreSQL (Database → PostgreSQL) | Yes |
 | worker | Same image, start command `node apps/api/dist/worker.js` | No — only when generation load justifies it |
-| Object storage | Cloudflare R2 (S3-compatible), outside Railway | No — arrives with real voice/visual providers |
+| **Bucket** | A Railway Storage Bucket (S3-compatible, private) for narration audio | Yes for real narration (ElevenLabs): paid audio is never kept in memory |
 
 `apps/api`, `apps/web`, `modules/research` and `packages/*` are parts of the
 one application, **not** separate services.
@@ -254,7 +254,9 @@ agreed, but they are not read yet.
 | `JOB_LOCK_TIMEOUT_MS` | `900000` | ✓ | RUNNING job without heartbeat this long is recovered |
 | `AI_PROVIDER` | `mock` | ✓ | `mock` or `anthropic` |
 | `RESEARCH_PROVIDER` | `mock` | ✓ | `mock` or `tavily` |
-| `VOICE_PROVIDER` … `PUBLISHING_PROVIDER` (5) | `mock` | ✓ | Only `mock` is implemented; other values fail at startup with a clear message |
+| `VOICE_PROVIDER` | `mock` | ✓ | `mock` or `elevenlabs` |
+| `STORAGE_PROVIDER` | `mock` | ✓ | `mock` (in memory, lost on restart) or `s3` |
+| `VIDEO_PROVIDER`, `RENDER_PROVIDER`, `PUBLISHING_PROVIDER` | `mock` | ✓ | Only `mock` is implemented; other values fail at startup with a clear message |
 | `ANTHROPIC_API_KEY` | — | ✓ | Required when `AI_PROVIDER=anthropic` |
 | `AI_MODEL` | `claude-opus-5-5` | ✓ | Default model for every AI task (research, story, script); cost is estimated from the served model's published token prices |
 | `TAVILY_API_KEY` | — | ✓ | Required when `RESEARCH_PROVIDER=tavily`, unless keyless |
@@ -268,28 +270,52 @@ agreed, but they are not read yet.
 | `WEB_DIST_DIR` | `apps/web/dist` | ✓ | Override only for unusual layouts |
 | `RAILWAY_GIT_COMMIT_SHA` | — | ✓ | Set by Railway; shown in `/api/health` |
 | `TEST_DATABASE_URL` | — | tests | Integration tests only; DB name must contain `test` |
-| `ELEVENLABS_API_KEY`, `ELEVENLABS_MODEL_ID`, `ELEVENLABS_DEFAULT_VOICE_ID` | — | planned | Voice IDs are chosen per language version, not hard-coded |
+| `ELEVENLABS_API_KEY` | — | ✓ | Required when `VOICE_PROVIDER=elevenlabs`; server-side only |
+| `ELEVENLABS_VOICE_ID` | — | ✓ | The voice of the first voice profile (profiles are versioned in the dashboard; nothing is hard-coded) |
+| `ELEVENLABS_MODEL_ID` | `eleven_v4` | ✓ | Production default; no automatic fallback to another model |
+| `ELEVENLABS_OUTPUT_FORMAT` | `mp3_44100_128` | ✓ | `mp3_*`, `wav_*` or `pcm_*` (opus/µ-law cannot be measured or joined without transcoding). 192 kbps MP3 needs Creator+, 44.1 kHz PCM/WAV Pro+ |
+| `ELEVENLABS_USD_PER_1K_CHARS` | — | ✓ | Your plan's price; default is the documented API list price per model (v4: $0.08). ElevenLabs reports characters, so dollar cost is an estimate |
+| `VOICE_CONFIRM_CHARACTERS` | `3000` | ✓ | Above this (and for the whole script, and every comparison) a generation must be confirmed |
+| `VOICE_MAX_CHARACTERS` | `40000` | ✓ | Ceiling on what one voice job may send |
+| `VOICE_CONCURRENCY` | `2` | ✓ | Takes generated at once (1 when stitching) |
 | `HIGGSFIELD_API_KEY`, `HIGGSFIELD_API_SECRET` | — | planned | Exact credential format confirmed when integrated |
-| `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_SIGNED_URL_TTL_SEC` | —, `auto`, …, `3600` | planned | Cloudflare R2 |
+| `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | —, `auto`, — | ✓ | Required when `STORAGE_PROVIDER=s3`; reference a Railway bucket's `ENDPOINT`, `REGION`, `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` |
+| `S3_FORCE_PATH_STYLE`, `S3_SIGNED_URL_TTL_SEC` | `false`, `3600` | ✓ | Path-style only for buckets whose Credentials tab says so (older Railway buckets, MinIO) |
 | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` | — | planned | |
 
-## Storage (planned): Cloudflare R2
+## Enabling real narration (ElevenLabs + a Railway bucket)
 
-When the S3 storage provider is implemented:
+Narration audio is paid for per character, so the app refuses real
+narration while storage is in memory.
 
-1. Cloudflare dashboard → R2 → create a bucket (e.g. `docengine-media`), keep
-   it **private**.
-2. R2 → *Manage API tokens* → create a token with *Object Read & Write* on that
-   bucket. Note the access key id and secret.
-3. Set on the Railway app service: `STORAGE_PROVIDER=s3`,
-   `S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com`,
-   `S3_REGION=auto`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.
-4. The dashboard receives short-lived signed URLs only. If the dashboard must
-   load media directly from R2, the CSP `media-src`/`img-src` will be widened
-   to the R2 host at that point.
+1. **Bucket.** In the Railway project: *Create* → *Bucket* (pick a region,
+   any name). It is private; its *Credentials* tab lists the S3 endpoint and
+   keys.
+2. **Storage variables** on the app service, as variable references to the
+   bucket (no secret is copied by hand):
+   `STORAGE_PROVIDER=s3`, `S3_ENDPOINT=${{<bucket>.ENDPOINT}}`,
+   `S3_REGION=${{<bucket>.REGION}}`, `S3_BUCKET=${{<bucket>.BUCKET}}`,
+   `S3_ACCESS_KEY_ID=${{<bucket>.ACCESS_KEY_ID}}`,
+   `S3_SECRET_ACCESS_KEY=${{<bucket>.SECRET_ACCESS_KEY}}`. Set
+   `S3_FORCE_PATH_STYLE=true` only if the Credentials tab says the bucket
+   uses path-style URLs.
+3. **Voice variables:** `VOICE_PROVIDER=elevenlabs`, `ELEVENLABS_API_KEY`,
+   `ELEVENLABS_VOICE_ID` (a voice that works with Eleven v4 — voice clones
+   made before v4 may need retraining for it). Optional:
+   `ELEVENLABS_MODEL_ID` (default `eleven_v4`), `ELEVENLABS_OUTPUT_FORMAT`
+   (default `mp3_44100_128`), `ELEVENLABS_USD_PER_1K_CHARS` (your plan's
+   price).
+4. Deploy, then check `/api/health`: `providers` lists `VOICE elevenlabs` and
+   `STORAGE s3` with `mock: false`.
+5. In the dashboard: approve a script version, open **Voice**, plan an
+   audition of the opening (nothing is generated by planning: it shows the
+   chunks, the exact text each would send, characters and estimated cost),
+   then generate it.
 
-Railway volumes are not used for media: containers are replaced on every
-deploy and media must survive that.
+The browser never sees a key or a bucket URL: audio is streamed by the API
+(with byte ranges) behind the dashboard's authentication. Bucket storage is
+$0.015 per GB-month; a 15-minute narration in MP3 is about 15 MB plus its
+takes.
 
 ## Scaling the worker (later)
 
@@ -320,7 +346,11 @@ deploy and media must survive that.
 | Symptom | Cause / fix |
 |---|---|
 | Deploy fails at health check, log says `DASHBOARD_PASSWORD … is required in production` | Set `DASHBOARD_PASSWORD` (≥ 12 chars). |
-| Log says `VOICE_PROVIDER="elevenlabs" is planned but not implemented yet` | Remove the variable or set it to `mock`. |
+| Startup fails with `VOICE_PROVIDER=elevenlabs needs ELEVENLABS_API_KEY` / `STORAGE_PROVIDER=s3 needs S3_ENDPOINT, S3_BUCKET…` | Set the missing variables (see [Enabling real narration](#enabling-real-narration-elevenlabs--a-railway-bucket)). |
+| Planning a voice run says `Real narration needs durable storage` | Real voice with in-memory storage is refused: set up the bucket and `STORAGE_PROVIDER=s3`. |
+| A voice job stops with `HTTP 401` / `HTTP 402` / `HTTP 404` | Rejected key, no credits, or a voice/model the account cannot use. The takes not tried yet stay pending: fix the variable or the plan, then *Retry* the job. |
+| A take fails with `HTTP 422` or `HTTP 400` | That chunk's request was refused (the error says why); the other takes went on. Regenerate the chunk. |
+| A take is flagged `No timestamps came back` | The provider returned no alignment for it: it cannot be placed on the timeline. Regenerate it. |
 | Research job fails with `ANTHROPIC_API_KEY is not set` / `TAVILY_API_KEY is not set` | Set the key on the service (or `TAVILY_ACCESS_MODE=keyless`). |
 | Research job fails with `Research stopped: estimated spend … exceeds the per-run ceiling` | Intended stop. Raise `RESEARCH_MAX_COST_USD` if the spend is justified, then *Retry* (stored documents and readings are reused). |
 | Research job fails with `Research quality gate failed: …` | The dossier was saved as DRAFT; open it (Research dossier → Quality gate tab) to see which checks failed. Rewind and run again, possibly with a research brief. |
