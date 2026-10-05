@@ -2,6 +2,8 @@ import {
   AnyStoryArchitectureContent,
   CANDIDATE_PRIORITIES,
   CURRENT_STORY_ENGINE,
+  REVISION_ASPECT_LABELS,
+  StoryExplorationContent,
   CandidateOverrides,
   HumanStakes,
   MythThread,
@@ -15,11 +17,16 @@ import {
   isArchitectureV2,
   runtimeTarget,
   selectionProblem,
+  type AngleOrigin,
+  type ArchitectureProvenance,
   type CoherenceIssue,
   type QualityCheck,
+  type RevisionAspect,
+  type RevisionChangeLog,
   type RuntimeTarget,
+  type StoryAngle,
 } from '@docengine/core';
-import type { Prisma } from '@docengine/database';
+import type { Prisma, StoryArchitecture } from '@docengine/database';
 import { NonRetryableError, type StageContext, type StageHandler } from '@docengine/pipeline';
 import { ProviderError } from '@docengine/providers';
 import { z } from 'zod';
@@ -27,11 +34,12 @@ import { blockingCount, buildArchitecture, coreClaimsOf, describeFinding, toArch
 import { StepCheckpoint } from './checkpoint.ts';
 import { DEFAULT_STORY_CONFIG, type StoryConfig } from './config.ts';
 import { EvidenceBase } from './evidence.ts';
+import { diffArchitectures, unaddressedAspects } from './diff.ts';
 import { buildOpportunities, type BuiltOpportunity, type RemovedOpportunity } from './opportunities.ts';
-import { PROMPT_VERSION, architectSystemPrompt, opportunitiesSystemPrompt, reviewSystemPrompt, storyEditorSystemPrompt } from './prompts.ts';
+import { PROMPT_VERSION, architectRevisionSystemPrompt, architectSystemPrompt, opportunitiesSystemPrompt, reviewSystemPrompt, storyEditorSystemPrompt } from './prompts.ts';
 import { computeArchitectureReport, fmtMinutes, type StoryEditorVerdict } from './quality.ts';
 import { orderedKeys } from './rules.ts';
-import { ArchitectOutput, ArchitectureReviewOutput, OpportunityOutput, StoryEditorOutput } from './schemas.ts';
+import { ArchitectOutput, ArchitectRevisionOutput, ArchitectureReviewOutput, OpportunityOutput, StoryEditorOutput } from './schemas.ts';
 import { CostCeiling } from './util.ts';
 
 /**
@@ -68,13 +76,37 @@ type FactCheckStep = z.infer<typeof FactCheckStep>;
 
 const PRIORITY_ORDER = Object.fromEntries(CANDIDATE_PRIORITIES.map((p, i) => [p, i])) as Record<(typeof CANDIDATE_PRIORITIES)[number], number>;
 
-/** The previous architecture and what the editor said about it. */
+/** The previous architecture and what the editor said about it (a new build after a rejection). */
 interface Rework {
   version: number;
   status: string;
   decisions: string[];
   outline: string;
 }
+
+/** A revision: the version revised, kept unchanged, and what the editor said about it. */
+interface Revision {
+  base: StoryArchitecture & { approvals: { decision: string; notes: string | null }[] };
+  content: AnyStoryArchitectureContent;
+  brief: string;
+  aspects: RevisionAspect[];
+}
+
+/** An explored angle the editor chose to build on or revise toward. */
+interface ChosenAngle {
+  origin: AngleOrigin;
+  angle: StoryAngle;
+}
+
+export const candidateInclude = (pool: boolean) =>
+  ({
+    candidates: {
+      // A revision or an angle may also use units the editor approved but did not select.
+      where: pool ? { status: { not: 'REJECTED' as const }, OR: [{ selected: true }, { status: 'APPROVED' as const }] } : { selected: true, status: { not: 'REJECTED' as const } },
+      orderBy: { rank: 'asc' as const },
+      include: { claims: { include: { claim: { select: { claimKey: true } } } } },
+    },
+  }) satisfies Prisma.StoryPackInclude;
 
 class ArchitectureRun {
   private readonly steps: StepCheckpoint<Step>;
@@ -94,52 +126,64 @@ class ArchitectureRun {
     const { ctx } = this;
     const parsedInput = StoryJobInput.safeParse(ctx.job.input ?? {});
     if (!parsedInput.success) throw new NonRetryableError(`Invalid STORY_ARCHITECTURE input: ${parsedInput.error.message}`);
-    const editorNotes = parsedInput.data.notes || null;
-    const preferences = parsedInput.data.preferences ?? null;
+    const input = parsedInput.data;
+    const editorNotes = input.notes || null;
+    const preferences = input.preferences ?? null;
+    if (input.revise && !editorNotes) throw new NonRetryableError("A revision needs the editor's brief: say what is not working.");
     if (!(await this.steps.load())) ctx.logger.warn({ jobId: ctx.job.id }, 'saved story-architecture progress is from another version; starting over');
 
-    const pack = await ctx.db.storyPack.findFirst({
-      where: { projectId: ctx.project.id, status: 'IN_REVIEW' },
-      orderBy: { version: 'desc' },
-      include: {
-        candidates: {
-          where: { selected: true, status: { not: 'REJECTED' } },
-          orderBy: { rank: 'asc' },
-          include: { claims: { include: { claim: { select: { claimKey: true } } } } },
-        },
-      },
-    });
-    if (!pack) throw new NonRetryableError('No story pack is open for selection: run Story Mining first.');
-    const problem = selectionProblem(pack.candidates.length);
+    const revision = input.revise ? await this.loadRevision(input.revise.baseVersion, editorNotes!, input.revise.aspects) : null;
+    const pool = revision !== null || input.angle !== undefined;
+    const pack = await this.loadPack(revision?.base ?? null, pool);
+    const selected = pack.candidates.filter((c) => c.selected);
+    const problem = selectionProblem(selected.length);
     if (problem) throw new NonRetryableError(`Cannot build the architecture: ${problem}.`);
 
     const evidence = await EvidenceBase.load(ctx.db, pack.dossierId);
-    // The editor's order when one is set; otherwise priority, then rank (the query's order).
-    const units = pack.candidates
-      .map((c) => toUnit(c, evidence))
-      .sort((a, b) => (a.selectionOrder ?? Infinity) - (b.selectionOrder ?? Infinity) || PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]);
+    // The editor's order when one is set; otherwise priority, then rank (the query's order). Approved reserve units last.
+    const units = [
+      ...selected.map((c) => toUnit(c, evidence)).sort((a, b) => (a.selectionOrder ?? Infinity) - (b.selectionOrder ?? Infinity) || PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]),
+      ...pack.candidates.filter((c) => !c.selected).map((c) => toUnit(c, evidence, true)),
+    ];
+    const reserveKeys = units.filter((u) => u.reserve).map((u) => u.key);
+    const angle = input.angle ? await this.loadAngle(input.angle.exploration, input.angle.key, pack.id) : null;
     const target = runtimeTarget(ctx.project);
-    const rework = await this.loadRework();
+    const rework = revision ? null : await this.loadRework();
     await ctx.progress(
-      `Story architecture from pack v${pack.version}: ${units.length} selected units (${units.filter((u) => u.priority === 'HIGH').length} high priority); target ${fmtMinutes(target.targetSec)}` +
+      (revision ? `Revising story architecture v${revision.base.version} (the editor's brief: "${clip(revision.brief, 140)}")` : `Story architecture from pack v${pack.version}`) +
+        `: ${selected.length} selected units (${units.filter((u) => u.priority === 'HIGH' && !u.reserve).length} high priority)` +
+        (reserveKeys.length ? ` + ${reserveKeys.length} approved in reserve` : '') +
+        (angle ? `; on angle ${angle.origin.key} "${angle.origin.title}"` : '') +
+        `; target ${fmtMinutes(target.targetSec)}` +
         (rework ? `; reworking v${rework.version}` : ''),
-      { packId: pack.id, units: units.map((u) => `${u.key} ${u.title} [${u.priority}${u.narrativeMode ? `, ${u.narrativeMode}` : ''}]`), editorNotes, preferences },
+      { packId: pack.id, units: units.map((u) => `${u.key} ${u.title} [${u.reserve ? 'reserve' : u.priority}${u.narrativeMode ? `, ${u.narrativeMode}` : ''}]`), editorNotes, preferences, aspects: revision?.aspects ?? [] },
     );
 
-    // 1. Architect.
-    const draftRaw = await this.steps.step('architect', ArchitectOutput, () => this.architect(units, evidence, target, editorNotes, preferences, rework));
+    // 1. Architect: a new architecture, or a revision of the base with the architect's account of it.
+    let draftRaw: ArchitectOutput;
+    let changeLog: RevisionChangeLog | null = null;
+    if (revision) {
+      const out = await this.steps.step('architect', ArchitectRevisionOutput, () => this.revise(revision, units, evidence, target, preferences, angle));
+      const { changeLog: log, ...architecture } = out;
+      draftRaw = architecture;
+      changeLog = cleanChangeLog(log);
+    } else {
+      draftRaw = await this.steps.step('architect', ArchitectOutput, () => this.architect(units, evidence, target, editorNotes, preferences, rework, angle));
+    }
     const draft = buildArchitecture(draftRaw, evidence, units);
-    await ctx.progress(`Architecture draft: ${draft.content.sequences.length} sequences, ~${fmtMinutes(totalDurationSec(draft.content))}; ${draft.findings.length} automated findings`, {
+    await ctx.progress(`Architecture ${revision ? 'revision' : 'draft'}: ${draft.content.sequences.length} sequences, ~${fmtMinutes(totalDurationSec(draft.content))}; ${draft.findings.length} automated findings`, {
       findings: draft.findings.map(describeFinding),
       reconstruction: draft.content.reconstruction,
+      ...(changeLog ? { changeLog } : {}),
     });
     await this.ceiling.check();
 
-    // 2. Story editor: is it a story? A revision is kept only if it has no more evidence problems.
+    // 2. Story editor: is it a story (and, for a revision, does it answer the brief)? A revision is kept only if it has no more evidence problems.
+    const brief = revision?.brief ?? null;
     const notes = [...draft.notes];
     let current = draft;
     let revisedByStoryEditor = false;
-    const storyReview = await this.steps.step('storyReview', StoryReviewStep, () => this.storyEditor(draft, units, evidence, target));
+    const storyReview = await this.steps.step('storyReview', StoryReviewStep, () => this.storyEditor(draft, units, evidence, target, brief));
     let storyIssues: CoherenceIssue[] = [];
     let storyVerdict: StoryEditorVerdict | { unavailable: string };
     if ('unavailable' in storyReview) {
@@ -161,7 +205,7 @@ class ArchitectureRun {
 
     // 3. Fact checker: the evidence boundary has the last word.
     const beforeFactCheck = current;
-    const factCheck = await this.steps.step('factCheck', FactCheckStep, () => this.factChecker(beforeFactCheck, units, evidence, target));
+    const factCheck = await this.steps.step('factCheck', FactCheckStep, () => this.factChecker(beforeFactCheck, units, evidence, target, brief));
     let revisedByFactChecker = false;
     let factIssues: CoherenceIssue[];
     if ('unavailable' in factCheck) {
@@ -192,6 +236,23 @@ class ArchitectureRun {
       storyEditor: storyVerdict,
     });
 
+    // How this version came about; for a revision, what actually changed (computed on the final version).
+    const diff = revision ? diffArchitectures(revision.content, final.content) : null;
+    const unaddressed = revision && diff ? unaddressedAspects(revision.aspects, diff) : [];
+    if (revision && diff) report.checks.push(...revisionChecks(revision, changeLog, diff, unaddressed));
+    const provenance: ArchitectureProvenance = {
+      kind: revision ? 'REVISION' : 'NEW',
+      baseVersion: revision?.base.version ?? null,
+      baseId: revision?.base.id ?? null,
+      brief: editorNotes,
+      aspects: revision?.aspects ?? [],
+      angle: angle?.origin ?? null,
+      changeLog,
+      diff,
+      reserveKeys,
+    };
+    final.content.provenance = provenance;
+
     // 5. Content opportunities, only for an architecture that passed (a failed draft is not worth packaging).
     let opportunities: BuiltOpportunity[] = [];
     let removedOpportunities: RemovedOpportunity[] = [];
@@ -216,7 +277,9 @@ class ArchitectureRun {
       promptVersion: PROMPT_VERSION,
       packVersion: pack.version,
       dossierVersion: evidence.dossierVersion,
-      units: units.length,
+      origin: provenance.kind,
+      units: selected.length,
+      reserveUnits: reserveKeys.length,
       models: this.models,
       sequences: final.content.sequences.length,
       beats: final.content.reconstruction.beats,
@@ -228,30 +291,41 @@ class ArchitectureRun {
       revisedByStoryEditor,
       revisedByFactChecker,
       storyEditor: storyVerdict,
+      revision: revision ? { baseVersion: revision.base.version, aspects: revision.aspects, unaddressed, substantial: diff?.substantial ?? false } : null,
+      angle: angle?.origin ?? null,
       opportunities: { kept: opportunities.length, shorts: opportunities.filter((o) => o.format !== 'LONG_FORM').length, removed: removedOpportunities, unavailable: opportunitiesUnavailable },
       preferences,
       resumedSteps: [...this.steps.reused],
       durationMs: Date.now() - started,
     };
-    const story = await this.persist(pack.id, pack.dossierId, final, report, target, stats, editorNotes, opportunities, evidence);
+    const { story, superseded } = await this.persist({ packId: pack.id, dossierId: pack.dossierId, built: final, report, target, stats, editorNotes, opportunities, evidence, revision, angle });
     if (report.passed) await this.steps.clear();
 
     const failed = report.checks.filter((c) => c.status === 'FAIL').map((c) => `${c.label} (${c.detail})`);
     const total = totalDurationSec(final.content);
-    await ctx.progress(`Story architecture v${story.version} saved: ${final.content.sequences.length} sequences, ~${fmtMinutes(total)} — quality gate ${report.passed ? 'PASSED' : 'FAILED'}`, {
-      architectureId: story.id,
-      logline: final.content.logline,
-      centralQuestion: final.content.centralQuestion,
-      narrativeMode: final.content.narrativeMode,
-      pov: final.content.povStrategy,
-      cast: final.content.cast.map((m) => `${m.name} (${m.kind})`),
-      reconstruction: final.content.reconstruction,
-      sequences: final.content.sequences.map((s) => `${s.number}. ${s.title} (${s.candidateKeys.join(', ') || 'no unit'}; ${s.mode}; ${s.beats.length} beats; ${s.estimatedDurationSec}s; ${s.historicalStatus} ${s.historicalConfidence}/10)`),
-      opportunities: opportunities.map((o) => `${o.key} ${o.format}${o.rank ? ` #${o.rank}` : ''} ${o.title}${o.shortScore !== null ? ` (${o.shortScore})` : ''}`),
-      failedChecks: failed,
-    });
+    const kept = revision ? `; v${revision.base.version} kept${superseded.includes(revision.base.version) ? ' (superseded)' : ` (${revision.base.status.toLowerCase().replace('_', ' ')})`}` : '';
+    await ctx.progress(
+      `Story architecture v${story.version}${revision ? ` (revision of v${revision.base.version})` : ''} saved: ${final.content.sequences.length} sequences, ~${fmtMinutes(total)} — quality gate ${report.passed ? 'PASSED' : 'FAILED'}${kept}`,
+      {
+        architectureId: story.id,
+        logline: final.content.logline,
+        centralQuestion: final.content.centralQuestion,
+        narrativeMode: final.content.narrativeMode,
+        pov: final.content.povStrategy,
+        cast: final.content.cast.map((m) => `${m.name} (${m.kind})`),
+        reconstruction: final.content.reconstruction,
+        sequences: final.content.sequences.map((s) => `${s.number}. ${s.title} (${s.candidateKeys.join(', ') || 'no unit'}; ${s.mode}; ${s.beats.length} beats; ${s.estimatedDurationSec}s; ${s.historicalStatus} ${s.historicalConfidence}/10)`),
+        opportunities: opportunities.map((o) => `${o.key} ${o.format}${o.rank ? ` #${o.rank}` : ''} ${o.title}${o.shortScore !== null ? ` (${o.shortScore})` : ''}`),
+        supersededVersions: superseded,
+        ...(diff ? { changed: { substantial: diff.substantial, unitsAdded: diff.unitsAdded, unitsRemoved: diff.unitsRemoved, reordered: diff.reordered, opening: diff.opening.changed, unaddressed } } : {}),
+        failedChecks: failed,
+      },
+    );
     if (!report.passed) {
-      throw new NonRetryableError(`Story architecture quality gate failed: ${failed.join('; ')}. Architecture v${story.version} saved as DRAFT for inspection.`);
+      throw new NonRetryableError(
+        `Story architecture quality gate failed: ${failed.join('; ')}. Architecture v${story.version} saved as DRAFT for inspection.` +
+          (revision ? ` Architecture v${revision.base.version} is unchanged (${revision.base.status}).` : ''),
+      );
     }
     return {
       architectureId: story.id,
@@ -260,6 +334,7 @@ class ArchitectureRun {
       sequences: final.content.sequences.length,
       estimatedDurationSec: total,
       opportunities: opportunities.length,
+      ...(revision ? { revisionOf: revision.base.version } : {}),
       stats,
     };
   }
@@ -276,44 +351,62 @@ class ArchitectureRun {
     return null;
   }
 
+  // ── Loading ────────────────────────────────────────────────────────────────
+
+  /** The story pack: the base's (a revision, which must be the current pack) or the pack open for selection. */
+  private async loadPack(base: StoryArchitecture | null, pool: boolean) {
+    const { db, project } = this.ctx;
+    if (base) {
+      if (!base.packId) throw new NonRetryableError(`Architecture v${base.version} has no story pack to revise from.`);
+      const latest = await db.storyPack.findFirst({ where: { projectId: project.id }, orderBy: { version: 'desc' }, select: { id: true, version: true } });
+      if (latest?.id !== base.packId) {
+        throw new NonRetryableError(`Architecture v${base.version} was built from an earlier story pack; a newer mining pass (pack v${latest?.version}) replaced it. Generate an architecture from the current pack instead.`);
+      }
+      const pack = await db.storyPack.findUniqueOrThrow({ where: { id: base.packId }, include: candidateInclude(pool) });
+      if (pack.status !== 'IN_REVIEW' && pack.status !== 'APPROVED') throw new NonRetryableError(`Story pack v${pack.version} is ${pack.status}: it cannot be used.`);
+      return pack;
+    }
+    const pack = await db.storyPack.findFirst({ where: { projectId: project.id, status: 'IN_REVIEW' }, orderBy: { version: 'desc' }, include: candidateInclude(pool) });
+    if (!pack) throw new NonRetryableError('No story pack is open for selection: run Story Mining first.');
+    return pack;
+  }
+
+  private async loadRevision(baseVersion: number, brief: string, aspects: readonly RevisionAspect[]): Promise<Revision> {
+    const base = await this.ctx.db.storyArchitecture.findUnique({
+      where: { projectId_version: { projectId: this.ctx.project.id, version: baseVersion } },
+      include: { approvals: { orderBy: { createdAt: 'asc' }, select: { decision: true, notes: true } } },
+    });
+    if (!base) throw new NonRetryableError(`Architecture v${baseVersion} does not exist.`);
+    const content = AnyStoryArchitectureContent.safeParse(base.content);
+    if (!content.success) throw new NonRetryableError(`Architecture v${baseVersion} cannot be read, so it cannot be revised.`);
+    return { base, content: content.data, brief, aspects: [...new Set(aspects)] };
+  }
+
+  private async loadAngle(explorationVersion: number, key: string, packId: string): Promise<ChosenAngle> {
+    const exploration = await this.ctx.db.storyExploration.findUnique({ where: { projectId_version: { projectId: this.ctx.project.id, version: explorationVersion } } });
+    if (!exploration) throw new NonRetryableError(`Angle exploration ${explorationVersion} does not exist.`);
+    if (exploration.packId !== packId) throw new NonRetryableError(`Angle exploration ${explorationVersion} was made from another story pack.`);
+    const content = StoryExplorationContent.safeParse(exploration.content);
+    const angle = content.success ? content.data.angles.find((a) => a.key === key) : undefined;
+    if (!angle) throw new NonRetryableError(`Angle ${key} is not in exploration ${explorationVersion}.`);
+    return { origin: { explorationId: exploration.id, explorationVersion: exploration.version, key: angle.key, title: angle.title }, angle };
+  }
+
   // ── Steps ──────────────────────────────────────────────────────────────────
 
-  private async architect(
-    units: readonly SelectedUnit[],
-    evidence: EvidenceBase,
-    target: RuntimeTarget,
-    editorNotes: string | null,
-    preferences: StoryJobInput['preferences'] | null,
-    rework: Rework | null,
-  ): Promise<ArchitectOutput> {
-    const { ctx, cfg } = this;
+  /** What the architect needs about the units and the evidence (a new build and a revision alike). */
+  private evidenceParts(units: readonly SelectedUnit[], evidence: EvidenceBase, heading: string): string[] {
     const claimKeys = coreClaimsOf(units, evidence);
     const background = [...evidence.claims.keys()].filter((k) => !claimKeys.includes(k));
     const parts = [
-      `Documentary: ${ctx.project.title} — ${ctx.project.topic}`,
-      `Target runtime: about ${fmtMinutes(target.targetSec)} (acceptable ${fmtMinutes(target.minSec)}–${fmtMinutes(target.maxSec)})`,
-    ];
-    if (editorNotes) parts.push('', `The editor's instructions for this version (follow them):\n${editorNotes}`);
-    if (preferences && (preferences.narrativeMode || preferences.povStrategy || preferences.centralQuestion)) {
-      parts.push(
-        '',
-        "The editor's preferences for the documentary (follow them, or say why not in orderNote):",
-        ...(preferences.narrativeMode ? [`- narrative mode: ${preferences.narrativeMode}`] : []),
-        ...(preferences.povStrategy ? [`- POV strategy: ${preferences.povStrategy.type}${preferences.povStrategy.description ? ` — ${preferences.povStrategy.description}` : ''}`] : []),
-        ...(preferences.centralQuestion ? [`- central question: ${preferences.centralQuestion}`] : []),
-      );
-    }
-    if (rework) {
-      parts.push('', `Previous architecture v${rework.version} (${rework.status}). The editor's decisions on it:\n${rework.decisions.map((d) => `- ${d}`).join('\n') || '- none recorded'}\nIts outline:\n${rework.outline}`);
-    }
-    const ordered = units.some((u) => u.selectionOrder !== null);
-    parts.push('', `# Selected story units (${ordered ? "the editor's order" : 'priority, then rank'})`, units.map(renderUnit).join('\n\n'));
-    parts.push(
       '',
-      `# Story evidence: the selected units' claims (${claimKeys.length})`,
+      heading,
+      units.map(renderUnit).join('\n\n'),
+      '',
+      `# Story evidence: the units' claims (${claimKeys.length})`,
       'Only these claims may be story evidence: beats, cast, names, places, figures and dates. Verified quotations appear in quotation marks under each claim.',
       evidence.renderClaims(claimKeys, { quotes: 3, quoteChars: 360 }),
-    );
+    ];
     if (background.length) {
       parts.push(
         '',
@@ -324,6 +417,45 @@ class ArchitectureRun {
     }
     const needPresentation = [...evidence.claims.values()].filter((c) => c.verdict !== 'ESTABLISHED').map((c) => `${c.key} ${c.verdict} → ${PRESENTATION_FOR_VERDICT[c.verdict]}`);
     if (needPresentation.length) parts.push('', `Claims that need a presentation entry in every sequence that uses them: ${needPresentation.join('; ')}`);
+    return parts;
+  }
+
+  private preferenceLines(preferences: StoryJobInput['preferences'] | null): string[] {
+    if (!preferences || !(preferences.narrativeMode || preferences.povStrategy || preferences.centralQuestion)) return [];
+    return [
+      '',
+      "The editor's preferences for the documentary (follow them, or say why not in orderNote):",
+      ...(preferences.narrativeMode ? [`- narrative mode: ${preferences.narrativeMode}`] : []),
+      ...(preferences.povStrategy ? [`- POV strategy: ${preferences.povStrategy.type}${preferences.povStrategy.description ? ` — ${preferences.povStrategy.description}` : ''}`] : []),
+      ...(preferences.centralQuestion ? [`- central question: ${preferences.centralQuestion}`] : []),
+    ];
+  }
+
+  private async architect(
+    units: readonly SelectedUnit[],
+    evidence: EvidenceBase,
+    target: RuntimeTarget,
+    editorNotes: string | null,
+    preferences: StoryJobInput['preferences'] | null,
+    rework: Rework | null,
+    angle: ChosenAngle | null,
+  ): Promise<ArchitectOutput> {
+    const { ctx, cfg } = this;
+    const parts = [
+      `Documentary: ${ctx.project.title} — ${ctx.project.topic}`,
+      `Target runtime: about ${fmtMinutes(target.targetSec)} (acceptable ${fmtMinutes(target.minSec)}–${fmtMinutes(target.maxSec)})`,
+    ];
+    if (editorNotes) parts.push('', `The editor's instructions for this version (follow them):\n${editorNotes}`);
+    parts.push(...this.preferenceLines(preferences));
+    if (angle) {
+      parts.push('', `# The editor chose this angle (${angle.origin.key} of exploration ${angle.origin.explorationVersion}): build the architecture on it`, renderAngle(angle.angle), 'Follow its central question, mode, POV, opening and movements unless the evidence rules make that impossible; say what you changed and why in orderNote.');
+    }
+    if (rework) {
+      parts.push('', `Previous architecture v${rework.version} (${rework.status}). The editor's decisions on it:\n${rework.decisions.map((d) => `- ${d}`).join('\n') || '- none recorded'}\nIts outline:\n${rework.outline}`);
+    }
+    const ordered = units.some((u) => u.selectionOrder !== null);
+    const reserve = units.some((u) => u.reserve);
+    parts.push(...this.evidenceParts(units, evidence, `# Selected story units (${ordered ? "the editor's order" : 'priority, then rank'}${reserve ? '; then units the editor approved but did not select, which you may use' : ''})`));
 
     const r = await ctx.callProvider(
       'ai',
@@ -339,14 +471,77 @@ class ArchitectureRun {
           maxTokens: cfg.maxTokens.architect,
           signal: ctx.signal,
         }),
-      { request: { task: 'story.architect', units: units.length, claims: claimKeys.length, backgroundClaims: background.length }, summarize: (x) => ({ sequences: x.object.sequences.length }) },
+      { request: { task: 'story.architect', units: units.length, angle: angle?.origin.key ?? null }, summarize: (x) => ({ sequences: x.object.sequences.length }) },
     );
     this.noteModel(r.meta.model);
     return r.object;
   }
 
-  /** What every reviewer sees: the architecture (with beat ids), the automated findings and the evidence. */
-  private reviewContent(built: BuiltArchitecture, units: readonly SelectedUnit[], evidence: EvidenceBase, target: RuntimeTarget): string {
+  /** The architect reconsiders an existing version from the editor's brief: the full revision and its account of it. */
+  private async revise(
+    revision: Revision,
+    units: readonly SelectedUnit[],
+    evidence: EvidenceBase,
+    target: RuntimeTarget,
+    preferences: StoryJobInput['preferences'] | null,
+    angle: ChosenAngle | null,
+  ): Promise<ArchitectRevisionOutput> {
+    const { ctx, cfg } = this;
+    const { base, content } = revision;
+    const parts = [
+      `Documentary: ${ctx.project.title} — ${ctx.project.topic}`,
+      `Target runtime: about ${fmtMinutes(target.targetSec)} (acceptable ${fmtMinutes(target.minSec)}–${fmtMinutes(target.maxSec)})`,
+      '',
+      `# The editor's brief for this revision of v${base.version} — the reason for it; answer it`,
+      revision.brief,
+    ];
+    if (revision.aspects.length) parts.push('', `What is not working, on the editor's checklist: ${revision.aspects.map((a) => REVISION_ASPECT_LABELS[a]).join(', ')}`);
+    parts.push(...this.preferenceLines(preferences));
+    if (angle) parts.push('', `# Revise toward this explored angle (${angle.origin.key} of exploration ${angle.origin.explorationVersion}), which the editor chose`, renderAngle(angle.angle));
+    parts.push('', `# Architecture v${base.version} (${base.status}) — the version to revise (it is kept unchanged; yours becomes a new version)`);
+    if (isArchitectureV2(content)) parts.push(JSON.stringify(toArchitectOutput(content), null, 1));
+    else {
+      parts.push(
+        'Built by story engine 1: rebuild it in the current format.',
+        [`Premise: ${content.premise}`, `Central question: ${content.centralQuestion}`, `Spine: ${content.narrativeSpine}`, ...content.sequences.map((s) => `${s.number}. ${s.title} (${s.candidateKeys.join(', ')}): ${s.purpose} — ${s.keyEvents.map((e) => e.event).join(' / ')}`)].join('\n'),
+      );
+    }
+    const report = QualityReport.safeParse(base.qualityReport);
+    if (report.success) {
+      const flagged = report.data.checks.filter((c) => c.status !== 'PASS').map((c) => `- ${c.label} — ${c.status}: ${c.detail}`);
+      const open = report.data.coherenceIssues.filter((i) => !i.resolution.startsWith('Fixed')).map((i) => `- ${i.severity}: ${i.description}`);
+      parts.push('', `What its quality gate found (${report.data.passed ? 'passed' : 'FAILED'}):\n${[...flagged, ...open].join('\n') || '- nothing beyond a pass'}`);
+    }
+    const verdict = (base.stats as { storyEditor?: StoryEditorVerdict | { unavailable: string } } | null)?.storyEditor;
+    if (verdict && 'qualityBar' in verdict) {
+      parts.push('', `The story editor on it: ${Object.entries(verdict.qualityBar).map(([k, v]) => `${k}: ${v.pass ? 'yes' : 'no'} — ${v.why}`).join(' | ')}`);
+    }
+    if (base.approvals.length) parts.push('', `The editor's decisions on v${base.version}:\n${base.approvals.map((a) => `- ${a.decision}${a.notes ? `: ${a.notes}` : ''}`).join('\n')}`);
+    const reserve = units.some((u) => u.reserve);
+    parts.push(...this.evidenceParts(units, evidence, `# Story units you may use (the selection${units.some((u) => u.selectionOrder !== null) ? " in the editor's order" : ''}${reserve ? ', then units the editor approved but did not select' : ''})`));
+
+    const r = await ctx.callProvider(
+      'ai',
+      'generateObject',
+      () =>
+        ctx.providers.ai.generateObject({
+          task: 'story.revise',
+          schema: ArchitectRevisionOutput,
+          schemaName: 'StoryArchitectureRevision',
+          system: architectRevisionSystemPrompt(target),
+          messages: [{ role: 'user', content: parts.join('\n') }],
+          effort: cfg.effort.architect,
+          maxTokens: cfg.maxTokens.architect,
+          signal: ctx.signal,
+        }),
+      { request: { task: 'story.revise', baseVersion: base.version, aspects: revision.aspects, units: units.length }, summarize: (x) => ({ sequences: x.object.sequences.length, changes: x.object.changeLog.changes.length }) },
+    );
+    this.noteModel(r.meta.model);
+    return r.object;
+  }
+
+  /** What every reviewer sees: the architecture (with beat ids), the automated findings, the evidence — and the editor's brief for a revision. */
+  private reviewContent(built: BuiltArchitecture, units: readonly SelectedUnit[], evidence: EvidenceBase, target: RuntimeTarget, brief: string | null): string {
     const c = built.content;
     const core = coreClaimsOf(units, evidence);
     const others = orderedKeys(
@@ -357,22 +552,23 @@ class ArchitectureRun {
       `Documentary: ${this.ctx.project.title} — ${this.ctx.project.topic}`,
       `Target runtime: ${fmtMinutes(target.minSec)}–${fmtMinutes(target.maxSec)}; current estimate ${fmtMinutes(totalDurationSec(c))}`,
       `Reconstruction: ${c.reconstruction.level} (${Math.round(c.reconstruction.shares.RECONSTRUCTION * 100)}% reconstruction, ${Math.round(c.reconstruction.shares.FICTION * 100)}% fiction of ${c.reconstruction.beats} beats)`,
+      ...(brief ? ['', `This is a revision. The editor's brief for it:\n${brief}`] : []),
       '',
-      `Selected units: ${units.map((u) => `${u.key} [${u.priority}] ${u.title}`).join('; ')}`,
-      `Story evidence allowed (the selected units' claims): ${core.join(', ')}`,
+      `Story units: ${units.map((u) => `${u.key} [${u.reserve ? 'approved, not selected' : u.priority}] ${u.title}`).join('; ')}`,
+      `Story evidence allowed (the units' claims): ${core.join(', ')}`,
       '',
       `Automated findings (fix every one the evidence allows):\n${built.findings.map((f) => `- ${describeFinding(f)}`).join('\n') || '- none'}`,
       '',
       '# Architecture (beat ids are for reference; your revision follows the architecture schema, without ids)',
       JSON.stringify(toArchitectOutput(c), null, 1),
       '',
-      "# Evidence: the selected units' claims",
+      "# Evidence: the units' claims",
       evidence.renderClaims(core, { quotes: 2, quoteChars: 320 }),
       ...(others.length ? ['', '# Other dossier claims the architecture uses (background only, never story evidence)', evidence.renderClaims(others, { quotes: 1, quoteChars: 240 })] : []),
     ].join('\n');
   }
 
-  private async storyEditor(draft: BuiltArchitecture, units: readonly SelectedUnit[], evidence: EvidenceBase, target: RuntimeTarget): Promise<StoryReviewStep> {
+  private async storyEditor(draft: BuiltArchitecture, units: readonly SelectedUnit[], evidence: EvidenceBase, target: RuntimeTarget, brief: string | null): Promise<StoryReviewStep> {
     const { ctx, cfg } = this;
     try {
       const r = await ctx.callProvider(
@@ -384,7 +580,7 @@ class ArchitectureRun {
             schema: StoryEditorOutput,
             schemaName: 'StoryEditorReview',
             system: storyEditorSystemPrompt(target),
-            messages: [{ role: 'user', content: this.reviewContent(draft, units, evidence, target) }],
+            messages: [{ role: 'user', content: this.reviewContent(draft, units, evidence, target, brief) }],
             effort: cfg.effort.review,
             maxTokens: cfg.maxTokens.review,
             signal: ctx.signal,
@@ -399,7 +595,7 @@ class ArchitectureRun {
     }
   }
 
-  private async factChecker(current: BuiltArchitecture, units: readonly SelectedUnit[], evidence: EvidenceBase, target: RuntimeTarget): Promise<FactCheckStep> {
+  private async factChecker(current: BuiltArchitecture, units: readonly SelectedUnit[], evidence: EvidenceBase, target: RuntimeTarget, brief: string | null): Promise<FactCheckStep> {
     const { ctx, cfg } = this;
     try {
       const r = await ctx.callProvider(
@@ -411,7 +607,7 @@ class ArchitectureRun {
             schema: ArchitectureReviewOutput,
             schemaName: 'ArchitectureReview',
             system: reviewSystemPrompt(target),
-            messages: [{ role: 'user', content: this.reviewContent(current, units, evidence, target) }],
+            messages: [{ role: 'user', content: this.reviewContent(current, units, evidence, target, brief) }],
             effort: cfg.effort.review,
             maxTokens: cfg.maxTokens.review,
             signal: ctx.signal,
@@ -490,48 +686,63 @@ class ArchitectureRun {
 
   // ── Persist ────────────────────────────────────────────────────────────────
 
-  private async persist(
-    packId: string,
-    dossierId: string,
-    built: BuiltArchitecture,
-    report: QualityReport,
-    target: RuntimeTarget,
-    stats: Record<string, unknown>,
-    editorNotes: string | null,
-    opportunities: readonly BuiltOpportunity[],
-    evidence: EvidenceBase,
-  ) {
+  /**
+   * Save the new version (never overwriting another). A new build replaces
+   * the versions still open (DRAFT, IN_REVIEW) as before; a revision replaces
+   * them only when it passes its gate — a failed revision leaves the version
+   * under review in place. An APPROVED version stays approved until a newer
+   * one is approved.
+   */
+  private async persist(args: {
+    packId: string;
+    dossierId: string;
+    built: BuiltArchitecture;
+    report: QualityReport;
+    target: RuntimeTarget;
+    stats: Record<string, unknown>;
+    editorNotes: string | null;
+    opportunities: readonly BuiltOpportunity[];
+    evidence: EvidenceBase;
+    revision: Revision | null;
+    angle: ChosenAngle | null;
+  }) {
     const { db, project, job } = this.ctx;
+    const { built, report, evidence } = args;
     const content = StoryArchitectureContentV2.parse(built.content);
     const reportJson = QualityReport.parse(report);
     return db.$transaction(
       async (tx) => {
         const last = await tx.storyArchitecture.findFirst({ where: { projectId: project.id }, orderBy: { version: 'desc' }, select: { version: true } });
-        await tx.storyArchitecture.updateMany({ where: { projectId: project.id, status: { in: ['DRAFT', 'IN_REVIEW'] } }, data: { status: 'SUPERSEDED' } });
+        const replaces = !args.revision || report.passed;
+        const open = replaces ? await tx.storyArchitecture.findMany({ where: { projectId: project.id, status: { in: ['DRAFT', 'IN_REVIEW'] } }, select: { id: true, version: true } }) : [];
+        if (open.length) await tx.storyArchitecture.updateMany({ where: { id: { in: open.map((o) => o.id) } }, data: { status: 'SUPERSEDED' } });
         const story = await tx.storyArchitecture.create({
           data: {
             projectId: project.id,
-            dossierId,
-            packId,
+            dossierId: args.dossierId,
+            packId: args.packId,
             version: (last?.version ?? 0) + 1,
             engineVersion: CURRENT_STORY_ENGINE,
             status: report.passed ? 'IN_REVIEW' : 'DRAFT',
             content: content as unknown as Prisma.InputJsonValue,
-            targetDurationSec: target.targetSec,
+            targetDurationSec: args.target.targetSec,
             estimatedDurationSec: totalDurationSec(content),
             qualityReport: reportJson as unknown as Prisma.InputJsonValue,
             qualityPassed: report.passed,
-            stats: stats as Prisma.InputJsonValue,
-            notes: editorNotes,
+            stats: args.stats as Prisma.InputJsonValue,
+            notes: args.editorNotes,
+            revisionOfId: args.revision?.base.id ?? null,
+            explorationId: args.angle?.origin.explorationId ?? null,
+            angleKey: args.angle?.origin.key ?? null,
             jobId: job.id,
           },
         });
-        for (const o of opportunities) {
+        for (const o of args.opportunities) {
           await tx.contentOpportunity.create({
             data: {
               projectId: project.id,
               architectureId: story.id,
-              dossierId,
+              dossierId: args.dossierId,
               opportunityKey: o.key,
               format: o.format,
               rank: o.rank,
@@ -549,7 +760,7 @@ class ArchitectureRun {
             },
           });
         }
-        return story;
+        return { story, superseded: open.map((o) => o.version).sort((a, b) => a - b) };
       },
       { timeout: 60_000 },
     );
@@ -558,6 +769,73 @@ class ArchitectureRun {
   private noteModel(model: string | undefined) {
     if (model && !this.models.includes(model)) this.models.push(model);
   }
+}
+
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/** The architect's change log, trimmed; empty entries dropped. */
+function cleanChangeLog(log: ArchitectRevisionOutput['changeLog']): RevisionChangeLog {
+  const t = (s: string) => s.replace(/\s+/g, ' ').trim();
+  return {
+    summary: t(log.summary),
+    changes: log.changes.map((c) => ({ area: c.area, what: t(c.what), why: t(c.why) })).filter((c) => c.what),
+    kept: log.kept.map(t).filter(Boolean),
+  };
+}
+
+/** Did the revision explain itself, and did it change what the editor named? Warnings only: the editor judges. */
+function revisionChecks(revision: Revision, changeLog: RevisionChangeLog | null, diff: NonNullable<ArchitectureProvenance['diff']>, unaddressed: readonly RevisionAspect[]): QualityCheck[] {
+  const explained = changeLog !== null && changeLog.summary !== '' && changeLog.changes.length > 0;
+  const moved = [
+    diff.unitsAdded.length ? `added ${diff.unitsAdded.join(', ')}` : null,
+    diff.unitsRemoved.length ? `removed ${diff.unitsRemoved.join(', ')}` : null,
+    diff.reordered ? 'reordered' : null,
+    diff.merged.length ? `merged ${diff.merged.map((g) => g.join('+')).join(', ')}` : null,
+    diff.split.length ? `split ${diff.split.map((g) => g.join('/')).join(', ')}` : null,
+    diff.opening.changed ? 'new opening' : null,
+    diff.narrativeMode.changed ? `mode ${diff.narrativeMode.before || '—'} → ${diff.narrativeMode.after}` : null,
+    diff.pov.changed ? 'new POV' : null,
+    diff.centralQuestion.changed ? 'new central question' : null,
+  ].filter((x): x is string => x !== null);
+  return [
+    {
+      id: 'revision_explained',
+      label: 'The revision explains itself',
+      status: explained ? 'PASS' : 'WARN',
+      detail: explained ? `${changeLog!.changes.length} change(s) explained: ${changeLog!.summary}` : 'The architect did not say what changed and why',
+      metric: changeLog?.changes.length ?? 0,
+      threshold: 1,
+    },
+    {
+      id: 'revision_brief',
+      label: "The revision answers the editor's brief",
+      status: unaddressed.length ? 'WARN' : 'PASS',
+      detail:
+        (unaddressed.length
+          ? `No measurable change in: ${unaddressed.map((a) => REVISION_ASPECT_LABELS[a].toLowerCase()).join(', ')} (named by the editor) — check the change log`
+          : revision.aspects.length
+            ? `Every aspect the editor named changed: ${revision.aspects.map((a) => REVISION_ASPECT_LABELS[a].toLowerCase()).join(', ')}`
+            : 'No checklist given; see the brief and the change log') + `. Against v${revision.base.version}: ${moved.join('; ') || 'no structural change'}`,
+      metric: unaddressed.length,
+      threshold: 0,
+    },
+  ];
+}
+
+/** An explored angle as the architect sees it. */
+export function renderAngle(a: StoryAngle): string {
+  return [
+    `${a.key} — ${a.title}`,
+    `logline: ${a.logline}`,
+    `central question: ${a.centralQuestion}`,
+    `emotional centre: ${a.emotionalCentre}; human anchor: ${a.humanAnchor}`,
+    `told as: ${a.narrativeMode}${a.secondaryModes.length ? ` (+ ${a.secondaryModes.join(', ')})` : ''}; POV ${a.povStrategy.type}${a.povStrategy.description ? ` (${a.povStrategy.description})` : ''}`,
+    `opening [${a.opening.basis}${a.opening.unitKey ? `, ${a.opening.unitKey}` : ''}]: ${a.opening.concept}`,
+    'movements:',
+    ...a.movements.map((m, i) => `  ${i + 1}. ${m.title} (${m.unitKeys.join(', ') || 'no unit'}): ${m.what}`),
+    `resolution: ${a.resolution}`,
+    ...(a.unusedUnits.length ? [`leaves out: ${a.unusedUnits.map((u) => `${u.unitKey} (${u.reason})`).join('; ')}`] : []),
+  ].join('\n');
 }
 
 function toIssue(i: StoryEditorOutputIssue, accepted: boolean, who: 'Story' | 'Fact'): CoherenceIssue {
@@ -593,8 +871,8 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T | null {
   return r.success ? r.data : null;
 }
 
-/** A selected candidate as the architect sees it: the editor's overrides applied. */
-export function toUnit(c: CandidateRow, evidence: EvidenceBase): SelectedUnit {
+/** A candidate as the architect sees it: the editor's overrides applied. `reserve`: approved but not selected. */
+export function toUnit(c: CandidateRow, evidence: EvidenceBase, reserve = false): SelectedUnit {
   const characters = z.array(StoryCharacter).safeParse(c.characters);
   const myth = c.mythThread === null ? null : MythThread.safeParse(c.mythThread);
   const overrides = parse(CandidateOverrides, c.editorOverrides) ?? {};
@@ -629,11 +907,13 @@ export function toUnit(c: CandidateRow, evidence: EvidenceBase): SelectedUnit {
     humanStakes: parse(HumanStakes, c.humanStakes),
     storyDesign: parse(StoryDesign, c.storyDesign),
     selectionOrder: c.selectionOrder,
+    reserve,
   };
 }
 
-function renderUnit(u: SelectedUnit): string {
+export function renderUnit(u: SelectedUnit): string {
   const editor = [
+    u.reserve ? 'approved by the editor, not selected (optional)' : null,
     u.selectionOrder !== null ? `#${u.selectionOrder} in the editor's order` : null,
     u.priority !== 'NORMAL' ? `${u.priority} priority` : null,
     u.status !== 'PROPOSED' ? `editor: ${u.status}` : null,

@@ -1,7 +1,7 @@
 import { CONTENT_LIMITS, FICTIONAL_CAST_LIMITS, NARRATIVE_MODES, STORY_LIMITS, type RuntimeTarget } from '@docengine/core';
 
 /** Bump when a prompt changes meaningfully (recorded in pack/architecture stats; invalidates saved progress). */
-export const PROMPT_VERSION = 'story-2.0-2026-10-04.2';
+export const PROMPT_VERSION = 'story-2.1-2026-10-04.1';
 
 const minutes = (sec: number) => Math.round(sec / 60);
 
@@ -237,8 +237,29 @@ ${CONTINUITY_GUIDE}
 Runtime: about ${minutes(target.targetSec)} minutes in total (acceptable ${minutes(target.minSec)}–${minutes(target.maxSec)}). estimatedDurationSec is the narration time each sequence needs — roughly 15–25 seconds per beat — and the sum must fit the runtime.`;
 }
 
+// ── Revision ─────────────────────────────────────────────────────────────────
+
+const REVISION_GUIDE = `THIS IS A REVISION. The editor has reviewed the architecture below and says it is not working. Reconsider it; do not merely polish it.
+- The editor's brief is the reason for this revision: fix what it names, and keep what works.
+- Substantial restructuring is allowed, and expected when the brief calls for it. You may:
+  · reorder sequences; merge two sequences into one, or split one;
+  · remove sequences, or replace a sequence with another of the story units listed — the selection, or a unit the editor approved but did not select;
+  · change the narrative mode or the POV strategy where the story justifies it;
+  · strengthen the human stakes and change the emotional centre;
+  · change the central question, and rethink the opening.
+- Use only the story units listed and their evidence. This is not new research: no new facts, people, figures, dates, places or quotations. Units the editor approved but did not select count as selected units here (their claims are story evidence); every other rule applies to the revision exactly as to a first draft.
+- A selected unit you leave out goes in unusedCandidates with the reason; an approved, unselected unit needs no reason.
+- Return the FULL revised architecture, and changeLog: a short summary, every change that matters (area, what changed, why — tied to the brief), and what you deliberately kept.`;
+
+/** The architect's system prompt for a revision of an existing architecture. */
+export function architectRevisionSystemPrompt(target: RuntimeTarget): string {
+  return `${architectSystemPrompt(target)}
+
+${REVISION_GUIDE}`;
+}
+
 export function storyEditorSystemPrompt(target: RuntimeTarget): string {
-  return `You are the story editor (showrunner) of a premium historical documentary series. A story architecture has been drafted and checked against the evidence. Your job: make it a better STORY without breaking a single evidence rule.
+  return `You are the story editor (showrunner) of a premium historical documentary series. A story architecture has been drafted and checked against the evidence. Your job: make it a better STORY without breaking a single evidence rule. When the editor's brief for a revision is shown, judge above all whether the architecture now answers it.
 
 ${PHILOSOPHY}
 
@@ -271,7 +292,7 @@ ${CONTINUITY_GUIDE}`;
 }
 
 export function reviewSystemPrompt(target: RuntimeTarget): string {
-  return `You are the fact-checking editor of a premium historical documentary series. Review a story architecture against the evidence shown and the automated findings before it goes to the human editor, then fix what can be fixed. Creative freedom applies to presentation, never to historical truth: your word is final on the facts.
+  return `You are the fact-checking editor of a premium historical documentary series. Review a story architecture against the evidence shown and the automated findings before it goes to the human editor, then fix what can be fixed. Creative freedom applies to presentation, never to historical truth: your word is final on the facts. When it is a revision made from the editor's brief, the brief never licenses new facts: a restructured story must still rest on the units' evidence.
 
 Look for:
 - story material that does not come from the selected units' own claims (other claims may only be labelled background);
@@ -318,4 +339,28 @@ RULES — an opportunity that breaks one is dropped automatically:
 4. Do not write scripts, captions, voice-over or shot lists: this is a brief for a future production, not the production.
 
 Score each 0–10: hookScore, payoffScore, standaloneScore, visualScore, emotionScore, paceScore (how well it fits its format). whyItWorks: one or two sentences.`;
+}
+
+// ── Alternative angles ───────────────────────────────────────────────────────
+
+export function anglesSystemPrompt(target: RuntimeTarget, count: number): string {
+  return `You are the series producer of a premium historical documentary series. Before the editor commits to one story architecture, propose ${count} MATERIALLY DIFFERENT narrative approaches to the same curated story units, for a documentary of ${minutes(target.minSec)}–${minutes(target.maxSec)} minutes.
+
+${PHILOSOPHY}
+
+Each approach is a treatment, not an architecture: a working title, logline, central question, emotional centre, the human anchor the viewer follows, narrative mode (plus secondary modes), POV strategy, the opening scene (with its information class and the unit it opens on), the shape of the film in 3–7 movements (each naming the story units it tells), how the film resolves its question, the selected units it leaves out and why, how it differs from the other approaches, its strengths and its risks.
+
+MATERIALLY DIFFERENT means a different film, not a different wording. Each approach must differ from every other in at least two of: narrative mode, POV strategy, the opening, the human anchor or emotional centre — and normally also in its central question and the order in which the units are told. For example (illustration of form only): one approach follows a single family through the events; another is an investigation that opens on the legend and works back to the record; a third is a countdown to the day everything turned.
+
+EVIDENCE BOUNDARY — an approach that breaks one is dropped automatically:
+1. Use only the story units listed (by key) and the claims shown under them. This is not new research: no new facts, events, people, places, figures or dates.
+2. People: only real people named in the units' evidence, spelled as there. A fictional device (a viewer POV, a composite) is described by its role, never given a name — names come later, in the architecture.
+3. Figures and dates exactly as the evidence gives them; quotation marks only around verified quotations shown in the evidence.
+4. Disputed, unverified and probable material stays uncertain; a myth is told as an investigation. Name these risks.
+
+${STORY_TYPE_GUIDE}
+
+${MODE_GUIDE}
+
+POV STRATEGIES: VIEWER_POV (second person, the viewer is placed in the scene), COMPANION (a fictional composite the viewer follows), CHARACTER_FOLLOW (follow a real person or group), INVESTIGATOR (the narrator investigates the record), NARRATOR (no POV device).`;
 }

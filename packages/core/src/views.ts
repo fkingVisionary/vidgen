@@ -1,6 +1,7 @@
 import type {
   ApprovalDecision,
   ApprovalGate,
+  ArchitectureOrigin,
   ArtifactStatus,
   CandidatePriority,
   CandidateStatus,
@@ -37,6 +38,7 @@ import type {
   PovChoice,
   StoryCharacter,
   StoryDesign,
+  StoryExplorationContent,
   StoryPackContent,
 } from './contracts/story.ts';
 import type { AvailableActions } from './pipeline.ts';
@@ -237,6 +239,11 @@ export interface StoryArchitectureSummaryView {
   id: string;
   version: number;
   engineVersion: StoryEngineVersion;
+  /** Built from the selection, or a revision of an earlier version (which is kept). */
+  origin: ArchitectureOrigin;
+  revisionOfVersion: number | null;
+  /** The explored angle it was built on or revised toward. */
+  angle: { explorationVersion: number; key: string; title: string } | null;
   /** Content opportunities identified in this architecture (engine 2). */
   opportunities: { shorts: number; longForm: number; approved: number };
   status: ArtifactStatus;
@@ -402,11 +409,48 @@ export interface StorySourceView {
   publishedDate: string | null;
 }
 
+/** One exploration of alternative angles (a STORY_ANGLES job). */
+export interface StoryExplorationSummaryView {
+  id: string;
+  version: number;
+  packVersion: number;
+  /** Explored as alternatives to this architecture version. */
+  basedOnVersion: number | null;
+  angleCount: number;
+  qualityPassed: boolean;
+  createdAt: string;
+}
+
+export interface StoryExplorationView extends StoryExplorationSummaryView {
+  content: StoryExplorationContent | null;
+  qualityReport: QualityReport | null;
+  notes: string | null;
+  stats: Record<string, unknown>;
+  cost: ArtifactCostView;
+  /** The units the angles could use differ from what a new architecture would use now (the selection changed). */
+  poolChanged: boolean;
+  /** Architecture versions built on (or revised toward) an angle of this exploration. */
+  developed: { key: string; architectureVersion: number }[];
+  evidence: StoryEvidenceView;
+}
+
+/** What the editor can do with the architecture now, and why not. */
+export interface StoryEditorialActions {
+  revise: { allowed: boolean; reason: string | null };
+  angles: { allowed: boolean; reason: string | null };
+  /** Units a revision or an angle may use: the selection, then units the editor approved but did not select. */
+  poolKeys: string[];
+  reserveKeys: string[];
+}
+
 export interface StoryView {
   packs: StoryPackSummaryView[];
   pack: StoryPackView | null;
   architectures: StoryArchitectureSummaryView[];
   architecture: StoryArchitectureView | null;
+  explorations: StoryExplorationSummaryView[];
+  exploration: StoryExplorationView | null;
+  editorial: StoryEditorialActions;
   /** True while the editor can change candidates (project in STORY_SELECTION, viewing the current pack). */
   editable: boolean;
   /** The shown pack's current selection (selected and not rejected) against the 5–10 limit. */

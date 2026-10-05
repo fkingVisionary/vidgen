@@ -1,16 +1,22 @@
 import {
   CandidateOverrides,
   CreateProjectInput,
+  ExploreAnglesInput,
   ReorderSelectionInput,
+  ReviseArchitectureInput,
   STATUS_DEFINITIONS,
+  StoryExplorationContent,
   UpdateContentOpportunityInput,
   UpdateStoryCandidateInput,
   assertTransition,
   getTransitionKind,
+  isSideJob,
   jobPhase,
   resolveApproval,
   resolveEnqueue,
+  selectionProblem,
   startsNewPhaseRun,
+  type AngleRef,
   type ApprovalInput,
   type EnqueueJobInput,
   type JobType,
@@ -122,6 +128,12 @@ export class ProjectService {
         throw new ConflictError(`Only FAILED or CANCELLED jobs can be retried (job is ${old.status})`);
       }
       let project = await this.lockProject(tx, old.projectId);
+      if (isSideJob(old.type)) {
+        // A side job runs again only where it may run; it never moves the project.
+        const resolution = resolveEnqueue(project.status, old.type);
+        if (!resolution.ok) throw new ConflictError(resolution.reason);
+        return this.insertJob(tx, project, old.type, old.languageVersionId, old.input as Prisma.InputJsonValue, actor, old.id, old.checkpoint);
+      }
       const phase = jobPhase(old.type);
 
       if (project.status === 'FAILED') {
@@ -166,6 +178,15 @@ export class ProjectService {
           if (input.decision !== 'FLAGGED') await tx.storyArchitecture.update({ where: { id: story.id }, data: { status: decided } });
           // The selection it was built from is approved with it.
           if (input.decision === 'APPROVED' && story.packId) await tx.storyPack.update({ where: { id: story.packId }, data: { status: 'APPROVED' } });
+          // One approved architecture at a time: an earlier approved version (e.g. the one a revision revised) is kept, superseded.
+          if (input.decision === 'APPROVED') {
+            const older = await tx.storyArchitecture.findMany({ where: { projectId, status: 'APPROVED', id: { not: story.id } }, select: { id: true, version: true } });
+            if (older.length) {
+              await tx.storyArchitecture.updateMany({ where: { id: { in: older.map((o) => o.id) } }, data: { status: 'SUPERSEDED' } });
+              const versions = older.map((o) => `v${o.version}`).join(', ');
+              await this.event(tx, projectId, EVENT.ARCHITECTURE_SUPERSEDED, `Approved architecture ${versions} superseded by approving v${story.version} (kept, not changed)`, { actor, superseded: older.map((o) => o.version), by: story.version });
+            }
+          }
         }
       }
 
@@ -212,6 +233,97 @@ export class ProjectService {
     });
     await this.onJobQueued?.(job);
     return job;
+  }
+
+  /**
+   * Reconsider an architecture: enqueue a STORY_ARCHITECTURE job in which the
+   * architect revises version `baseVersion` from the editor's brief, using only
+   * the story pack and the approved dossier, and both reviewers run again on
+   * the revision. Nothing is overwritten: the revision becomes a new version,
+   * and the base keeps its content (it is superseded only once the revision
+   * passes its gate, or — if approved — once the revision is approved).
+   * From STORY_SELECTION this starts the architecture phase; from STORY_REVIEW
+   * or STORY_APPROVED it goes back to it; after a failed architecture run it
+   * recovers it.
+   */
+  async reviseArchitecture(projectId: string, raw: ReviseArchitectureInput, actor: Actor): Promise<Job> {
+    const input = ReviseArchitectureInput.parse(raw);
+    const job = await this.db.$transaction(async (tx) => {
+      let project = await this.lockProject(tx, projectId);
+      const failedArchitecture = project.status === 'FAILED' && project.failedFromStatus === 'STORY_ARCHITECTING';
+      if (!['STORY_SELECTION', 'STORY_REVIEW', 'STORY_APPROVED'].includes(project.status) && !failedArchitecture) {
+        throw new ConflictError(`An architecture can be revised during story selection or review, after approval, or after a failed architecture run (the project is ${project.status})`);
+      }
+      const base = await tx.storyArchitecture.findUnique({ where: { projectId_version: { projectId, version: input.baseVersion } }, select: { id: true, version: true, packId: true } });
+      if (!base) throw new NotFoundError('Story architecture', `v${input.baseVersion}`);
+      const problem = await this.storyPoolProblem(tx, projectId, base.packId, `Architecture v${base.version}`);
+      if (problem) throw new ConflictError(problem);
+      if (input.angle) await this.requireAngle(tx, projectId, base.packId!, input.angle);
+
+      if (project.status !== 'STORY_ARCHITECTING') {
+        const kind = getTransitionKind(project.status, 'STORY_ARCHITECTING', { failedFrom: project.failedFromStatus });
+        if (kind !== 'START' && kind !== 'REWIND' && kind !== 'RECOVER') throw new ConflictError(`Cannot revise the architecture from ${project.status}`);
+        project = await this.transition(tx, project, 'STORY_ARCHITECTING', actor, `Revising architecture v${base.version}`);
+      }
+      const languageVersionId = await this.resolveLanguageVersionId(tx, project);
+      const jobInput = {
+        notes: input.brief,
+        revise: { baseVersion: base.version, aspects: [...new Set(input.aspects)] },
+        ...(input.preferences ? { preferences: input.preferences } : {}),
+        ...(input.angle ? { angle: input.angle } : {}),
+      };
+      const job = await this.insertJob(tx, project, 'STORY_ARCHITECTURE', languageVersionId, jobInput as Prisma.InputJsonValue, actor);
+      await this.event(tx, projectId, EVENT.ARCHITECTURE_REVISION_REQUESTED, `Revision of architecture v${base.version} requested: ${input.brief.length > 160 ? `${input.brief.slice(0, 159)}…` : input.brief}`, { actor, baseVersion: base.version, aspects: jobInput.revise.aspects, brief: input.brief, angle: input.angle ?? null }, job.id);
+      return job;
+    });
+    await this.onJobQueued?.(job);
+    return job;
+  }
+
+  /**
+   * Explore 2–3 alternative narrative angles from the current story pack (a
+   * STORY_ANGLES side job): it never changes the project's status, and
+   * commits to nothing.
+   */
+  async exploreAngles(projectId: string, raw: ExploreAnglesInput, actor: Actor): Promise<Job> {
+    const input = ExploreAnglesInput.parse(raw);
+    const job = await this.db.$transaction(async (tx) => {
+      const project = await this.lockProject(tx, projectId);
+      const resolution = resolveEnqueue(project.status, 'STORY_ANGLES');
+      if (!resolution.ok) throw new ConflictError(resolution.reason);
+      const pack = await tx.storyPack.findFirst({ where: { projectId }, orderBy: { version: 'desc' }, select: { id: true } });
+      const problem = await this.storyPoolProblem(tx, projectId, pack?.id ?? null, 'The current story pack');
+      if (problem) throw new ConflictError(problem);
+      if (input.basedOnVersion !== undefined) {
+        const base = await tx.storyArchitecture.findUnique({ where: { projectId_version: { projectId, version: input.basedOnVersion } }, select: { packId: true } });
+        if (!base) throw new NotFoundError('Story architecture', `v${input.basedOnVersion}`);
+        if (base.packId !== pack!.id) throw new ConflictError(`Architecture v${input.basedOnVersion} was built from an earlier story pack`);
+      }
+      const languageVersionId = await this.resolveLanguageVersionId(tx, project);
+      const job = await this.insertJob(tx, project, 'STORY_ANGLES', languageVersionId, input as Prisma.InputJsonValue, actor);
+      await this.event(tx, projectId, EVENT.ANGLES_REQUESTED, `${input.count} alternative angles requested${input.basedOnVersion ? ` (alternatives to architecture v${input.basedOnVersion})` : ''}`, { actor, notes: input.notes ?? null, count: input.count }, job.id);
+      return job;
+    });
+    await this.onJobQueued?.(job);
+    return job;
+  }
+
+  /** Why the units of `packId` cannot be used for a revision or angles now, or null. */
+  private async storyPoolProblem(tx: Tx, projectId: string, packId: string | null, what: string): Promise<string | null> {
+    const latest = await tx.storyPack.findFirst({ where: { projectId }, orderBy: { version: 'desc' }, select: { id: true, version: true, status: true } });
+    if (!latest || !packId) return 'No story pack yet: run Story Mining first';
+    if (latest.id !== packId) return `${what} was built from an earlier story pack; a newer mining pass (pack v${latest.version}) replaced it`;
+    if (latest.status !== 'IN_REVIEW' && latest.status !== 'APPROVED') return `Story pack v${latest.version} is ${latest.status}`;
+    const selected = await tx.storyCandidate.count({ where: { packId, selected: true, status: { not: 'REJECTED' } } });
+    return selectionProblem(selected);
+  }
+
+  private async requireAngle(tx: Tx, projectId: string, packId: string, ref: AngleRef): Promise<void> {
+    const exploration = await tx.storyExploration.findUnique({ where: { projectId_version: { projectId, version: ref.exploration } }, select: { packId: true, content: true } });
+    if (!exploration) throw new NotFoundError('Angle exploration', String(ref.exploration));
+    if (exploration.packId !== packId) throw new ConflictError(`Angle exploration ${ref.exploration} was made from another story pack`);
+    const content = StoryExplorationContent.safeParse(exploration.content);
+    if (!content.success || !content.data.angles.some((a) => a.key === ref.key)) throw new NotFoundError('Angle', `${ref.key} of exploration ${ref.exploration}`);
   }
 
   /**
@@ -316,7 +428,8 @@ export class ProjectService {
 
   /**
    * The editor's decision on one content opportunity. Allowed on the latest
-   * architecture while it is under review or approved; an opportunity is
+   * architecture while it is under review or approved — a draft that failed
+   * its gate (e.g. a failed revision) does not count; an opportunity is
    * eligible for production only once both it and its architecture are approved.
    */
   async editContentOpportunity(opportunityId: string, raw: UpdateContentOpportunityInput, actor: Actor): Promise<ContentOpportunity> {
@@ -326,7 +439,7 @@ export class ProjectService {
       if (!found) throw new NotFoundError('Content opportunity', opportunityId);
       const project = await this.lockProject(tx, found.projectId);
       const o = await tx.contentOpportunity.findUniqueOrThrow({ where: { id: opportunityId }, include: { architecture: { select: { id: true, version: true, status: true } } } });
-      const latest = await tx.storyArchitecture.findFirst({ where: { projectId: project.id }, orderBy: { version: 'desc' }, select: { id: true } });
+      const latest = await tx.storyArchitecture.findFirst({ where: { projectId: project.id, status: { not: 'DRAFT' } }, orderBy: { version: 'desc' }, select: { id: true } });
       if (latest?.id !== o.architectureId) throw new ConflictError(`Opportunity ${o.opportunityKey} belongs to architecture v${o.architecture.version}, which is no longer the latest`);
       if (o.architecture.status !== 'IN_REVIEW' && o.architecture.status !== 'APPROVED') {
         throw new ConflictError(`Architecture v${o.architecture.version} is ${o.architecture.status}; opportunities are decided while it is in review or approved`);
@@ -365,6 +478,7 @@ export class ProjectService {
 
   /** A job succeeded: advance the project if this completed its phase. */
   async onJobSucceeded(tx: Tx, job: Job): Promise<void> {
+    if (isSideJob(job.type)) return; // side jobs never move the project
     const project = await this.lockProject(tx, job.projectId);
     if (this.isStale(project, job)) {
       await this.event(tx, project.id, EVENT.JOB_IGNORED_STALE, `${job.type} finished after the project moved on; status unchanged`, {}, job.id);
@@ -382,6 +496,7 @@ export class ProjectService {
 
   /** A job exhausted its attempts: fail the project if the job belongs to its current phase. */
   async onJobFailed(tx: Tx, job: Job): Promise<void> {
+    if (isSideJob(job.type)) return; // a failed side job leaves the project where it is (the job shows the error)
     const project = await this.lockProject(tx, job.projectId);
     if (this.isStale(project, job) || project.status === 'FAILED') return;
     await this.transition(tx, project, 'FAILED', 'system', `${job.type} job failed: ${job.error ?? 'unknown error'}`);

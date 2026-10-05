@@ -9,6 +9,7 @@ import {
   OPPORTUNITY_STATUSES,
   POV_STRATEGIES,
   PROJECT_STATUSES,
+  REVISION_ASPECTS,
 } from '../enums.ts';
 import { DEFAULT_MASTER_LANGUAGE, LANGUAGE_CODES } from '../languages.ts';
 import { STORY_LIMITS } from '../story.ts';
@@ -77,19 +78,56 @@ export const UpdateStoryCandidateInput = z
   });
 export type UpdateStoryCandidateInput = z.infer<typeof UpdateStoryCandidateInput>;
 
+/** The editor's preferences for the documentary (the architect follows them or explains why not). */
+const StoryPreferences = z.object({
+  narrativeMode: z.enum(NARRATIVE_MODES).optional(),
+  povStrategy: PovChoiceInput.optional(),
+  centralQuestion: z.string().trim().min(1).max(500).optional(),
+});
+
+/** An explored angle: exploration version and angle key ("A2"). */
+export const AngleRef = z.object({ exploration: z.number().int().min(1), key: z.string().regex(/^A[1-9]$/) });
+export type AngleRef = z.infer<typeof AngleRef>;
+
 /** Input of a STORY_MINING or STORY_ARCHITECTURE job: the editor's instructions for the pass. */
 export const StoryJobInput = z.object({
   notes: z.string().trim().max(5000).optional(),
-  /** STORY_ARCHITECTURE only: the editor's preferences for the documentary (the architect follows them or explains why not). */
-  preferences: z
+  /** STORY_ARCHITECTURE only. */
+  preferences: StoryPreferences.optional(),
+  /** STORY_ARCHITECTURE: revise this version instead of building a new one; `notes` is the editor's brief. */
+  revise: z
     .object({
-      narrativeMode: z.enum(NARRATIVE_MODES).optional(),
-      povStrategy: PovChoiceInput.optional(),
-      centralQuestion: z.string().trim().min(1).max(500).optional(),
+      baseVersion: z.number().int().min(1),
+      aspects: z.array(z.enum(REVISION_ASPECTS)).max(REVISION_ASPECTS.length).default([]),
     })
     .optional(),
+  /** STORY_ARCHITECTURE: build on (or revise toward) this explored angle. */
+  angle: AngleRef.optional(),
 });
 export type StoryJobInput = z.infer<typeof StoryJobInput>;
+
+/**
+ * Reconsider an architecture: the architect revises version `baseVersion`
+ * from the editor's brief, using only the story pack and the approved
+ * dossier. A new version is created; every earlier version is kept.
+ */
+export const ReviseArchitectureInput = z.object({
+  baseVersion: z.number().int().min(1),
+  brief: z.string().trim().min(10, 'Say what is not working (at least a sentence)').max(5000),
+  aspects: z.array(z.enum(REVISION_ASPECTS)).max(REVISION_ASPECTS.length).default([]),
+  preferences: StoryPreferences.optional(),
+  angle: AngleRef.optional(),
+});
+export type ReviseArchitectureInput = z.infer<typeof ReviseArchitectureInput>;
+
+/** Input of a STORY_ANGLES job: explore 2–3 materially different approaches to the curated story pack. */
+export const ExploreAnglesInput = z.object({
+  notes: z.string().trim().max(5000).optional(),
+  count: z.union([z.literal(2), z.literal(3)]).default(3),
+  /** Explore alternatives to this architecture version (each angle must differ from it too). */
+  basedOnVersion: z.number().int().min(1).optional(),
+});
+export type ExploreAnglesInput = z.infer<typeof ExploreAnglesInput>;
 
 /** The editor's order of the selected story units (exactly the current selection). */
 export const ReorderSelectionInput = z.object({

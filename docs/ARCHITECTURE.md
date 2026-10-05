@@ -104,7 +104,7 @@ Creating eight empty packages today would be ceremony without content.
 ## 4. Pipeline and state machine
 
 The project `status` is the master pipeline phase (linear, as in the brief,
-plus two added review statuses — see §11). Dashboard stages are derived.
+plus two added review statuses — see §15, D5–D6). Dashboard stages are derived.
 
 | Status | Dashboard stage | Jobs that run here | Leaves by |
 |---|---|---|---|
@@ -136,6 +136,12 @@ plus two added review statuses — see §11). Dashboard stages are derived.
 Transition kinds: `START`, `COMPLETE`, `APPROVE`, `REJECT`, `FAIL`, `RECOVER`,
 `REWIND`. `getTransitionKind(from, to)` is the single authority; anything it
 returns `null` for is illegal (e.g. `SCRIPT_REVIEW → VOICE_GENERATING`).
+
+**Side jobs (`SIDE_JOBS`).** A side job belongs to no phase: it runs while the
+project is in one of its listed statuses and never starts, completes or fails
+a phase. Today there is one: STORY_ANGLES (alternative narrative angles) runs
+in STORY_SELECTION, STORY_REVIEW and STORY_APPROVED (§14). Its failure shows on
+the job only; a retry runs where it may run.
 
 **Phase runs (`phase_seq`).** Each time a project enters a phase, its
 `phase_seq` increments and queued jobs from the previous run are cancelled.
@@ -679,8 +685,8 @@ ESTABLISHED. One that breaks a rule is removed with its reason (the job does
 not fail). Shorts are ranked by SHORT-FORM POTENTIAL (hook 0.25, payoff 0.20,
 standalone 0.20, visual 0.15, emotion 0.10, pace 0.10); durations are brought
 within 15–180 s. All are stored PROPOSED with claim links; the editor approves
-or rejects each one (on the latest architecture, while it is in review or
-approved). `GET|POST /api/projects/:id/content-package` (`{"documentary": true,
+or rejects each one (on the latest architecture that passed its gate — a
+failed revision's draft does not count — while it is in review or approved). `GET|POST /api/projects/:id/content-package` (`{"documentary": true,
 "shorts": 6, "languages": ["en","es","de"]}`) resolves what a production
 request would use — the latest approved architecture and its approved shorts
 by rank — and generates nothing (`generated: false`; languages are only
@@ -715,7 +721,130 @@ invented place would not. An invented event in free prose cannot be detected
 mechanically: the boundary rests on traceability (every beat and opportunity
 cites claims; classes are checked) and on the reviewers and the editor.
 
-## 14. Decisions
+## 14. Editorial revision loop and alternative angles
+
+An architecture is a draft for an editor, not a verdict. Two capabilities let
+the editor change how the story is told — never what the evidence says — and
+both stay inside the same evidence boundary as §12–13: **the story pack's
+units and their approved claims; no new research**. No research provider is
+called (an integration test checks the provider ledger), and the research
+tables are never written.
+
+```
+Reconsider / Revise:  POST /api/projects/:id/story/architecture/revise
+                      { baseVersion, brief, aspects[], preferences?, angle? }
+  → STORY_ARCHITECTURE job (input.revise)  → architect REVISES vN (task story.revise)
+  → rules → story editor (+ the brief) → rules → fact checker (+ the brief) → rules
+  → gate (+ revision checks) → [opportunities] → architecture vN+1 → STORY_REVIEW
+
+Explore angles:       POST /api/projects/:id/story/angles { count: 2|3, notes?, basedOnVersion? }
+  → STORY_ANGLES side job → one call (task story.angles) → angle rules
+  → story_explorations vK (nothing committed; the project's status is unchanged)
+  → the editor develops one: POST …/story/architecture { angle } (selection)
+                         or …/story/architecture/revise { angle, … } (review / approved)
+```
+
+Both go through their own routes, which check the request (base version,
+angle, pack, selection) and record it with the brief; the generic
+`POST /api/projects/:id/jobs` refuses STORY_ANGLES and a revision input.
+
+**The units a revision or an angle may use** are the latest pack's selection
+(not rejected) plus units the editor *approved but did not select* — the
+reserve, shown to the model as optional and marked in the prompt. A plain
+new architecture still uses the selection only. Any other unit key the model
+names is dropped with a note; claims outside those units are the existing
+`CORE_OUTSIDE_SELECTION` / `BEAT_OUTSIDE_SELECTION` findings, and figures,
+years, people, names and quotations follow the §12–13 rules.
+
+**Revision.** The editor names what is not working on a checklist (angle,
+POV, emotional centre, opening, structure, pacing, narrative strategy,
+central question, human stakes) and writes a freeform brief (required, at
+least a sentence). Any version of the current pack can be revised — under
+review, approved, superseded, rejected, or a failed draft — from
+STORY_SELECTION (START), STORY_REVIEW or STORY_APPROVED (REWIND), or after a
+failed architecture run (RECOVER). The revision reuses the STORY_ARCHITECTURE
+job type (`input.revise = { baseVersion, aspects }`, `input.notes` = the
+brief). The architect receives the brief and checklist, the base version as
+its own JSON, the base's gate findings, the story editor's verdict, the
+editor's decisions and notes on it, the units and their claims. The prompt
+explicitly permits substantial restructuring — reorder, merge or split,
+remove, replace sequences with listed units (reserve units included), change
+the narrative mode or POV where justified, strengthen the human stakes or
+emotional centre, change the central question, rethink the opening — and
+requires a change log: a summary, each change with its area, what and why,
+and what was deliberately kept. Both reviewers then run again on the revision
+and are told it is one, with the brief.
+
+**What changed is measured, not taken on trust.** Code compares the final
+revision with its base (`diffArchitectures`): units added, removed,
+reordered, merged into one sequence or split apart; sequence count; opening;
+central question; narrative mode; POV; logline; human stakes; cast; runtime;
+beats; reconstruction level; and `substantial` (any structural change, new
+opening, mode, POV or central question). Two checks are added to the gate,
+both warnings: `revision_explained` (the architect gave a change log) and
+`revision_brief` (an aspect the editor ticked shows no measurable change —
+mapped heuristically, e.g. OPENING → the first sequence's units or opening
+beat; PACING → structure, runtime or beat count). The editor sees the brief,
+the architect's account and the measured changes side by side.
+
+**Versions are never overwritten.** A revision is always a new version
+(`revision_of_id` → the base; `content.provenance` = kind, base, brief,
+aspects, angle, change log, diff, reserve keys). The base is never modified.
+A revision that passes its gate supersedes the DRAFT / IN_REVIEW versions as
+a new build does; one that fails is saved as a DRAFT, the project is FAILED,
+and the base keeps its status (the error says so: "Architecture v1 is
+unchanged (IN_REVIEW)"). An approved base stays APPROVED while its revision
+is in review; approving the revision supersedes it (kept, with an
+`ARCHITECTURE_SUPERSEDED` event). Events: `ARCHITECTURE_REVISION_REQUESTED`
+(with the brief), `ARCHITECTURE_SUPERSEDED`.
+
+**Alternative angles.** One call proposes 2–3 *materially different* treatments
+of the same units (title, logline, central question, emotional centre, human
+anchor, narrative mode, POV, opening with its information class, movements
+over unit keys, resolution, units left out with reasons, strengths, risks).
+The rules (`buildAngles`) then: keep only the pool's units (an angle telling
+fewer than two is removed); label the opening honestly (second person →
+RECONSTRUCTION; DOCUMENTED needs ESTABLISHED claims, otherwise UNCERTAIN);
+derive the angle's claims from its units and compute its historical status
+and confidence; remove an angle with a figure or year outside those claims,
+a dossier person outside the units, an unknown name, or an unverified
+quotation; flag a HIGH-priority unit left out. **Materially different** means
+at least two core differences among narrative mode, POV, opening and human
+anchor — or one, plus a different central question and structure; an angle
+too close to one already kept (or to the architecture it is an alternative
+to, `basedOnVersion`) is removed with the reason. At most `count` are kept,
+keyed A1…; each pair's differences are recorded. Fewer than two surviving
+angles fail the side job (the exploration is still saved for inspection; the
+project is unaffected).
+
+**Developing an angle.** During selection, `POST …/story/architecture
+{ angle: { exploration, key } }` builds a new architecture on it (the pool
+includes reserve units); in review or after approval the angle goes with a
+revision. Either way the architecture records `exploration_id` / `angle_key`
+and `provenance.angle`, and the exploration shows which versions developed
+which angle. An exploration from an earlier pack can be read, not developed.
+
+**Prompts and checkpoints.** `PROMPT_VERSION` is `story-2.1-2026-10-04.1`:
+saved story checkpoints from earlier prompt versions are not reused. Prompts
+still use generic illustrations only.
+
+**Cost.** A revision makes the same four calls as an architecture (architect
+→ revise, story editor, fact checker, opportunities); an exploration makes
+one. `STORY_MAX_COST_USD` caps each job.
+
+**Limits (heuristics, stated honestly).** "Materially different" compares
+enum fields exactly and free text by word overlap (`titleSimilarity`); two
+angles that differ in substance but share wording could be judged too close,
+and two that differ only in labels pass — the editor compares them. The
+brief-coverage check maps checklist aspects to measurable changes; an aspect
+can be answered by a subtler change (tone within the same structure) that it
+cannot see, which is why it only warns. A revision cannot add research: if
+the brief needs facts the dossier does not have, the architect can only say
+so (or leave it), and new evidence means a new research pass. After a failed
+revision the project is FAILED; the way back is to retry, revise again, or go
+back to the selection — there is no "return to reviewing vN" action yet.
+
+## 15. Decisions
 
 | # | Decision | Why | Alternative |
 |---|---|---|---|
@@ -762,3 +891,11 @@ cites claims; classes are checked) and on the reviewers and the editor.
 | D41 | Opportunities name beat ids and store claim links (rows) | Short → beats → claims → sources stays traceable, and FK links cannot dangle | Free-text references |
 | D42 | The content package endpoint is read-only and API-first | The production layer does not exist yet; fixing the request shape now lets production implement it later without UI work | Generate shorts now (out of scope) |
 | D43 | Generic illustrations only in production prompts | Editor's decision: no topic facts may leak into other documentaries | Topic examples |
+| D44 | Revisions reuse the STORY_ARCHITECTURE job and pipeline; the brief and checklist are its input | One code path for building and checking an architecture: the same rules, both reviewers and the gate apply to every version, so a revision cannot skip a check | A separate revision stage |
+| D45 | A revision is always a new version linked to its base (`revision_of_id`, provenance); it supersedes only if it passes its gate | "Never silently overwrite the previous architecture"; a failed revision must not cost the editor the version they were reviewing | Edit in place, or supersede on start |
+| D46 | Approving a version supersedes the earlier approved one (kept, event) | One approved architecture at a time keeps the content package and later stages unambiguous; nothing is deleted | Several approved versions |
+| D47 | Revisions and angles may use units the editor approved but did not select ("reserve"); plain builds do not | Replacing a sequence needs somewhere to go inside the editor's own decisions; unapproved or rejected units stay out | Selection only (restructuring could only cut), or the whole pack |
+| D48 | The architect's change log is shown next to a diff computed by code; unaddressed aspects warn, never fail | The model's account can overstate what changed; measuring it gives the editor a check, and a subtle change may still answer the brief | Trust the change log; fail on unaddressed aspects |
+| D49 | Alternative angles are a side job with its own table (`story_explorations`), not a phase | Exploring must not move the project or invalidate the version under review; angles are treatments to compare, not architectures | A phase between selection and architecture |
+| D50 | "Materially different" is a deterministic rule over mode, POV, opening, human anchor, question and structure | A model asked for three angles can return one film three times; a rule makes "different" checkable and the reasons visible | Trust the model |
+| D51 | Opportunity decisions follow the latest architecture that passed its gate | A failed revision's draft must not lock the opportunities of the version still under review | The latest version, whatever its status |

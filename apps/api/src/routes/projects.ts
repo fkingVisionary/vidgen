@@ -37,6 +37,9 @@ export async function projectRoutes(app: FastifyInstance, c: AppContainer): Prom
   app.post('/api/projects/:id/jobs', async (req, reply) => {
     const project = await requireProject(req.params);
     const input = EnqueueJobInput.parse(req.body ?? {});
+    // Revisions and angle explorations have their own routes: they check the base version, the angle and the pack, and record the brief.
+    if (input.type === 'STORY_ANGLES') throw new ConflictError('Use POST /api/projects/:id/story/angles to explore alternative angles');
+    if (input.type === 'STORY_ARCHITECTURE' && input.input?.revise !== undefined) throw new ConflictError('Use POST /api/projects/:id/story/architecture/revise to revise an architecture');
     // The real architecture stage needs a selection of 5–10 units: say so now rather than fail the job.
     if (input.type === 'STORY_ARCHITECTURE' && c.realStages.includes('STORY_ARCHITECTURE')) {
       const problem = await architecturePreflight(c.db, project.id);

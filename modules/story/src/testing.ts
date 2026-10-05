@@ -22,7 +22,20 @@ import type { Database } from '@docengine/database';
 import { ProviderError } from '@docengine/providers';
 import type { AIProvider, ObjectGenerationRequest, ObjectGenerationResult, ProviderInfo, TextGenerationResult } from '@docengine/providers';
 import type { EvidenceInput } from './evidence.ts';
-import type { ArchitectOutput, ArchitectSequence, ArchitectureReviewOutput, CriticOutput, MinedCandidate, MiningOutput, OpportunityOutput, SelectionOutput, StoryEditorOutput, SupportVerdict } from './schemas.ts';
+import type {
+  AnglesOutput,
+  ArchitectOutput,
+  ArchitectRevisionOutput,
+  ArchitectSequence,
+  ArchitectureReviewOutput,
+  CriticOutput,
+  MinedCandidate,
+  MiningOutput,
+  OpportunityOutput,
+  SelectionOutput,
+  StoryEditorOutput,
+  SupportVerdict,
+} from './schemas.ts';
 
 // ── Synthetic dossier ────────────────────────────────────────────────────────
 
@@ -285,6 +298,8 @@ export interface FakeUnit {
   key: string;
   claims: string[];
   characters: { name: string; kind: CharacterKind }[];
+  /** Approved by the editor but not selected (shown to revisions and angles). */
+  reserve?: boolean;
 }
 
 export interface FakeArchitectOptions {
@@ -469,12 +484,15 @@ export function fakeArchitectOutput(units: readonly FakeUnit[], verdictOf: (clai
 
 /** The units of an architect prompt ("## S03 · … — title [TYPE]", "characters: …", "claims: …"). */
 export function parseFakeUnits(prompt: string): FakeUnit[] {
-  const section = prompt.slice(prompt.indexOf('# Selected story units'), prompt.indexOf('# Story evidence'));
+  const start = ['# Selected story units', '# Story units you may use', '# Story units ('].map((h) => prompt.indexOf(h)).find((i) => i >= 0) ?? -1;
+  const end = ['# Story evidence', '# Evidence'].map((h) => prompt.indexOf(h, start)).find((i) => i >= 0) ?? prompt.length;
+  const section = start >= 0 ? prompt.slice(start, end) : '';
   return section
     .split(/^## /m)
     .slice(1)
     .map((block) => ({
       key: /^(S\d+)/.exec(block)?.[1] ?? '',
+      reserve: /^S\d+ · approved by the editor, not selected/.test(block),
       claims: (/^claims: (.*)$/m.exec(block)?.[1] ?? '').split(', ').filter(Boolean),
       characters: (/^characters: (.*)$/m.exec(block)?.[1] ?? '')
         .split('; ')
@@ -573,6 +591,155 @@ export function fakeOpportunities(arch: ShownArchitecture): OpportunityOutput['o
   ];
 }
 
+// ── Scripted revision ────────────────────────────────────────────────────────
+
+export interface FakeRevisionOptions {
+  /** The revision's unit order (default: the base's units reversed; reserve units unused). */
+  order?: (baseKeys: string[], reserveKeys: string[]) => string[];
+  /** Pairs of units told together in one sequence. */
+  merge?: [string, string][];
+  narrativeMode?: ArchitectOutput['narrativeMode'];
+  pov?: ArchitectOutput['povStrategy'];
+  centralQuestion?: string;
+  /** Change nothing: return the base as it was. */
+  unchanged?: boolean;
+  /** Change the output at will (the last step), e.g. to break an evidence rule. */
+  transform?: (out: ArchitectRevisionOutput) => ArchitectRevisionOutput;
+}
+
+/** Questions, objects and transitions threaded through the sequences again after a restructure. */
+function rethread(sequences: ArchitectSequence[]): void {
+  sequences.forEach((s, i) => {
+    const n = i + 1;
+    const last = n === sequences.length;
+    s.continuity = {
+      carriesIn: n > 1 ? ['the unsettled contracts'] : [],
+      carriesOut: last ? [] : ['the unsettled contracts'],
+      opens: [{ id: `Q${n}`, question: 'What will it cost them (test)?' }],
+      resolves: [...(n > 1 ? [`Q${n - 1}`] : []), ...(last ? [`Q${n}`, 'Q0'] : [])],
+      timeJump: 'NONE',
+    };
+    s.transition = last ? '' : 'From here the story moves on (test).';
+  });
+}
+
+/** The base architecture a revision prompt shows (beat ids included). */
+function shownBase(prompt: string): ShownArchitecture | null {
+  const json = /^# Architecture v\d+ \([A-Z_]+\) — the version to revise[^\n]*\n(\{[\s\S]*?\})\n\n/m.exec(prompt)?.[1];
+  return json ? (JSON.parse(json) as ShownArchitecture) : null;
+}
+
+/**
+ * A rule-abiding revision of the base in a revision prompt. By default a
+ * substantial one: the units in reverse order, an investigation told by an
+ * investigator, a new central question, logline and opening.
+ */
+export function fakeRevision(prompt: string, verdictOf: (claimKey: string) => ClaimVerdict | undefined, o: FakeRevisionOptions = {}): ArchitectRevisionOutput {
+  const base = shownBase(prompt);
+  if (!base) throw new Error('fake AI: no base architecture in the revision prompt');
+  const units = parseFakeUnits(prompt);
+  const baseKeys: string[] = [];
+  for (const sq of base.sequences) for (const k of sq.candidateKeys) if (!baseKeys.includes(k)) baseKeys.push(k);
+  const total = base.sequences.reduce((n, sq) => n + sq.estimatedDurationSec, 0);
+  if (o.unchanged) {
+    const same: ArchitectRevisionOutput = { ...base, sequences: base.sequences.map((sq) => ({ ...sq, beats: sq.beats.map(({ id: _id, ...b }) => b) })), changeLog: { summary: 'Nothing needed changing (test).', changes: [], kept: ['Everything (test).'] } };
+    return o.transform ? o.transform(same) : same;
+  }
+  const order = o.order ? o.order(baseKeys, units.filter((u) => u.reserve).map((u) => u.key)) : [...baseKeys].reverse();
+  const used = order.map((k) => units.find((u) => u.key === k)).filter((u): u is FakeUnit => u !== undefined);
+  const out = fakeArchitectOutput(used, verdictOf, {});
+  for (const [a, b] of o.merge ?? []) {
+    const sa = out.sequences.find((sq) => sq.candidateKeys.includes(a));
+    const sb = out.sequences.find((sq) => sq.candidateKeys.includes(b));
+    if (!sa || !sb || sa === sb) continue;
+    sa.title = `The story of ${a} and ${b}`;
+    sa.candidateKeys = [...sa.candidateKeys, ...sb.candidateKeys];
+    sa.beats = [...sa.beats, ...sb.beats.slice(1)];
+    sa.claimKeys = [...new Set([...sa.claimKeys, ...sb.claimKeys])];
+    sa.presentation = [...sa.presentation, ...sb.presentation.filter((p) => !sa.presentation.some((x) => x.claimKey === p.claimKey))];
+    out.sequences = out.sequences.filter((sq) => sq !== sb);
+  }
+  rethread(out.sequences);
+  for (const sq of out.sequences) sq.estimatedDurationSec = Math.round(total / out.sequences.length);
+  const dropped = baseKeys.filter((k) => !order.includes(k));
+  const revised: ArchitectRevisionOutput = {
+    ...out,
+    logline: 'A trade in promises, told as an investigation into who was left holding them (revised, test).',
+    centralQuestion: o.centralQuestion ?? 'Who was left holding the promises (revised, test)?',
+    centralHumanStakes: 'Their savings, and who would be blamed (revised, test).',
+    narrativeMode: o.narrativeMode ?? 'INVESTIGATION',
+    secondaryModes: ['COURTROOM_DISPUTE'],
+    povStrategy: o.pov ?? { type: 'INVESTIGATOR', description: 'The narrator opens the files one by one (revised, test).' },
+    unusedCandidates: dropped.map((k) => ({ candidateKey: k, reason: 'Folded into the investigation (test).' })),
+    changeLog: {
+      summary: 'Restructured as an investigation that opens on the outcome and works back (test).',
+      changes: [
+        { area: 'STRUCTURE', what: 'Reversed the order of the units (test).', why: 'The editor found the chronology slow (test).' },
+        { area: 'OPENING', what: 'Opens on the last turn of events (test).', why: 'A stronger hook, as the brief asks (test).' },
+        { area: 'POV', what: 'An investigator replaces the viewer as guide (test).', why: 'The brief asks for a clearer point of view (test).' },
+        { area: 'CENTRAL_QUESTION', what: 'A new central question (test).', why: 'It carries the investigation (test).' },
+      ],
+      kept: ['Every claim and its presentation (test).'],
+    },
+  };
+  return o.transform ? o.transform(revised) : revised;
+}
+
+// ── Scripted angles ──────────────────────────────────────────────────────────
+
+/** Three materially different approaches to the units in an angles prompt. */
+export function fakeAngles(prompt: string): AnglesOutput['angles'] {
+  const keys = parseFakeUnits(prompt).filter((u) => !u.reserve).map((u) => u.key);
+  const chunk = (ks: string[]) => ks.reduce<string[][]>((acc, k, i) => (i % 2 === 0 ? [...acc, [k]] : (acc.at(-1)!.push(k), acc)), []);
+  const movements = (ks: string[], what: string) => chunk(ks).map((g, i) => ({ title: `Movement ${i + 1} (test)`, unitKeys: g, what }));
+  const rotated = [...keys.slice(2), ...keys.slice(0, 2)];
+  const common = { secondaryModes: [] as AnglesOutput['angles'][number]['secondaryModes'], unusedUnits: [], strengths: ['A clear human anchor (test).'], risks: ['Leans on contested material, which must stay contested (test).'] };
+  return [
+    {
+      ...common,
+      title: 'The investigation (test)',
+      logline: 'The legend is tested against the record, one file at a time (test).',
+      centralQuestion: 'What does the record really show (test)?',
+      emotionalCentre: 'doubt giving way to discovery (test)',
+      humanAnchor: 'the narrator as investigator (test)',
+      narrativeMode: 'INVESTIGATION',
+      povStrategy: { type: 'INVESTIGATOR', description: 'The narrator opens the files (test).' },
+      opening: { concept: 'A ledger page with a gap in it (test).', basis: 'RECONSTRUCTION', unitKey: keys.at(-1)! },
+      movements: movements([...keys].reverse(), 'The record is examined (test).'),
+      resolution: 'The record answers the legend (test).',
+      differs: 'Works backwards from the legend (test).',
+    },
+    {
+      ...common,
+      title: 'Follow the traders (test)',
+      logline: 'The traders who signed the contracts, from hope to reckoning (test).',
+      centralQuestion: 'What did the traders stand to lose when the buyers stopped coming (test)?',
+      emotionalCentre: 'hope turning into fear (test)',
+      humanAnchor: 'the traders who signed the contracts (test)',
+      narrativeMode: 'CHARACTER_FOLLOW',
+      povStrategy: { type: 'CHARACTER_FOLLOW', description: 'The camera stays with the traders (test).' },
+      opening: { concept: 'Traders crowd a room as a contract is signed (test).', basis: 'RECONSTRUCTION', unitKey: keys[0]! },
+      movements: movements(keys, 'The traders act and pay for it (test).'),
+      resolution: 'The reckoning, as the record shows it (test).',
+      differs: 'Stays with the people inside the trade (test).',
+    },
+    {
+      ...common,
+      title: 'The last days (test)',
+      logline: 'A countdown to the day the buyers stopped coming (test).',
+      centralQuestion: 'How long until the bidding stops (test)?',
+      emotionalCentre: 'mounting dread shared with the viewer (test)',
+      humanAnchor: 'you, a newcomer standing among the buyers (test)',
+      narrativeMode: 'COUNTDOWN',
+      povStrategy: { type: 'VIEWER_POV', description: 'You are placed in the room (test).' },
+      opening: { concept: 'You arrive as the bidding begins (test).', basis: 'RECONSTRUCTION', unitKey: keys[1]! },
+      movements: movements(rotated, 'The clock runs down (test).'),
+      resolution: 'The day it ends, and what came after (test).',
+      differs: 'Races against a known end (test).',
+    },
+  ];
+}
+
 // ── Fake AI ──────────────────────────────────────────────────────────────────
 
 export class FakeStoryAI implements AIProvider {
@@ -601,6 +768,10 @@ export class FakeStoryAI implements AIProvider {
   /** Picks the proposed selection from the ranked keys. */
   selectKeys: (keys: string[]) => string[] = (keys) => [...keys.slice(0, 7), 'S99'];
   architectOptions: FakeArchitectOptions = {};
+  /** How the architect revises an architecture (story.revise). */
+  revisionOptions: FakeRevisionOptions = {};
+  /** The angles the fake proposes for an angles prompt (default: three materially different ones). */
+  angles: (prompt: string) => AnglesOutput['angles'] = fakeAngles;
   /** The story editor's revision of the draft (default: none). */
   storyEditorRevision: ((draft: ShownArchitecture) => ShownArchitecture | null) | null = null;
   /** The story editor's answers to the quality-bar questions (default: all pass). */
@@ -692,6 +863,13 @@ export class FakeStoryAI implements AIProvider {
         const verdicts = new Map([...user.matchAll(/(C\d+) ([A-Z]+) → [A-Z_]+/g)].map((m) => [m[1]!, m[2] as ClaimVerdict]));
         return fakeArchitectOutput(parseFakeUnits(user), (k) => verdicts.get(k), this.architectOptions);
       }
+      case 'story.revise': {
+        const verdicts = new Map([...user.matchAll(/(C\d+) ([A-Z]+) → [A-Z_]+/g)].map((m) => [m[1]!, m[2] as ClaimVerdict]));
+        return fakeRevision(user, (k) => verdicts.get(k), this.revisionOptions);
+      }
+      case 'story.angles':
+        // All of them, whatever count was asked for: the rules keep at most that many.
+        return { angles: this.angles(user) } satisfies AnglesOutput;
       case 'story.storyEditor':
         return this.storyEditor(user);
       case 'story.review':

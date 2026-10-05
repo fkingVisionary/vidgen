@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { JOB_TYPES, PROJECT_STATUSES, type ProjectStatus } from './enums.ts';
 import {
+  SIDE_JOBS,
   STATUS_DEFINITIONS,
   assertTransition,
   canTransition,
   forwardStatus,
   getAvailableActions,
   getTransitionKind,
+  isSideJob,
   jobPhase,
   resolveApproval,
   resolveEnqueue,
@@ -24,12 +26,32 @@ describe('pipeline definition', () => {
     expect(walked).toEqual(HAPPY_PATH);
   });
 
-  it('assigns every job type to exactly one status', () => {
+  it('assigns every phase job type to exactly one status, and side jobs to none', () => {
     for (const type of JOB_TYPES) {
       const owners = PROJECT_STATUSES.filter((s) => STATUS_DEFINITIONS[s].jobs.includes(type));
+      if (isSideJob(type)) {
+        expect(owners, type).toEqual([]);
+        expect(() => jobPhase(type)).toThrow(/side job/);
+        continue;
+      }
       expect(owners, type).toHaveLength(1);
       expect(jobPhase(type)).toBe(owners[0]);
     }
+  });
+
+  it('runs story angles as a side job in the story statuses, without starting or advancing anything', () => {
+    expect(SIDE_JOBS.STORY_ANGLES).toEqual(['STORY_SELECTION', 'STORY_REVIEW', 'STORY_APPROVED']);
+    for (const s of ['STORY_SELECTION', 'STORY_REVIEW', 'STORY_APPROVED'] as const) {
+      expect(resolveEnqueue(s, 'STORY_ANGLES')).toEqual({ ok: true, enterStatus: null });
+      expect(getAvailableActions(s).sideJobs).toEqual(['STORY_ANGLES']);
+      expect(getAvailableActions(s).runnableJobs).not.toContain('STORY_ANGLES');
+    }
+    for (const s of ['RESEARCH_COMPLETE', 'STORY_MINING', 'STORY_ARCHITECTING', 'SCRIPT_DRAFT', 'FAILED'] as const) {
+      expect(resolveEnqueue(s, 'STORY_ANGLES').ok, s).toBe(false);
+      expect(getAvailableActions(s).sideJobs).toEqual([]);
+    }
+    // The architecture still starts from the selection as before.
+    expect(resolveEnqueue('STORY_SELECTION', 'STORY_ARCHITECTURE')).toEqual({ ok: true, enterStatus: 'STORY_ARCHITECTING' });
   });
 
   it('gives every non-FAILED status a dashboard stage', () => {

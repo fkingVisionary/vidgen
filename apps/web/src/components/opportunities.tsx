@@ -83,7 +83,7 @@ export function OpportunitiesTab({ projectId, architecture: a, latest }: { proje
           </label>
         </div>
       )}
-      {!decidable && all.length > 0 && <p className="text-xs text-stone-500">Read only: opportunities are decided on the latest architecture while it is in review or approved.</p>}
+      {!decidable && all.length > 0 && <p className="text-xs text-stone-500">Read only: opportunities are decided on the latest architecture that passed its gate, while it is in review or approved.</p>}
       {list.map((o) => (
         <OpportunityCard key={o.id} opportunity={o} architecture={a} sources={sources} decidable={decidable} />
       ))}

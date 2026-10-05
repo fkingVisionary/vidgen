@@ -2,6 +2,8 @@ import {
   AnyStoryArchitectureContent,
   AnyStoryScores,
   CandidateOverrides,
+  SIDE_JOBS,
+  StoryExplorationContent,
   ContentOpportunityContent,
   HumanStakes,
   MythThread,
@@ -18,16 +20,21 @@ import {
   type ContentPackageView,
   type ProjectStatus,
   type StoryArchitectureSummaryView,
+  type AngleRef,
+  type JobType,
   type StoryArchitectureView,
   type StoryCandidateView,
+  type StoryEditorialActions,
   type StoryEngineVersion,
+  type StoryExplorationSummaryView,
+  type StoryExplorationView,
   type StoryEvidenceView,
   type StoryPackSummaryView,
   type StoryPackView,
   type StorySummaryView,
   type StoryView,
 } from '@docengine/core';
-import type { ContentOpportunity, Database, StoryArchitecture, StoryPack } from '@docengine/database';
+import type { ContentOpportunity, Database, StoryArchitecture, StoryExploration, StoryPack } from '@docengine/database';
 import { EvidenceBase } from '@docengine/story';
 import { z } from 'zod';
 import { jobCost, toClaimView } from './research-views.ts';
@@ -65,12 +72,19 @@ function packSummary(p: StoryPack & { _count: { candidates: number } }, selected
   };
 }
 
-function architectureSummary(a: StoryArchitecture & { pack: { version: number } | null }, counts: OpportunityCounts): StoryArchitectureSummaryView {
+type ArchitectureRow = StoryArchitecture & { pack: { version: number } | null; revisionOf: { version: number } | null; exploration: { version: number } | null };
+const ARCHITECTURE_INCLUDE = { pack: { select: { version: true } }, revisionOf: { select: { version: true } }, exploration: { select: { version: true } } } as const;
+
+function architectureSummary(a: ArchitectureRow, counts: OpportunityCounts): StoryArchitectureSummaryView {
   const content = AnyStoryArchitectureContent.safeParse(a.content);
+  const provenance = content.success && 'engineVersion' in content.data ? content.data.provenance : null;
   return {
     id: a.id,
     version: a.version,
     engineVersion: engine(a.engineVersion),
+    origin: a.revisionOfId ? 'REVISION' : 'NEW',
+    revisionOfVersion: a.revisionOf?.version ?? null,
+    angle: a.exploration && a.angleKey ? { explorationVersion: a.exploration.version, key: a.angleKey, title: provenance?.angle?.title ?? '' } : null,
     opportunities: counts,
     status: a.status,
     qualityPassed: a.qualityPassed,
@@ -119,27 +133,35 @@ async function evidenceFor(db: Database, dossierId: string, keys: readonly strin
 
 export async function loadStoryView(
   db: Database,
-  project: { id: string; status: ProjectStatus },
-  opts: { pack?: number; architecture?: number } = {},
+  project: { id: string; status: ProjectStatus; failedFromStatus?: ProjectStatus | null },
+  opts: { pack?: number; architecture?: number; exploration?: number } = {},
+  realStages: readonly JobType[] = ['STORY_ARCHITECTURE', 'STORY_ANGLES'],
 ): Promise<StoryView | null> {
-  const [packs, counts, architectures, oppCounts] = await Promise.all([
+  const [packs, counts, architectures, oppCounts, explorations] = await Promise.all([
     db.storyPack.findMany({ where: { projectId: project.id }, orderBy: { version: 'desc' }, include: { _count: { select: { candidates: true } } } }),
     selectedCounts(db, project.id),
-    db.storyArchitecture.findMany({ where: { projectId: project.id }, orderBy: { version: 'desc' }, include: { pack: { select: { version: true } } } }),
+    db.storyArchitecture.findMany({ where: { projectId: project.id }, orderBy: { version: 'desc' }, include: ARCHITECTURE_INCLUDE }),
     opportunityCounts(db, project.id),
+    db.storyExploration.findMany({ where: { projectId: project.id }, orderBy: { version: 'desc' }, include: { pack: { select: { version: true } }, basedOn: { select: { version: true } } } }),
   ]);
   const chosenPack = opts.pack === undefined ? packs[0] : packs.find((p) => p.version === opts.pack);
   const chosenArch = opts.architecture === undefined ? architectures[0] : architectures.find((a) => a.version === opts.architecture);
-  if ((opts.pack !== undefined && !chosenPack) || (opts.architecture !== undefined && !chosenArch)) return null;
+  const chosenExploration = opts.exploration === undefined ? explorations[0] : explorations.find((e) => e.version === opts.exploration);
+  if ((opts.pack !== undefined && !chosenPack) || (opts.architecture !== undefined && !chosenArch) || (opts.exploration !== undefined && !chosenExploration)) return null;
 
   const pack = chosenPack ? await loadPack(db, chosenPack, counts.get(chosenPack.id) ?? 0) : null;
   const architecture = chosenArch ? await loadArchitecture(db, chosenArch, oppCounts.get(chosenArch.id) ?? NO_OPPORTUNITIES) : null;
   const count = pack?.candidates.filter((c) => c.selected && c.status !== 'REJECTED').length ?? 0;
+  const editorial = await editorialActions(db, project, packs[0] ?? null, architectures, realStages);
+  const exploration = chosenExploration ? await loadExploration(db, chosenExploration, editorial.poolKeys, architectures) : null;
   return {
     packs: packs.map((p) => packSummary(p, counts.get(p.id) ?? 0)),
     pack,
     architectures: architectures.map((a) => architectureSummary(a, oppCounts.get(a.id) ?? NO_OPPORTUNITIES)),
     architecture,
+    explorations: explorations.map(explorationSummary),
+    exploration,
+    editorial,
     editable: project.status === 'STORY_SELECTION' && chosenPack !== undefined && chosenPack.id === packs[0]?.id && chosenPack.status === 'IN_REVIEW',
     selection: { count, min: STORY_LIMITS.selection.min, max: STORY_LIMITS.selection.max, problem: pack ? selectionProblem(count) : 'No story pack yet' },
   };
@@ -298,7 +320,7 @@ async function opportunitiesOf(db: Database, architectureId: string): Promise<Co
   return rows.map(toOpportunityView);
 }
 
-async function loadArchitecture(db: Database, a: StoryArchitecture & { pack: { version: number } | null }, counts: OpportunityCounts): Promise<StoryArchitectureView> {
+async function loadArchitecture(db: Database, a: ArchitectureRow, counts: OpportunityCounts): Promise<StoryArchitectureView> {
   const parsedContent = AnyStoryArchitectureContent.safeParse(a.content);
   const content = parsedContent.success ? parsedContent.data : null;
   const report = QualityReport.safeParse(a.qualityReport);
@@ -336,7 +358,7 @@ async function loadArchitecture(db: Database, a: StoryArchitecture & { pack: { v
 export async function loadStorySummary(db: Database, projectId: string): Promise<StorySummaryView> {
   const [pack, architecture] = await Promise.all([
     db.storyPack.findFirst({ where: { projectId }, orderBy: { version: 'desc' }, include: { _count: { select: { candidates: true } } } }),
-    db.storyArchitecture.findFirst({ where: { projectId }, orderBy: { version: 'desc' }, include: { pack: { select: { version: true } } } }),
+    db.storyArchitecture.findFirst({ where: { projectId }, orderBy: { version: 'desc' }, include: ARCHITECTURE_INCLUDE }),
   ]);
   const selected = pack ? await db.storyCandidate.count({ where: { packId: pack.id, selected: true, status: { not: 'REJECTED' } } }) : 0;
   const counts = architecture ? ((await opportunityCounts(db, projectId)).get(architecture.id) ?? NO_OPPORTUNITIES) : NO_OPPORTUNITIES;
@@ -399,4 +421,94 @@ export async function loadContentPackage(db: Database, project: { id: string; ma
     generated: false,
     notes,
   };
+}
+
+// ── Editorial revision loop and alternative angles ───────────────────────────
+
+type ExplorationRow = StoryExploration & { pack: { version: number }; basedOn: { version: number } | null };
+
+function explorationSummary(e: ExplorationRow): StoryExplorationSummaryView {
+  const content = StoryExplorationContent.safeParse(e.content);
+  return {
+    id: e.id,
+    version: e.version,
+    packVersion: e.pack.version,
+    basedOnVersion: e.basedOn?.version ?? null,
+    angleCount: content.success ? content.data.angles.length : 0,
+    qualityPassed: e.qualityPassed,
+    createdAt: e.createdAt.toISOString(),
+  };
+}
+
+async function loadExploration(db: Database, e: ExplorationRow, poolKeys: readonly string[], architectures: readonly ArchitectureRow[]): Promise<StoryExplorationView> {
+  const content = parsed(StoryExplorationContent, e.content);
+  const report = QualityReport.safeParse(e.qualityReport);
+  const pack = await db.storyPack.findUniqueOrThrow({ where: { id: e.packId }, select: { dossierId: true } });
+  const [cost, evidence] = await Promise.all([jobCost(db, e.jobId), evidenceFor(db, pack.dossierId, content?.angles.flatMap((a) => a.claimKeys) ?? [], [])]);
+  const pool = content?.poolKeys ?? [];
+  return {
+    ...explorationSummary(e),
+    content,
+    qualityReport: report.success ? report.data : null,
+    notes: e.notes,
+    stats: (e.stats ?? {}) as Record<string, unknown>,
+    cost,
+    poolChanged: pool.length !== poolKeys.length || pool.some((k) => !poolKeys.includes(k)),
+    developed: architectures.filter((a) => a.explorationId === e.id && a.angleKey).map((a) => ({ key: a.angleKey!, architectureVersion: a.version })),
+    evidence,
+  };
+}
+
+/** What the editor can do with the architecture now: reconsider a version, explore angles — and the units either may use. */
+async function editorialActions(
+  db: Database,
+  project: { id: string; status: ProjectStatus; failedFromStatus?: ProjectStatus | null },
+  latestPack: StoryPack | null,
+  architectures: readonly ArchitectureRow[],
+  realStages: readonly JobType[],
+): Promise<StoryEditorialActions> {
+  const pool = latestPack
+    ? await db.storyCandidate.findMany({
+        where: { packId: latestPack.id, status: { not: 'REJECTED' }, OR: [{ selected: true }, { status: 'APPROVED' }] },
+        orderBy: { rank: 'asc' },
+        select: { candidateKey: true, selected: true },
+      })
+    : [];
+  const selected = pool.filter((c) => c.selected).length;
+  const packProblem = !latestPack
+    ? 'No story pack yet: run Story Mining first'
+    : latestPack.status !== 'IN_REVIEW' && latestPack.status !== 'APPROVED'
+      ? `Story pack v${latestPack.version} is ${latestPack.status}`
+      : selectionProblem(selected);
+  const canRevise = ['STORY_SELECTION', 'STORY_REVIEW', 'STORY_APPROVED'].includes(project.status) || (project.status === 'FAILED' && project.failedFromStatus === 'STORY_ARCHITECTING');
+  const ofPack = architectures.filter((a) => a.packId === latestPack?.id);
+  const reviseReason = !realStages.includes('STORY_ARCHITECTURE')
+    ? 'Story architecture is a MOCK stage here: revisions need the real story engine'
+    : !canRevise
+      ? `Not while the project is in ${project.status}`
+      : packProblem ?? (ofPack.length === 0 ? 'No architecture of the current story pack to revise yet' : null);
+  const anglesReason = !realStages.includes('STORY_ANGLES')
+    ? 'Angle exploration needs the real story engine (it is a MOCK stage here)'
+    : !(SIDE_JOBS.STORY_ANGLES ?? []).includes(project.status)
+      ? `Not while the project is in ${project.status}`
+      : packProblem;
+  return {
+    revise: { allowed: reviseReason === null, reason: reviseReason },
+    angles: { allowed: anglesReason === null, reason: anglesReason },
+    poolKeys: pool.map((c) => c.candidateKey),
+    reserveKeys: pool.filter((c) => !c.selected).map((c) => c.candidateKey),
+  };
+}
+
+/** Why an architecture cannot be built on this explored angle of the current pack, or null. */
+export async function anglePreflight(db: Database, projectId: string, ref: AngleRef): Promise<string | null> {
+  const [exploration, latest] = await Promise.all([
+    db.storyExploration.findUnique({ where: { projectId_version: { projectId, version: ref.exploration } }, select: { packId: true, content: true } }),
+    db.storyPack.findFirst({ where: { projectId }, orderBy: { version: 'desc' }, select: { id: true } }),
+  ]);
+  if (!exploration) return `Angle exploration ${ref.exploration} does not exist`;
+  if (exploration.packId !== latest?.id) return `Angle exploration ${ref.exploration} was made from an earlier story pack`;
+  const content = StoryExplorationContent.safeParse(exploration.content);
+  if (!content.success || !content.data.angles.some((a) => a.key === ref.key)) return `Angle ${ref.key} is not in exploration ${ref.exploration}`;
+  return null;
 }

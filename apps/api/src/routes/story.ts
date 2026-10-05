@@ -1,10 +1,10 @@
-import { ContentPackageRequest, ReorderSelectionInput, StoryJobInput, UpdateContentOpportunityInput, UpdateStoryCandidateInput } from '@docengine/core';
+import { ContentPackageRequest, ExploreAnglesInput, ReorderSelectionInput, ReviseArchitectureInput, StoryJobInput, UpdateContentOpportunityInput, UpdateStoryCandidateInput } from '@docengine/core';
 import { ConflictError, NotFoundError } from '@docengine/pipeline';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { actorOf } from '../auth.ts';
 import type { AppContainer } from '../container.ts';
-import { architecturePreflight, loadContentPackage, loadStoryView, toOpportunityView } from '../story-views.ts';
+import { anglePreflight, architecturePreflight, loadContentPackage, loadStoryView, toOpportunityView } from '../story-views.ts';
 import { findProject, toJobView } from '../views.ts';
 
 const ProjectParams = z.object({ id: z.string().trim().min(1).max(100) });
@@ -31,21 +31,23 @@ export async function storyRoutes(app: FastifyInstance, c: AppContainer): Promis
     return project;
   };
 
-  /** Latest pack and architecture, or ?pack=N / ?architecture=M. */
+  /** Latest pack, architecture and angle exploration, or ?pack=N / ?architecture=M / ?exploration=E. */
   app.get('/api/projects/:id/story', async (req) => {
     const project = await requireProject(req.params);
-    const q = z.object({ pack: z.coerce.number().int().min(1).optional(), architecture: z.coerce.number().int().min(1).optional() }).parse(req.query ?? {});
-    const view = await loadStoryView(c.db, project, q);
-    if (!view) throw new NotFoundError('Story version', `${q.pack ?? ''}/${q.architecture ?? ''}`);
+    const q = z
+      .object({ pack: z.coerce.number().int().min(1).optional(), architecture: z.coerce.number().int().min(1).optional(), exploration: z.coerce.number().int().min(1).optional() })
+      .parse(req.query ?? {});
+    const view = await loadStoryView(c.db, project, q, c.realStages);
+    if (!view) throw new NotFoundError('Story version', `${q.pack ?? ''}/${q.architecture ?? ''}/${q.exploration ?? ''}`);
     return view;
   });
+  const fresh = (projectId: string) => c.db.project.findUniqueOrThrow({ where: { id: projectId }, select: { id: true, status: true, failedFromStatus: true } });
 
   /** The editor's decision on one candidate: status, selection, priority, notes, title, narrative mode, central question, POV. Returns the updated story view. */
   app.patch('/api/story-candidates/:id', async (req) => {
     const { id } = CandidateParams.parse(req.params);
     const updated = await c.projects.editStoryCandidate(id, UpdateStoryCandidateInput.parse(req.body ?? {}), actorOf(req));
-    const project = await c.db.project.findUniqueOrThrow({ where: { id: updated.projectId }, select: { id: true, status: true } });
-    return loadStoryView(c.db, project);
+    return loadStoryView(c.db, await fresh(updated.projectId), {}, c.realStages);
   });
 
   /**
@@ -67,8 +69,7 @@ export async function storyRoutes(app: FastifyInstance, c: AppContainer): Promis
   app.put('/api/projects/:id/story/selection-order', async (req) => {
     const project = await requireProject(req.params);
     await c.projects.reorderStorySelection(project.id, ReorderSelectionInput.parse(req.body ?? {}), actorOf(req));
-    const fresh = await c.db.project.findUniqueOrThrow({ where: { id: project.id }, select: { id: true, status: true } });
-    return loadStoryView(c.db, fresh);
+    return loadStoryView(c.db, await fresh(project.id), {}, c.realStages);
   });
 
   /** The editor's decision on one content opportunity: approve, reject (or back to proposed), notes. */
@@ -103,15 +104,39 @@ export async function storyRoutes(app: FastifyInstance, c: AppContainer): Promis
     return loadContentPackage(c.db, project, ContentPackageRequest.parse(req.body ?? {}));
   });
 
-  /** Generate the story architecture from the current selection (checked first: 5–10 units). */
+  /** Generate the story architecture from the current selection (checked first: 5–10 units), optionally on an explored angle. */
   app.post('/api/projects/:id/story/architecture', async (req, reply) => {
     const project = await requireProject(req.params);
     const input = StoryJobInput.parse(req.body ?? {});
+    if (input.revise) throw new ConflictError('Use POST /api/projects/:id/story/architecture/revise to revise an architecture');
     if (c.realStages.includes('STORY_ARCHITECTURE')) {
-      const problem = await architecturePreflight(c.db, project.id);
+      const problem = (await architecturePreflight(c.db, project.id)) ?? (input.angle ? await anglePreflight(c.db, project.id, input.angle) : null);
       if (problem) throw new ConflictError(problem);
     }
     const job = await c.projects.enqueueJob(project.id, { type: 'STORY_ARCHITECTURE', input }, actorOf(req));
+    return reply.code(202).send(toJobView(job));
+  });
+
+  /**
+   * Reconsider / revise an architecture: the architect revises version
+   * `baseVersion` from the editor's brief (what is not working), using only
+   * the story pack and the approved dossier; both reviewers run again; the
+   * result is a new version and every earlier version is kept.
+   */
+  app.post('/api/projects/:id/story/architecture/revise', async (req, reply) => {
+    const project = await requireProject(req.params);
+    const input = ReviseArchitectureInput.parse(req.body ?? {});
+    if (!c.realStages.includes('STORY_ARCHITECTURE')) throw new ConflictError('Story architecture is a MOCK stage here: revisions need the real story engine');
+    const job = await c.projects.reviseArchitecture(project.id, input, actorOf(req));
+    return reply.code(202).send(toJobView(job));
+  });
+
+  /** Explore 2–3 materially different narrative angles from the current story pack (a side job: the project's status does not change). */
+  app.post('/api/projects/:id/story/angles', async (req, reply) => {
+    const project = await requireProject(req.params);
+    const input = ExploreAnglesInput.parse(req.body ?? {});
+    if (!c.realStages.includes('STORY_ANGLES')) throw new ConflictError('Angle exploration needs the real story engine (it is a MOCK stage here)');
+    const job = await c.projects.exploreAngles(project.id, input, actorOf(req));
     return reply.code(202).send(toJobView(job));
   });
 }

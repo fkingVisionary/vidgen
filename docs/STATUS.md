@@ -1,9 +1,9 @@
 # Status — what exists, honestly
 
-Last updated: Story Engine 2.0 + content opportunity scaffolding — built and
-tested locally, **not deployed**, not yet run with the real model
-(2026-10-04). Milestone 3 (story engine 1) is deployed to Railway; story
-mining has run on the real dossier.
+Last updated: the editorial revision loop and alternative angles — built and
+tested locally with a scripted fake AI, **not yet run with the real model**
+(2026-10-05). Story Engine 2.0 is deployed to Railway (`a9f584f`) and the
+editor reports a successful first acceptance run with the real model.
 
 ## IMPLEMENTED (real, tested)
 
@@ -13,8 +13,8 @@ mining has run on the real dossier.
 | Domain model | Status machine (24 statuses, 7 transition kinds), pipeline table, stage derivation, progress, available actions | `packages/core/src/*.test.ts` |
 | Contracts | zod schemas: API inputs, story candidates and architecture (StoryCharacter, MythThread, StoryScores, StoryPackContent, StoryArchitectureContent), VoiceSettings, ShotDirection, QaFindings, InfographicSpec (mandatory source, finite numbers, approximate flags, reference checks) | `contracts.test.ts` |
 | Cost math | Usage × rate card in micro-dollars, unpriced-usage reporting, exact sums | `cost.test.ts` |
-| Database | Prisma 7 schema (27 tables, 33 enums), five migrations (initial; research engine; job checkpoint; story mining; story engine 2 — additive only), timestamptz, UUIDv7, cascade rules, enum parity test vs core | `enum-parity.test.ts`, integration tests; the story migration was applied by the production image to a database in the current production shape |
-| Project service | Create (with master language version), enqueue, retry, approve/reject/flag (artifact version linked: dossier, story architecture), rewind, restart a phase (rewind + enqueue), editor changes to story candidates; row-locked transactions; audit events; stale-job protection | `project-service.int.test.ts`, `runner.int.test.ts` |
+| Database | Prisma 7 schema (28 tables, 33 enums), six migrations (initial; research engine; job checkpoint; story mining; story engine 2; story revisions — the last three additive only), timestamptz, UUIDv7, cascade rules, enum parity test vs core | `enum-parity.test.ts`, integration tests; the story migration was applied by the production image to a database in the current production shape |
+| Project service | Create (with master language version), enqueue, retry, approve/reject/flag (artifact version linked: dossier, story architecture), rewind, restart a phase (rewind + enqueue), editor changes to story candidates, revise an architecture, explore angles (a side job that never moves the project); row-locked transactions; audit events; stale-job protection | `project-service.int.test.ts`, `runner.int.test.ts` |
 | Job system | Postgres queue (`SKIP LOCKED`), runner with concurrency, heartbeat, exponential backoff, non-retryable errors, abandoned-job recovery, shutdown release, provider-call ledger | `runner.int.test.ts` |
 | API | Fastify: health, projects (list/create/detail by id or slug), jobs (enqueue/get/retry), approvals, rewind; zod validation; error mapping; Basic auth; security headers; static dashboard + SPA fallback; graceful shutdown | `app.int.test.ts`, `env.test.ts`, manual SIGTERM test |
 | Dashboard shell | Project list (title, status, progress, runtime, created, updated), create form, project page (9 stages, next actions, approval gate with notes, rewind, jobs with retry and results, cost, approvals, activity), MOCK banner/badges, live polling | Browser E2E (Playwright/Chromium): full pipeline click-through, no console errors |
@@ -33,10 +33,13 @@ mining has run on the real dossier.
 | **Story architecture 2.0** (SE2) | Logline, central question (Q0), central human stakes, narrative mode(s), POV strategy, cast (real and fictional, declared), thesis, spine, resolution; sequences of beats labelled DOCUMENTED / RECONSTRUCTION / UNCERTAIN / FICTION with function, claims, cast present and planned speech; setting with its basis, visual thinking (environment, objects, actions, emotion, metaphor, must show with claims, must avoid, shot ideas), continuity (carries in/out, questions opened/resolved, time jumps), presentation instructions; reconstruction shares and level. Deterministic rules (≈ 45 finding kinds; ARCHITECTURE.md §13) enforce the classes, presentation (PROBABLE worded as a hedge), the fiction boundary, verified quotations, names/places/figures/dates, continuity, the editor's priorities and order. Story editor then fact checker, each revision kept only if it adds no evidence problems; warnings (reconstruction budget, fiction count, interiority, continuity threads) never fail the gate | `architecture.test.ts` (32 tests), `story.int.test.ts` (12 architecture tests) |
 | **Content opportunities** (SE2) | After a passed gate: LONG_FORM / SHORT / BOTH opportunities traced to beat ids, claims only from those beats or their sequences, no new figures/people/names/quotations, presentation copied from the architecture, ranked by short-form potential, at most 12, never padded; stored with claim links; approved or rejected one by one; `GET|POST /api/projects/:id/content-package` resolves the approved documentary + top N approved shorts (read only, `generated: false`, languages recorded only) | `opportunities.test.ts` (8 tests), `story.int.test.ts`, `app.int.test.ts` |
 | **Story API + dashboard 2.0** (SE2) | `PATCH /api/story-candidates/:id` also takes title / narrative mode / central question / POV (null restores the AI's), `PUT …/story/selection-order`, `PATCH /api/content-opportunities/:id`, content package; architecture job takes preferences. Story page: story value / historical value bars with reasons and the appeal formula, "why it is compelling", human stakes, labelled cold open, angle editor, selection order ▲▼, generation preferences, v2 architecture (cast with FICTIONAL badges, colour-coded beats, invented lines marked as fiction, setting, visual, continuity, presentation, reconstruction meter, the story editor's quality bar), Opportunities tab (filters, top N, approve/reject, traceability, package preview). Engine-1 packs and architectures still render | `app.int.test.ts` (2 SE2 tests incl. engine-1 records); Playwright at 412 px on fake-AI data: angle edit, reorder, architecture, opportunity approval, package preview, engine-1 pages — no horizontal overflow, no console errors |
+| **Editorial revision loop** (REV) | *Reconsider / Revise Architecture*: a checklist (angle, POV, emotional centre, opening, structure, pacing, narrative strategy, central question, human stakes) and a required brief; any version of the current pack can be revised from selection, review, after approval or after a failed run. The architect revises the base (task `story.revise`) from the story pack only — the selection plus units the editor approved but did not select — with explicit permission to restructure substantially and a required change log (what, why, what was kept); the story editor and the fact checker run again with the brief; the same rules and gate apply, plus two warnings (`revision_explained`, `revision_brief`). Code measures the change against the base (units added/removed, reordered, merged, split; opening, question, mode, POV, logline, stakes, cast, runtime, beats). A revision is always a new version linked to its base; the base is never modified; a failed revision leaves the base's status as it was; approving supersedes an earlier approved version (kept, recorded) | `revision.test.ts` (6), `story.int.test.ts` (4: versions preserved byte-for-byte, both reviewers re-run with the brief, failed revision keeps the base, evidence boundary incl. the provider ledger), `app.int.test.ts` |
+| **Alternative angles** (REV) | `POST …/story/angles` (2 or 3, optional brief, optionally as alternatives to a version): a STORY_ANGLES side job, one model call; rules keep only the pack's units, label the opening's information class, derive claims, historical status and confidence, remove angles with outside figures, years, people, unknown names or unverified quotations, flag HIGH-priority units left out, and remove an angle that is not materially different from another (or from the base architecture). Stored as versioned explorations; fewer than two surviving angles fail only the side job. *Develop this angle* builds on it (selection) or revises toward it (review/approved); the architecture records the angle | `angles.test.ts` (5), `story.int.test.ts` (4), `app.int.test.ts` |
+| **Revision & angles dashboard** (REV) | Story page: the Reconsider / Revise panel (checklist, brief, preferences, toward an explored angle), the revision record (brief, the architect's change log, the measured changes, the reviewers' re-run), the version history (every version, its origin and angle), an Angles tab (explore, compare, removed angles with reasons, gate report, develop), the approval box names the version under review | Playwright at 412 px and 1280 px on fake-AI data: explore → develop → v1; revise v2 → v3 with v1/v2 kept; failed revision; no horizontal overflow, no console errors |
 | **Research boundary** (SE2) | Story code never writes research tables (static guard over the story stages and story API) and does not use the research module; a full mining → architecture → approval → opportunity decision run leaves the research tables byte-for-byte equal; `modules/research` unchanged | `boundaries.test.ts`, `story.int.test.ts` |
 | **Story API + dashboard** (M3) | `GET /api/projects/:id/story`, `PATCH /api/story-candidates/:id`, `POST …/story/mine`, `POST …/story/architecture` (selection checked first); Story page: ranked candidates with scores and the ranking formula, arcs, myth threads, evidence (claims, quotes, sources), editor controls (approve/reject/flag, in-the-documentary, priority, notes), selection vs AI proposal, architecture with sequences and per-sequence evidence, both gate reports, cost; approval panel (Approve / Reject → Rework / Flag). Project pages are linked by an Overview · Research dossier · Story bar; the Research and Story stage boxes open their pages; new pages open at the top; pages fit a phone screen | `app.int.test.ts`; Playwright run on fake-AI data (editor actions, selection limits, rejection) with no console errors; Playwright at a 412 px phone viewport: every route into the Story page, no horizontal overflow |
 
-Test counts at time of writing: **312 unit** (19 files) + **59 integration** (5 files), all passing.
+Test counts at time of writing: **324 unit** (21 files) + **69 integration** (5 files), all passing.
 
 ## FIRST LIVE RUN (Railway, 2026-10-04)
 
@@ -100,14 +103,16 @@ a retry two minutes later succeeded.
 
 ## NOT YET VERIFIED LIVE
 
-- **Story Engine 2.0 as a whole**: not deployed; no run with the real model.
-  Every SE2 behaviour above was tested with a scripted fake AI and synthetic
-  data only. Planned acceptance run after a deploy approval: a fresh SE2
-  mining pass on the existing approved Tulip dossier v1 (no new research).
-- The real cost of an SE2 architecture (four calls instead of two) and of SE2
-  mining (larger outputs).
-- A story architecture that passes its gate with the real model (the first
-  run failed on the rules bug above; a Retry with the fix is pending).
+- **The editorial revision loop and alternative angles**: no run with the real
+  model yet. Everything above was tested with a scripted fake AI and synthetic
+  data; how well the real model restructures from a brief, and how different
+  its angles are, is still to be seen. Their real cost is not measured.
+- **Story Engine 2.0**: deployed; the editor reports a successful first
+  acceptance run. Its figures (cost, timing, gate results) are not recorded
+  here.
+- A story architecture that passes its gate with the real model, recorded
+  here (engine 1's first run failed on the rules bug above; the gate results
+  of the SE2 acceptance run are not recorded here).
 - The cost of a clean research run end to end (the first run included failed
   attempts).
 

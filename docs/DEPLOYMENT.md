@@ -120,7 +120,7 @@ Every push to the connected branch deploys automatically.
    | `TAVILY_API_KEY` | your key (or `TAVILY_ACCESS_MODE=keyless`) |
    | `TAVILY_USD_PER_CREDIT` | your plan's $/credit (for cost estimates) |
    | `RESEARCH_MAX_COST_USD` | optional, default `40` |
-   | `STORY_MAX_COST_USD` | optional, default `15` (per story-mining or architecture job) |
+   | `STORY_MAX_COST_USD` | optional, default `15` (per story-mining, architecture, revision or angles job) |
 
 4. **Verify:** `/api/health` → `"realStages":["RESEARCH","STORY_MINING","STORY_ARCHITECTURE"]` and the providers
    list shows `anthropic` and `tavily` with `"mock":false`. The project page
@@ -166,6 +166,19 @@ prompt version changed), so a Retry of such a job starts its model calls
 again. An architecture costs four model calls instead of two (story editor and
 content opportunities added).
 
+## Deploying the editorial revision loop and alternative angles
+
+No new environment variables or services. The pre-deploy command applies
+migration `20261004150000_story_revisions`, which is additive only: a new job
+type value (`STORY_ANGLES`), three nullable columns on `story_architectures`
+(`revision_of_id`, `exploration_id`, `angle_key`) and a new table
+`story_explorations`. Existing architectures are not changed (they read as
+"built from the selection"); research tables are untouched.
+
+The story prompt version changed (`story-2.1-2026-10-04.1`), so a Retry of a
+story job started before the deploy starts its model calls again. A revision
+costs the same four calls as an architecture; an angle exploration costs one.
+
 ## Environment variables
 
 `✓` = read by V1 code. Planned variables are documented now so the shape is
@@ -196,7 +209,7 @@ agreed, but they are not read yet.
 | `TAVILY_USD_PER_CREDIT` | `0.008` | ✓ | Your plan's price; Tavily reports credits, so dollar cost is an estimate |
 | `RESEARCH_MAX_COST_USD` | `40` | ✓ | Per-run ceiling; the run stops (FAILED, not retried) once recorded spend passes it |
 | `RESEARCH_MAX_SOURCES` | `45` | ✓ | Sources whose full text is retrieved and read per run |
-| `STORY_MAX_COST_USD` | `15` | ✓ | Per-job ceiling for story mining and story architecture; the job stops (FAILED, not retried) once recorded spend passes it |
+| `STORY_MAX_COST_USD` | `15` | ✓ | Per-job ceiling for story mining, story architecture (and revisions) and angle explorations; the job stops (FAILED, not retried) once recorded spend passes it |
 | `WEB_DIST_DIR` | `apps/web/dist` | ✓ | Override only for unusual layouts |
 | `RAILWAY_GIT_COMMIT_SHA` | — | ✓ | Set by Railway; shown in `/api/health` |
 | `TEST_DATABASE_URL` | — | tests | Integration tests only; DB name must contain `test` |
@@ -259,6 +272,9 @@ deploy and media must survive that.
 | `/api/health` shows `"realStages":[]` although keys are set | Both `AI_PROVIDER=anthropic` and `RESEARCH_PROVIDER=tavily` are needed for the real research stage. |
 | *Generate Story Architecture* answers "Select at least 5 story units" | Intended check before any paid work: select 5–10 candidates on the Story page (rejected ones never count). |
 | Story job fails with `Story mining quality gate failed` / `Story architecture quality gate failed` | The gate's report is on the Story page (*Quality gates*); the pack or architecture is kept as a DRAFT. *Retry* re-evaluates without new model calls; for different material, rewind to *Research complete* (mining) or *Story selection* (architecture) and run again, with a brief. |
+| A revision fails with `Story architecture quality gate failed … Architecture vN is unchanged (…)` | The revision was saved as a DRAFT and the version it revised kept its status. *Retry*, revise again with another brief, or go back to the selection. |
+| *Explore Alternative Angles* fails with `Fewer than two materially different angles survived the rules` | Only the side job failed; the project is unchanged. The exploration is saved (Angles tab) with the reasons each angle was removed. Retry, or explore again with a brief. |
+| *Reconsider* or *Explore* answers `… is a MOCK stage here` | Revisions and angles need the real story engine (`AI_PROVIDER=anthropic`). |
 | Pre-deploy fails with `P1001: Can't reach database server` | `DATABASE_URL` missing or not referencing the Postgres service. |
 | Railway created services `@docengine/api`, `@docengine/research`, `@docengine/web` | The repository was added through "+ New → GitHub Repository" (monorepo auto-import). Discard those staged changes and use *Empty Service* → *Connect Repo* (step 3). |
 | Deployment shows SUCCESS but the log repeats `relation "jobs" does not exist` | The pre-deploy command `sh scripts/release.sh` is not set, so migrations never ran. Set it and redeploy. |

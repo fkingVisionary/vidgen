@@ -5,8 +5,9 @@ AI-assisted production system for premium historical & economic documentaries
 visuals & infographics → edit → QA → render → publish, with a human approving
 every important step.
 
-**Current state: V1, milestone 3 + Story Engine 2.0 (built and tested locally;
-not deployed yet).** The
+**Current state: V1, milestone 3 + Story Engine 2.0 (deployed; first
+acceptance run done) + the editorial revision loop and alternative angles
+(built and tested locally).** The
 pipeline, database, job system, provider abstractions and dashboard are real
 and tested (milestone 1). The **Research** stage is real when Anthropic
 (Claude) and Tavily are configured: it builds a versioned dossier of claims
@@ -20,7 +21,11 @@ blueprint cinematic inside the same evidence boundary — human stakes, narrativ
 modes, a point of view, beats labelled documented / reconstruction / uncertain
 / fiction, setting, visual thinking, continuity — and identifies content
 opportunities (shorts and long-form threads) for the editor to approve one by
-one; nothing is generated from them yet. Every later stage (script,
+one; nothing is generated from them yet. The editor can **reconsider** an
+architecture — say what is not working and the architect revises it into a new
+version, every earlier version kept — and **explore alternative angles** (2–3
+materially different approaches to the same units) before committing to one,
+always from the same story pack and approved evidence. Every later stage (script,
 voice, visuals, edit, publish) is still a clearly labelled **MOCK**. First test
 episode: *Tulip Mania — The Bubble That Became a Legend*.
 
@@ -159,13 +164,30 @@ With `AI_PROVIDER=anthropic`, once a research dossier is approved:
    level and the story editor's quality bar. **Approve Story Architecture**,
    **Reject → Rework** (back to the selection; the next version uses your
    notes) or **Flag**. Nothing moves on to the script automatically.
-5. On the **Opportunities** tab, approve or reject each short or long-form
+5. Not working yet? **Reconsider / Revise Architecture** (on the Story page,
+   for the version shown): tick what is not working — angle, POV, emotional
+   centre, opening, structure, pacing, narrative strategy, central question,
+   human stakes — and write a brief. The architect may restructure
+   substantially (reorder, merge, remove or replace sequences with units you
+   approved, change the mode, POV, central question or opening) using only
+   the story pack and the approved dossier, and must say what it changed and
+   why. The Story Editor and the Fact Checker review the revision again. It
+   becomes a new version; the one it revised is never changed. The
+   Architecture tab shows every version, the brief, the architect's change
+   log and the changes measured by code.
+6. **Angles** tab → **Explore Alternative Angles** (during selection, review
+   or after approval; the project's status does not change): 2–3 materially
+   different approaches to the same units, each with its mode, POV, opening,
+   human anchor, central question, movements, evidence, strengths and risks,
+   and how they differ. **Develop this angle** builds an architecture on it
+   (during selection) or revises the current version toward it.
+7. On the **Opportunities** tab, approve or reject each short or long-form
    opportunity. `GET|POST /api/projects/:id/content-package` (e.g.
    `{"documentary": true, "shorts": 6, "languages": ["en","es","de"]}`)
    returns what a production request would use; it generates nothing.
 
-`STORY_MAX_COST_USD=15` stops a mining or architecture job whose recorded
-spend passes it. Like research, retries reuse completed model calls.
+`STORY_MAX_COST_USD=15` stops a mining, architecture, revision or angles job
+whose recorded spend passes it. Like research, retries reuse completed model calls.
 
 `GET /api/health` lists the stages that are real (`realStages`). Progress
 appears in the project's Activity panel. (A full run with real Claude has not

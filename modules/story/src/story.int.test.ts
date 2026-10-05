@@ -1,9 +1,10 @@
-import { ContentOpportunityContent, QualityReport, StoryArchitectureContent, StoryArchitectureContentV2, StoryPackContent, StoryScoresV2, type JobType } from '@docengine/core';
+import { ContentOpportunityContent, QualityReport, StoryArchitectureContent, StoryArchitectureContentV2, StoryExplorationContent, StoryPackContent, StoryScoresV2, type JobType } from '@docengine/core';
 import { Prisma } from '@docengine/database';
 import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers } from '@docengine/pipeline';
 import { ALL_MOCK, createProviders, type ProviderSet } from '@docengine/providers';
 import { describe, expect, it } from 'vitest';
 import { tulipInput, useTestDatabase } from '../../../test/helpers.ts';
+import { createStoryAnglesStage } from './angles-stage.ts';
 import { createStoryArchitectureStage } from './architecture-stage.ts';
 import type { StoryConfig } from './config.ts';
 import { createStoryMiningStage } from './mining-stage.ts';
@@ -20,7 +21,7 @@ function setup(cfg: Partial<StoryConfig> = {}) {
     queue: new PostgresJobQueue(db),
     projects,
     providers,
-    handlers: { ...createMockStageHandlers(), STORY_MINING: createStoryMiningStage(cfg), STORY_ARCHITECTURE: createStoryArchitectureStage(cfg) },
+    handlers: { ...createMockStageHandlers(), STORY_MINING: createStoryMiningStage(cfg), STORY_ARCHITECTURE: createStoryArchitectureStage(cfg), STORY_ANGLES: createStoryAnglesStage(cfg) },
     retryBaseDelayMs: 0,
   });
   return { ai, projects, runner };
@@ -480,7 +481,7 @@ describe('story architecture 2.0 (fake AI, real database)', () => {
 
     expect(job.status).toBe('SUCCEEDED');
     const prompt = s.ai.prompts['story.architect']![0]!;
-    const story = prompt.slice(prompt.indexOf("# Story evidence: the selected units' claims (8)"), prompt.indexOf('# Other claims of the approved dossier'));
+    const story = prompt.slice(prompt.indexOf("# Story evidence: the units' claims (8)"), prompt.indexOf('# Other claims of the approved dossier'));
     const background = prompt.slice(prompt.indexOf('# Other claims of the approved dossier: background only (12)'));
     expect(story).toMatch(/^C002 \[/m);
     expect(story).not.toMatch(/^C001 \[/m);
@@ -592,3 +593,267 @@ describe('the story stages and the research record', () => {
     expect(before.claims).toHaveLength(20);
   });
 });
+
+describe('editorial revision loop (fake AI, real database)', () => {
+  async function inReview(s: Setup) {
+    const r = await researched(s);
+    await run(s, r.projectId, 'STORY_MINING');
+    // One unselected candidate approved by the editor: in reserve for revisions and angles.
+    const pack = await latestPack(r.projectId);
+    const reserve = pack.candidates.find((c) => !c.selected)!;
+    await db.storyCandidate.update({ where: { id: reserve.id }, data: { status: 'APPROVED' } });
+    expect((await run(s, r.projectId, 'STORY_ARCHITECTURE')).status).toBe('SUCCEEDED');
+    return { ...r, reserveKey: reserve.candidateKey, selectedKeys: pack.candidates.filter((c) => c.selected).map((c) => c.candidateKey) };
+  }
+  const architecture = (projectId: string, version: number) => db.storyArchitecture.findUniqueOrThrow({ where: { projectId_version: { projectId, version } }, include: { contentOpportunities: { orderBy: { opportunityKey: 'asc' } } } });
+  const snapshot = async (projectId: string, version: number) => {
+    const a = await architecture(projectId, version);
+    return { content: a.content, qualityReport: a.qualityReport, stats: a.stats, notes: a.notes, packId: a.packId, opportunities: a.contentOpportunities.map((o) => [o.opportunityKey, o.content]) };
+  };
+  async function revise(s: Setup, projectId: string, input: Parameters<Setup['projects']['reviseArchitecture']>[1]) {
+    const job = await s.projects.reviseArchitecture(projectId, input, 'editor');
+    await s.runner.drain();
+    return db.job.findUniqueOrThrow({ where: { id: job.id } });
+  }
+  const BRIEF = 'The opening is too slow and the point of view is unclear: open on the collapse and follow an investigator.';
+
+  it('revises an architecture into a new version from the editor\'s brief, keeping every earlier version and re-running both reviewers', async () => {
+    const s = setup();
+    const { projectId, reserveKey, selectedKeys } = await inReview(s);
+    const v1 = await snapshot(projectId, 1);
+    const [k3, k4] = [selectedKeys[2]!, selectedKeys[3]!];
+    s.ai.revisionOptions = { order: (keys, reserve) => [...reserve, ...[...keys].reverse()], merge: [[k3, k4]] };
+
+    const job = await revise(s, projectId, { baseVersion: 1, brief: BRIEF, aspects: ['OPENING', 'POV', 'STRUCTURE'] });
+    expect(job).toMatchObject({ status: 'SUCCEEDED', type: 'STORY_ARCHITECTURE' });
+    expect(job.input).toMatchObject({ notes: BRIEF, revise: { baseVersion: 1, aspects: ['OPENING', 'POV', 'STRUCTURE'] } });
+    expect(await statusOf(projectId)).toBe('STORY_REVIEW');
+    expect(await db.projectEvent.count({ where: { projectId, type: 'ARCHITECTURE_REVISION_REQUESTED' } })).toBe(1);
+
+    // A new version; the base is kept exactly as it was, superseded.
+    const base = await architecture(projectId, 1);
+    const v2 = await architecture(projectId, 2);
+    expect(base.status).toBe('SUPERSEDED');
+    expect(await snapshot(projectId, 1)).toEqual(v1);
+    expect(v2).toMatchObject({ status: 'IN_REVIEW', qualityPassed: true, revisionOfId: base.id, notes: BRIEF, packId: base.packId });
+    const content = StoryArchitectureContentV2.parse(v2.content);
+    expect(content.provenance).toMatchObject({
+      kind: 'REVISION',
+      baseVersion: 1,
+      baseId: base.id,
+      brief: BRIEF,
+      aspects: ['OPENING', 'POV', 'STRUCTURE'],
+      reserveKeys: [reserveKey],
+      changeLog: { summary: 'Restructured as an investigation that opens on the outcome and works back (test).' },
+      diff: { substantial: true, unitsAdded: [reserveKey], reordered: true, merged: [[k3, k4]], opening: { changed: true }, pov: { changed: true }, narrativeMode: { changed: true, after: 'INVESTIGATION' } },
+    });
+    expect(content.provenance!.changeLog!.changes.map((c) => c.area)).toEqual(['STRUCTURE', 'OPENING', 'POV', 'CENTRAL_QUESTION']);
+    expect(content.sequences[0]!.candidateKeys).toEqual([reserveKey]);
+    const report = QualityReport.parse(v2.qualityReport);
+    expect(report.checks.find((c) => c.id === 'revision_explained')).toMatchObject({ status: 'PASS' });
+    expect(report.checks.find((c) => c.id === 'revision_brief')).toMatchObject({ status: 'PASS' });
+    expect(v2.stats).toMatchObject({ origin: 'REVISION', revision: { baseVersion: 1, unaddressed: [], substantial: true } });
+
+    // The architect revised (not rebuilt); both reviewers ran again on the revision, with the brief; opportunities were found again.
+    expect(s.ai.calls).toMatchObject({ 'story.architect': 1, 'story.revise': 1, 'story.storyEditor': 2, 'story.review': 2, 'story.opportunities': 2 });
+    const revisePrompt = s.ai.prompts['story.revise']![0]!;
+    expect(revisePrompt).toContain(`# The editor's brief for this revision of v1 — the reason for it; answer it\n${BRIEF}`);
+    expect(revisePrompt).toContain("What is not working, on the editor's checklist: Opening, Point of view, Structure");
+    expect(revisePrompt).toMatch(/^# Architecture v1 \(IN_REVIEW\) — the version to revise/m);
+    expect(revisePrompt).toContain(`## ${reserveKey} · approved by the editor, not selected (optional)`);
+    for (const task of ['story.storyEditor', 'story.review']) {
+      const prompt = s.ai.prompts[task]![1]!;
+      expect(prompt).toContain(`This is a revision. The editor's brief for it:\n${BRIEF}`);
+      expect(prompt).toContain('(revised, test)');
+    }
+    expect(v2.contentOpportunities.length).toBeGreaterThan(0);
+    expect(base.contentOpportunities.length).toBeGreaterThan(0);
+
+    // Approve the revision; revise the approved version again; approving that supersedes (keeps) the earlier approval.
+    await s.projects.recordApproval(projectId, { gate: 'STORY', decision: 'APPROVED', notes: 'Better.' }, 'editor');
+    expect(await statusOf(projectId)).toBe('STORY_APPROVED');
+    s.ai.revisionOptions = {};
+    expect((await revise(s, projectId, { baseVersion: 2, brief: 'Tighten the pacing in the middle; the central question can be sharper.', aspects: ['PACING'] })).status).toBe('SUCCEEDED');
+    expect(await statusOf(projectId)).toBe('STORY_REVIEW');
+    expect((await architecture(projectId, 2)).status).toBe('APPROVED');
+    expect((await architecture(projectId, 3)).status).toBe('IN_REVIEW');
+    await s.projects.recordApproval(projectId, { gate: 'STORY', decision: 'APPROVED' }, 'editor');
+    expect((await db.storyArchitecture.findMany({ where: { projectId }, orderBy: { version: 'asc' } })).map((a) => `v${a.version} ${a.status}`)).toEqual(['v1 SUPERSEDED', 'v2 SUPERSEDED', 'v3 APPROVED']);
+    expect(await db.projectEvent.count({ where: { projectId, type: 'ARCHITECTURE_SUPERSEDED' } })).toBe(1);
+    expect(await snapshot(projectId, 1)).toEqual(v1);
+    expect((await db.approval.findMany({ where: { projectId, gate: 'STORY' }, include: { story: { select: { version: true } } }, orderBy: { createdAt: 'asc' } })).map((a) => `${a.decision} v${a.story?.version}`)).toEqual(['APPROVED v2', 'APPROVED v3']);
+  });
+
+  it('keeps the version under review when a revision fails its gate, and lets the editor revise again', async () => {
+    const s = setup();
+    const { projectId } = await inReview(s);
+    const v1 = await snapshot(projectId, 1);
+    s.ai.revisionOptions = {
+      transform: (r) => {
+        r.sequences[0]!.beats[1]!.description = 'Buyers pay 7,777 guilders for a single bulb (test).';
+        return r;
+      },
+    };
+    const failed = await revise(s, projectId, { baseVersion: 1, brief: BRIEF, aspects: ['OPENING'] });
+    expect(failed.status).toBe('FAILED');
+    expect(failed.error).toContain('Figures and dates come from the evidence');
+    expect(failed.error).toContain('Architecture v1 is unchanged (IN_REVIEW).');
+    expect(await statusOf(projectId)).toBe('FAILED');
+    expect(await architecture(projectId, 2)).toMatchObject({ status: 'DRAFT', qualityPassed: false });
+    expect((await architecture(projectId, 1)).status).toBe('IN_REVIEW');
+    expect(await snapshot(projectId, 1)).toEqual(v1);
+    // The failed draft does not take over: the opportunities of the version under review can still be decided.
+    const opportunity = (await architecture(projectId, 1)).contentOpportunities[0]!;
+    expect(await s.projects.editContentOpportunity(opportunity.id, { status: 'APPROVED' }, 'editor')).toMatchObject({ status: 'APPROVED' });
+    await s.projects.editContentOpportunity(opportunity.id, { status: 'PROPOSED' }, 'editor');
+
+    // Revising again recovers the failed run; the new version replaces both the open v1 and the failed draft.
+    s.ai.revisionOptions = {};
+    const retried = await revise(s, projectId, { baseVersion: 1, brief: 'Same brief, without new figures: open on the collapse.', aspects: ['OPENING'] });
+    expect(retried.status).toBe('SUCCEEDED');
+    expect(await statusOf(projectId)).toBe('STORY_REVIEW');
+    expect((await db.storyArchitecture.findMany({ where: { projectId }, orderBy: { version: 'asc' } })).map((a) => `v${a.version} ${a.status}`)).toEqual(['v1 SUPERSEDED', 'v2 SUPERSEDED', 'v3 IN_REVIEW']);
+    expect(await snapshot(projectId, 1)).toEqual(v1);
+  });
+
+  it('keeps a revision inside the evidence boundary: no claims outside the units, no unapproved units, no research', async () => {
+    const s = setup();
+    const { projectId } = await inReview(s);
+    const pack = await latestPack(projectId);
+    const unapproved = pack.candidates.find((c) => !c.selected && c.status === 'PROPOSED')!.candidateKey;
+    const outsideClaim = (await db.researchClaim.findMany({ where: { dossier: { projectId } }, orderBy: { sortOrder: 'asc' } }))
+      .map((c) => c.claimKey)
+      .find((k) => !pack.candidates.some((c) => (c.selected || c.status === 'APPROVED') && c.claims.some((x) => x.claim.claimKey === k)))!;
+    s.ai.revisionOptions = {
+      transform: (r) => {
+        r.sequences[0]!.candidateKeys.push(unapproved);
+        r.sequences[0]!.claimKeys.push(outsideClaim);
+        r.sequences[0]!.beats[1]!.claimKeys.push(outsideClaim);
+        return r;
+      },
+    };
+    const job = await revise(s, projectId, { baseVersion: 1, brief: BRIEF, aspects: [] });
+    expect(job.status).toBe('FAILED');
+    expect(job.error).toContain("Story evidence is the selected units' own claims");
+    const draft = await architecture(projectId, 2);
+    expect(QualityReport.parse(draft.qualityReport).normalizations).toContain(`Sequence 1: ${unapproved} is not a selected unit; ignored`);
+    // Only the story AI was called: no research provider, no new evidence.
+    const providers = await db.providerCall.groupBy({ by: ['provider'], where: { jobId: job.id }, _count: { _all: true } });
+    expect(providers.map((p) => p.provider)).toEqual(['fake-ai']);
+    expect(await db.researchClaim.count({ where: { dossier: { projectId } } })).toBe(20);
+  });
+
+  it('refuses a revision that cannot be honoured', async () => {
+    const s = setup();
+    const { projectId } = await inReview(s);
+    await expect(s.projects.reviseArchitecture(projectId, { baseVersion: 9, brief: BRIEF, aspects: [] }, 'editor')).rejects.toThrow(/Story architecture v9 not found|not found/i);
+    await expect(s.projects.reviseArchitecture(projectId, { baseVersion: 1, brief: 'too short', aspects: [] }, 'editor')).rejects.toThrow(/at least a sentence/);
+    await expect(s.projects.reviseArchitecture(projectId, { baseVersion: 1, brief: BRIEF, aspects: [], angle: { exploration: 3, key: 'A1' } }, 'editor')).rejects.toThrow(/Angle exploration/);
+    // After another mining pass, an architecture of the old pack cannot be revised.
+    await s.projects.restartPhase(projectId, 'STORY_MINING', {}, 'editor', 'Another pass');
+    await s.runner.drain();
+    expect(await statusOf(projectId)).toBe('STORY_SELECTION');
+    await expect(s.projects.reviseArchitecture(projectId, { baseVersion: 1, brief: BRIEF, aspects: [] }, 'editor')).rejects.toThrow(/built from an earlier story pack/);
+  });
+});
+
+describe('alternative angles (fake AI, real database)', () => {
+  async function selection(s: Setup) {
+    const r = await researched(s);
+    await run(s, r.projectId, 'STORY_MINING');
+    return r;
+  }
+  async function explore(s: Setup, projectId: string, input: Parameters<Setup['projects']['exploreAngles']>[1] = { count: 3 }) {
+    const job = await s.projects.exploreAngles(projectId, input, 'editor');
+    await s.runner.drain();
+    return db.job.findUniqueOrThrow({ where: { id: job.id } });
+  }
+
+  it('explores 2–3 materially different angles from the story pack as a side job, without changing the project\'s status', async () => {
+    const s = setup();
+    const { projectId } = await selection(s);
+    const seq = (await db.project.findUniqueOrThrow({ where: { id: projectId } })).phaseSeq;
+    const job = await explore(s, projectId, { count: 3, notes: 'Find a bolder opening.' });
+
+    expect(job).toMatchObject({ status: 'SUCCEEDED', type: 'STORY_ANGLES' });
+    expect(await db.project.findUniqueOrThrow({ where: { id: projectId } })).toMatchObject({ status: 'STORY_SELECTION', phaseSeq: seq });
+    expect(await db.projectEvent.count({ where: { projectId, type: 'STATUS_CHANGED', createdAt: { gte: job.createdAt } } })).toBe(0);
+    const exploration = await db.storyExploration.findFirstOrThrow({ where: { projectId } });
+    expect(exploration).toMatchObject({ version: 1, qualityPassed: true, notes: 'Find a bolder opening.', jobId: job.id, basedOnArchitectureId: null });
+    const content = StoryExplorationContent.parse(exploration.content);
+    expect(content.angles.map((a) => `${a.key} ${a.narrativeMode}`)).toEqual(['A1 INVESTIGATION', 'A2 CHARACTER_FOLLOW', 'A3 COUNTDOWN']);
+    expect(content.comparisons).toHaveLength(3);
+    const pack = await latestPack(projectId);
+    const pool = new Set(pack.candidates.filter((c) => c.selected).map((c) => c.candidateKey));
+    for (const a of content.angles) {
+      expect(a.unitKeys.every((k) => pool.has(k))).toBe(true);
+      const claims = new Set(pack.candidates.filter((c) => a.unitKeys.includes(c.candidateKey)).flatMap((c) => c.claims.map((x) => x.claim.claimKey)));
+      expect(a.claimKeys.every((k) => claims.has(k))).toBe(true);
+    }
+    const prompt = s.ai.prompts['story.angles']![0]!;
+    expect(prompt).toContain('Propose 3 materially different approaches to the story units below.');
+    expect(prompt).toContain("The editor's brief for this exploration (follow it):\nFind a bolder opening.");
+    expect(s.ai.calls['story.angles']).toBe(1);
+    expect(s.ai.calls['story.architect']).toBeUndefined();
+    // Nothing was committed: no architecture exists yet.
+    expect(await db.storyArchitecture.count({ where: { projectId } })).toBe(0);
+  });
+
+  it('develops the chosen angle into an architecture, and revises an architecture toward another angle', async () => {
+    const s = setup();
+    const { projectId } = await selection(s);
+    await explore(s, projectId);
+    const exploration = await db.storyExploration.findFirstOrThrow({ where: { projectId } });
+
+    expect((await run(s, projectId, 'STORY_ARCHITECTURE', { angle: { exploration: 1, key: 'A2' } })).status).toBe('SUCCEEDED');
+    const v1 = await latestArchitecture(projectId);
+    expect(v1).toMatchObject({ explorationId: exploration.id, angleKey: 'A2', revisionOfId: null });
+    expect(StoryArchitectureContentV2.parse(v1.content).provenance).toMatchObject({ kind: 'NEW', angle: { explorationVersion: 1, key: 'A2', title: 'Follow the traders (test)' } });
+    expect(s.ai.prompts['story.architect']![0]).toContain('# The editor chose this angle (A2 of exploration 1): build the architecture on it\nA2 — Follow the traders (test)');
+
+    // In review: alternatives to the current architecture, then a revision toward one of them.
+    expect((await explore(s, projectId, { count: 2, basedOnVersion: 1 })).status).toBe('SUCCEEDED');
+    const second = await db.storyExploration.findFirstOrThrow({ where: { projectId, version: 2 } });
+    expect(second.basedOnArchitectureId).toBe(v1.id);
+    expect(s.ai.prompts['story.angles']![1]).toContain('# The current architecture v1 — every approach must also differ materially from it');
+    expect(await statusOf(projectId)).toBe('STORY_REVIEW');
+    const job = await s.projects.reviseArchitecture(projectId, { baseVersion: 1, brief: 'Rebuild it around the investigation angle instead.', aspects: ['ANGLE'], angle: { exploration: 2, key: 'A1' } }, 'editor');
+    await s.runner.drain();
+    expect(await db.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: 'SUCCEEDED' });
+    const v2 = await latestArchitecture(projectId);
+    expect(v2).toMatchObject({ version: 2, revisionOfId: v1.id, explorationId: second.id, angleKey: 'A1' });
+    expect(s.ai.prompts['story.revise']![0]).toContain('# Revise toward this explored angle (A1 of exploration 2), which the editor chose');
+  });
+
+  it('fails only the side job when too few materially different angles survive, and can be retried', async () => {
+    const s = setup();
+    const { projectId } = await selection(s);
+    s.ai.angles = (prompt) => {
+      const [a] = fakeOneAngle(prompt);
+      return [a!, { ...a!, title: 'The same film again (test)' }];
+    };
+    const job = await explore(s, projectId, { count: 3 });
+    expect(job).toMatchObject({ status: 'FAILED', attempts: 1 });
+    expect(job.error).toMatch(/Fewer than two materially different angles survived the rules \(1 of 2\)/);
+    expect(await statusOf(projectId)).toBe('STORY_SELECTION');
+    expect(await db.storyExploration.findFirstOrThrow({ where: { projectId } })).toMatchObject({ qualityPassed: false });
+
+    // A retry reuses the saved model output (same result), still without touching the project.
+    const retry = await s.projects.retryJob(job.id, 'editor');
+    await s.runner.drain();
+    expect(await db.job.findUniqueOrThrow({ where: { id: retry.id } })).toMatchObject({ status: 'FAILED' });
+    expect(s.ai.calls['story.angles']).toBe(1);
+    expect(await statusOf(projectId)).toBe('STORY_SELECTION');
+  });
+
+  it('refuses angles outside the story statuses', async () => {
+    const s = setup();
+    const { projectId } = await researched(s);
+    await expect(s.projects.exploreAngles(projectId, { count: 3 }, 'editor')).rejects.toThrow(/STORY_ANGLES runs while the project is in STORY_SELECTION, STORY_REVIEW, STORY_APPROVED/);
+  });
+});
+
+/** One angle of the default fake set, for tests that need a single approach. */
+function fakeOneAngle(prompt: string) {
+  return new FakeStoryAI().angles(prompt).slice(0, 1);
+}

@@ -1,6 +1,7 @@
 import {
   BEAT_FUNCTIONS,
   CAST_KINDS,
+  CHANGE_AREAS,
   CHARACTER_KINDS,
   CONTENT_FORMATS,
   INFORMATION_CLASSES,
@@ -215,6 +216,18 @@ export const ArchitectOutput = z.object({
 });
 export type ArchitectOutput = z.infer<typeof ArchitectOutput>;
 
+/** A revision of an existing architecture: the full revised architecture and the architect's account of it. */
+export const ArchitectRevisionOutput = ArchitectOutput.extend({
+  changeLog: z.object({
+    summary: z.string().describe('what the revision does, in two or three sentences'),
+    changes: z
+      .array(z.object({ area: z.enum(CHANGE_AREAS), what: z.string().describe('what changed'), why: z.string().describe('why — tied to the editor\'s brief') }))
+      .describe('every change that matters, one entry each'),
+    kept: z.array(z.string()).describe('what you deliberately kept, and why it works'),
+  }),
+});
+export type ArchitectRevisionOutput = z.infer<typeof ArchitectRevisionOutput>;
+
 const ReviewIssue = z.object({
   severity: z.enum(['CRITICAL', 'MAJOR', 'MINOR']),
   description: z.string(),
@@ -285,3 +298,34 @@ export const OpportunityOutput = z.object({
   ),
 });
 export type OpportunityOutput = z.infer<typeof OpportunityOutput>;
+
+// ── Alternative angles ───────────────────────────────────────────────────────
+
+export const AnglesOutput = z.object({
+  angles: z.array(
+    z.object({
+      title: z.string().describe('a working title for this approach'),
+      logline: z.string(),
+      centralQuestion: z.string(),
+      emotionalCentre: z.string().describe('the feeling the film is built around, and whose it is'),
+      humanAnchor: z.string().describe('who the viewer follows: a real person, group or role from the units, or a fictional device described by role (never named)'),
+      narrativeMode: z.enum(NARRATIVE_MODES),
+      secondaryModes: z.array(z.enum(NARRATIVE_MODES)),
+      povStrategy: PovOutput,
+      opening: z.object({
+        concept: z.string().describe('the first scene, described (not narrated)'),
+        basis: z.enum(INFORMATION_CLASSES).describe('its information class'),
+        unitKey: z.string().describe('the story unit it opens on, e.g. "S04"'),
+      }),
+      movements: z
+        .array(z.object({ title: z.string(), unitKeys: z.array(z.string()).describe('story units told in this movement'), what: z.string().describe('what happens, one or two sentences') }))
+        .describe('the shape of the film in 3–7 movements'),
+      resolution: z.string().describe('how the film answers its central question'),
+      unusedUnits: z.array(z.object({ unitKey: z.string(), reason: z.string() })).describe('selected units this approach leaves out, and why'),
+      differs: z.string().describe('how this approach differs from the others'),
+      strengths: z.array(z.string()),
+      risks: z.array(z.string()).describe('what could go wrong, including evidence risks (contested or myth material and how it must be presented)'),
+    }),
+  ),
+});
+export type AnglesOutput = z.infer<typeof AnglesOutput>;

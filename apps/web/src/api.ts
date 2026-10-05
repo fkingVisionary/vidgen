@@ -4,11 +4,13 @@ import type {
   ContentPackageView,
   CreateProjectInput,
   EnqueueJobInput,
+  ExploreAnglesInput,
   HealthView,
   JobView,
   ProjectDetailView,
   ProjectSummaryView,
   ResearchView,
+  ReviseArchitectureInput,
   RewindInput,
   StoryJobInput,
   StoryView,
@@ -52,15 +54,21 @@ export const api = {
   retryJob: (jobId: string) => request<JobView>('POST', `/api/jobs/${jobId}/retry`),
   research: (id: string, version?: number) =>
     request<ResearchView>('GET', `/api/projects/${encodeURIComponent(id)}/research${version ? `?version=${version}` : ''}`),
-  story: (id: string, v: { pack?: number; architecture?: number } = {}) => {
+  story: (id: string, v: { pack?: number; architecture?: number; exploration?: number } = {}) => {
     const q = new URLSearchParams();
     if (v.pack) q.set('pack', String(v.pack));
     if (v.architecture) q.set('architecture', String(v.architecture));
+    if (v.exploration) q.set('exploration', String(v.exploration));
     return request<StoryView>('GET', `/api/projects/${encodeURIComponent(id)}/story${q.size ? `?${q}` : ''}`);
   },
   updateCandidate: (candidateId: string, input: UpdateStoryCandidateInput) => request<StoryView>('PATCH', `/api/story-candidates/${candidateId}`, input),
   mineStory: (id: string, notes?: string) => request<JobView>('POST', `/api/projects/${id}/story/mine`, notes ? { notes } : {}),
   buildArchitecture: (id: string, input: StoryJobInput = {}) => request<JobView>('POST', `/api/projects/${id}/story/architecture`, input),
+  /** Reconsider an architecture version: a new version is built from the editor's brief; every version is kept. */
+  reviseArchitecture: (id: string, input: Omit<ReviseArchitectureInput, 'aspects'> & { aspects?: ReviseArchitectureInput['aspects'] }) =>
+    request<JobView>('POST', `/api/projects/${id}/story/architecture/revise`, input),
+  /** Explore 2–3 alternative angles from the story pack (nothing is committed). */
+  exploreAngles: (id: string, input: Partial<ExploreAnglesInput>) => request<JobView>('POST', `/api/projects/${id}/story/angles`, input),
   reorderSelection: (id: string, candidateIds: string[]) => request<StoryView>('PUT', `/api/projects/${id}/story/selection-order`, { candidateIds }),
   updateOpportunity: (opportunityId: string, input: UpdateContentOpportunityInput) => request<ContentOpportunityView>('PATCH', `/api/content-opportunities/${opportunityId}`, input),
   /** What a content package request would contain (read only; nothing is generated). */

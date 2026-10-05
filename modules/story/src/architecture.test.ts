@@ -27,6 +27,7 @@ const units: SelectedUnit[] = normalizeMined(FAKE_VALID.slice(0, 8), evidence, {
   priority: 'NORMAL',
   editorNotes: null,
   selectionOrder: null,
+  reserve: false,
 }));
 
 const verdictOf = (k: string) => evidence.claim(k)?.verdict;

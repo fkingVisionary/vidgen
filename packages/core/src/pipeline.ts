@@ -1,4 +1,5 @@
 import {
+  JOB_TYPES,
   PROJECT_STATUSES,
   type ApprovalDecision,
   type ApprovalGate,
@@ -153,6 +154,21 @@ export const STATUS_DEFINITIONS: Record<ProjectStatus, StatusDefinition> = {
   FAILED: { stage: null, stageState: 'FAILED', jobs: [] },
 };
 
+/**
+ * Side jobs: auxiliary work that may run while the project is in one of the
+ * listed statuses without belonging to any phase. They never start, complete
+ * or fail a phase — the project's status is the same whether they succeed or
+ * fail — and they are not part of the happy path.
+ */
+export const SIDE_JOBS: Readonly<Partial<Record<JobType, readonly ProjectStatus[]>>> = {
+  // Alternative narrative angles from the curated story pack, before committing to one.
+  STORY_ANGLES: ['STORY_SELECTION', 'STORY_REVIEW', 'STORY_APPROVED'],
+};
+
+export function isSideJob(type: JobType): boolean {
+  return SIDE_JOBS[type] !== undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Lookups
 // ---------------------------------------------------------------------------
@@ -177,7 +193,7 @@ for (const status of PROJECT_STATUSES) {
 /** The status in which a job type runs. Every job type runs in exactly one status. */
 export function jobPhase(type: JobType): ProjectStatus {
   const phase = JOB_PHASE.get(type);
-  if (!phase) throw new Error(`Job type ${type} is not part of the pipeline`);
+  if (!phase) throw new Error(isSideJob(type) ? `Job type ${type} is a side job: it belongs to no phase` : `Job type ${type} is not part of the pipeline`);
   return phase;
 }
 
@@ -286,6 +302,10 @@ export function resolveEnqueue(status: ProjectStatus, type: JobType): EnqueueRes
   if (status === 'FAILED') {
     return { ok: false, reason: 'Project has FAILED: retry the failed job or rewind the project first' };
   }
+  const side = SIDE_JOBS[type];
+  if (side) {
+    return side.includes(status) ? { ok: true, enterStatus: null } : { ok: false, reason: `${type} runs while the project is in ${side.join(', ')}; it is in ${status}` };
+  }
   const def = STATUS_DEFINITIONS[status];
   if (def.jobs.includes(type)) return { ok: true, enterStatus: null };
   if (def.next && STATUS_DEFINITIONS[def.next].jobs.includes(type)) {
@@ -322,6 +342,8 @@ export function resolveApproval(
 export interface AvailableActions {
   /** Job types that can be enqueued right now. */
   runnableJobs: JobType[];
+  /** Side jobs that can run now without changing the project's status. */
+  sideJobs: JobType[];
   /** Status the project will START into when one of those jobs is enqueued, if any. */
   startsPhase: ProjectStatus | null;
   gate: GateDefinition | null;
@@ -343,5 +365,6 @@ export function getAvailableActions(status: ProjectStatus, ctx: TransitionContex
   const rewindTargets = PROJECT_STATUSES.filter(
     (to) => getTransitionKind(status, to, ctx) === 'REWIND',
   );
-  return { runnableJobs, startsPhase, gate: def.gate ?? null, rewindTargets };
+  const sideJobs = JOB_TYPES.filter((t) => SIDE_JOBS[t]?.includes(status) ?? false);
+  return { runnableJobs, sideJobs, startsPhase, gate: def.gate ?? null, rewindTargets };
 }

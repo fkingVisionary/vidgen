@@ -63,6 +63,8 @@ enum JobType {
   RESEARCH
   STORY_MINING
   STORY_ARCHITECTURE
+  /// Side job: alternative narrative angles from the curated story pack.
+  STORY_ANGLES
   SCRIPT
   VOICE
   VISUAL_PLAN
@@ -395,6 +397,7 @@ model Project {
   storyCandidates      StoryCandidate[]
   stories              StoryArchitecture[]
   contentOpportunities ContentOpportunity[]
+  storyExplorations    StoryExploration[]
   scripts              Script[]
   storyboards          Storyboard[]
   infographics         Infographic[]
@@ -467,13 +470,14 @@ model Job {
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  languageVersion LanguageVersion?    @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
-  providerCalls   ProviderCall[]
-  events          ProjectEvent[]
-  dossiers        ResearchDossier[]
-  storyPacks      StoryPack[]
-  stories         StoryArchitecture[]
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion   LanguageVersion?    @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
+  providerCalls     ProviderCall[]
+  events            ProjectEvent[]
+  dossiers          ResearchDossier[]
+  storyPacks        StoryPack[]
+  stories           StoryArchitecture[]
+  storyExplorations StoryExploration[]
 
   @@index([status, runAfter])
   @@index([projectId, type, status])
@@ -799,6 +803,7 @@ model StoryPack {
   job           Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
   candidates    StoryCandidate[]
   architectures StoryArchitecture[]
+  explorations  StoryExploration[]
 
   @@unique([projectId, version])
   @@map("story_packs")
@@ -920,8 +925,13 @@ model StoryArchitecture {
   qualityReport        Json?          @map("quality_report")
   qualityPassed        Boolean?       @map("quality_passed")
   stats                Json           @default("{}")
-  /// The editor's instructions for this version (e.g. rework notes).
+  /// The editor's instructions for this version (rework notes, or the brief of a revision).
   notes                String?
+  /// The version this one revises (kept unchanged); null when built from the selection.
+  revisionOfId         String?        @map("revision_of_id") @db.Uuid
+  /// The exploration whose angle it was built on or revised toward, and the angle's key ("A2").
+  explorationId        String?        @map("exploration_id") @db.Uuid
+  angleKey             String?        @map("angle_key")
   jobId                String?        @map("job_id") @db.Uuid
   createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -930,12 +940,49 @@ model StoryArchitecture {
   dossier              ResearchDossier?     @relation(fields: [dossierId], references: [id], onDelete: SetNull)
   pack                 StoryPack?           @relation(fields: [packId], references: [id], onDelete: SetNull)
   job                  Job?                 @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  revisionOf           StoryArchitecture?   @relation("ArchitectureRevisions", fields: [revisionOfId], references: [id], onDelete: SetNull)
+  revisions            StoryArchitecture[]  @relation("ArchitectureRevisions")
+  exploration          StoryExploration?    @relation("ArchitectureAngle", fields: [explorationId], references: [id], onDelete: SetNull)
+  explorationsOf       StoryExploration[]   @relation("ExplorationBase")
   scripts              Script[]
   approvals            Approval[]
   contentOpportunities ContentOpportunity[]
 
   @@unique([projectId, version])
+  @@index([revisionOfId])
   @@map("story_architectures")
+}
+
+/// Alternative narrative angles explored from one story pack (a STORY_ANGLES side job): 2–3
+/// materially different approaches to the same curated units, compared before committing to one.
+/// Evidence-bound (the pack's units and their claims); not an architecture, approves nothing.
+model StoryExploration {
+  id                    String   @id @default(uuid(7)) @db.Uuid
+  projectId             String   @map("project_id") @db.Uuid
+  /// The story pack whose units the angles use (its dossier is the evidence).
+  packId                String   @map("pack_id") @db.Uuid
+  version               Int
+  /// Explored as alternatives to this architecture version.
+  basedOnArchitectureId String?  @map("based_on_architecture_id") @db.Uuid
+  /// StoryExplorationContent contract: the angles, angles the rules removed and why, comparisons.
+  content               Json
+  /// QualityReport contract: angle count, distinctness, evidence.
+  qualityReport         Json?    @map("quality_report")
+  qualityPassed         Boolean  @default(false) @map("quality_passed")
+  stats                 Json     @default("{}")
+  /// The editor's brief for the exploration.
+  notes                 String?
+  jobId                 String?  @map("job_id") @db.Uuid
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pack          StoryPack           @relation(fields: [packId], references: [id], onDelete: Cascade)
+  basedOn       StoryArchitecture?  @relation("ExplorationBase", fields: [basedOnArchitectureId], references: [id], onDelete: SetNull)
+  job           Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  architectures StoryArchitecture[] @relation("ArchitectureAngle")
+
+  @@unique([projectId, version])
+  @@map("story_explorations")
 }
 
 /// A content opportunity found in a story architecture: a structured brief for a future

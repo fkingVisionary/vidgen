@@ -49,6 +49,8 @@ export const JOB_TYPES = [
   'RESEARCH',
   'STORY_MINING',
   'STORY_ARCHITECTURE',
+  /** Side job: alternative narrative angles from the curated story pack (see SIDE_JOBS). */
+  'STORY_ANGLES',
   'SCRIPT',
   'VOICE',
   'VISUAL_PLAN',
@@ -331,6 +333,22 @@ export type ContentFormat = (typeof CONTENT_FORMATS)[number];
 /** The editor's decision on a content opportunity. Only a human sets anything but PROPOSED. */
 export const OPPORTUNITY_STATUSES = ['PROPOSED', 'APPROVED', 'REJECTED'] as const;
 export type OpportunityStatus = (typeof OPPORTUNITY_STATUSES)[number];
+
+// ---------------------------------------------------------------------------
+// Editorial revision loop and alternative angles
+// ---------------------------------------------------------------------------
+
+/** What the editor says is not working in an architecture: the checklist of a revision brief. */
+export const REVISION_ASPECTS = ['ANGLE', 'POV', 'EMOTIONAL_CENTRE', 'OPENING', 'STRUCTURE', 'PACING', 'NARRATIVE_STRATEGY', 'CENTRAL_QUESTION', 'HUMAN_STAKES'] as const;
+export type RevisionAspect = (typeof REVISION_ASPECTS)[number];
+
+/** Where a revision changed the architecture, in the architect's change log. */
+export const CHANGE_AREAS = [...REVISION_ASPECTS, 'UNITS', 'EVIDENCE', 'OTHER'] as const;
+export type ChangeArea = (typeof CHANGE_AREAS)[number];
+
+/** How an architecture version came about: built from the selection, or a revision of an earlier version. */
+export const ARCHITECTURE_ORIGINS = ['NEW', 'REVISION'] as const;
+export type ArchitectureOrigin = (typeof ARCHITECTURE_ORIGINS)[number];
 
 // ---------------------------------------------------------------------------
 // Visuals, infographics, media

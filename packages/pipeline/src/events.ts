@@ -17,6 +17,12 @@ export const EVENT = {
   SELECTION_REORDERED: 'SELECTION_REORDERED',
   /** The editor approved, rejected or annotated a content opportunity. */
   OPPORTUNITY_UPDATED: 'OPPORTUNITY_UPDATED',
+  /** The editor asked the architect to reconsider an architecture version (with a brief). */
+  ARCHITECTURE_REVISION_REQUESTED: 'ARCHITECTURE_REVISION_REQUESTED',
+  /** An earlier approved architecture was superseded by approving a newer version. */
+  ARCHITECTURE_SUPERSEDED: 'ARCHITECTURE_SUPERSEDED',
+  /** The editor asked for alternative narrative angles from the story pack. */
+  ANGLES_REQUESTED: 'ANGLES_REQUESTED',
   /** A mock job succeeded where the transition requires real providers (e.g. publishing). */
   PHASE_BLOCKED_MOCK: 'PHASE_BLOCKED_MOCK',
 } as const;

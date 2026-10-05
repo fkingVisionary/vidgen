@@ -146,7 +146,7 @@ describe('HTTP API', () => {
 describe('research dossier API', () => {
   it('serves the dossier with claims, citations, sources, quality report and cost, and links the approval', async () => {
     const { app, c } = await start({}, { fakeResearch: true });
-    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH', 'STORY_MINING', 'STORY_ARCHITECTURE']);
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH', 'STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES']);
     const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
     expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/research` })).json<ResearchView>()).toEqual({ versions: [], dossier: null });
 
@@ -196,7 +196,7 @@ describe('story API', () => {
 
   it('mines, lets the editor curate, checks the selection, builds and reviews the architecture', async () => {
     const { app, c } = await start({}, { fakeStory: true });
-    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['STORY_MINING', 'STORY_ARCHITECTURE']);
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES']);
     const p = await researched(app);
     expect(await story(app, p.id)).toMatchObject({ packs: [], pack: null, architecture: null, editable: false, selection: { count: 0, problem: 'No story pack yet' } });
 
@@ -434,6 +434,82 @@ describe('Story Engine 2.0 API', () => {
     const pkg = (await app.inject({ method: 'GET', url: `/api/projects/${p.id}/content-package` })).json();
     expect(pkg).toMatchObject({ documentary: { included: true, eligible: true }, shorts: { available: 0, returned: 0 }, architecture: { version: 1, logline: null, centralQuestion: 'Why did it end in court?' } });
     expect(pkg.notes).toContain('Architecture v1 was built by story engine 1, which does not identify content opportunities.');
+  });
+});
+
+describe('editorial revision loop API', () => {
+  const story = async (app: FastifyInstance, id: string, q = '') => (await app.inject({ method: 'GET', url: `/api/projects/${id}/story${q}` })).json<StoryView>();
+  const BRIEF = 'The opening is too slow and the point of view is unclear: open on the collapse and follow an investigator.';
+
+  it('explores angles before committing, builds on one, then reconsiders the architecture into a new version without overwriting anything', async () => {
+    const { app, c } = await start({}, { fakeStory: true });
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
+    await db.project.update({ where: { id: p.id }, data: { status: 'RESEARCH_COMPLETE', phaseSeq: 2 } });
+    await seedFakeDossier(db, p.id);
+    await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/mine`, payload: {} });
+    await c.runner.drain();
+    let view = await story(app, p.id);
+    expect(view.editorial).toMatchObject({ revise: { allowed: false, reason: 'No architecture of the current story pack to revise yet' }, angles: { allowed: true, reason: null } });
+    expect(view.editorial.poolKeys).toHaveLength(7);
+
+    // Explore alternative angles: a side job; the project stays in selection.
+    let res = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/angles`, payload: { count: 3, notes: 'Bolder openings.' } });
+    expect(res.statusCode).toBe(202);
+    expect(res.json<JobView>()).toMatchObject({ type: 'STORY_ANGLES', status: 'QUEUED' });
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/angles`, payload: { count: 4 } })).statusCode).toBe(400);
+    // Not through the generic job endpoint: the dedicated routes check and record the request.
+    const viaJobs = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/jobs`, payload: { type: 'STORY_ANGLES' } });
+    expect(viaJobs.statusCode).toBe(409);
+    expect(viaJobs.json().message).toMatch(/story\/angles/);
+    await c.runner.drain();
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}` })).json<ProjectDetailView>().status).toBe('STORY_SELECTION');
+    view = await story(app, p.id);
+    expect(view.explorations).toEqual([expect.objectContaining({ version: 1, angleCount: 3, qualityPassed: true, basedOnVersion: null })]);
+    expect(view.exploration).toMatchObject({ version: 1, notes: 'Bolder openings.', poolChanged: false, developed: [] });
+    expect(view.exploration!.content!.angles.map((a) => a.key)).toEqual(['A1', 'A2', 'A3']);
+    expect(view.exploration!.evidence.claims.length).toBeGreaterThan(0);
+
+    // Build on angle A2.
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture`, payload: { angle: { exploration: 5, key: 'A1' } } })).statusCode).toBe(409);
+    res = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture`, payload: { angle: { exploration: 1, key: 'A2' } } });
+    expect(res.statusCode).toBe(202);
+    await c.runner.drain();
+    view = await story(app, p.id);
+    expect(view.architecture).toMatchObject({ version: 1, origin: 'NEW', revisionOfVersion: null, angle: { explorationVersion: 1, key: 'A2', title: 'Follow the traders (test)' }, status: 'IN_REVIEW' });
+    expect(view.exploration!.developed).toEqual([{ key: 'A2', architectureVersion: 1 }]);
+    expect(view.editorial.revise).toEqual({ allowed: true, reason: null });
+
+    // Reconsider it: explicit brief, a new version, the old one kept.
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture/revise`, payload: { baseVersion: 1, brief: 'too short' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture/revise`, payload: { baseVersion: 9, brief: BRIEF } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture/revise`, payload: { baseVersion: 1, brief: BRIEF, aspects: ['NOT_AN_ASPECT'] } })).statusCode).toBe(400);
+    const generic = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/jobs`, payload: { type: 'STORY_ARCHITECTURE', input: { notes: BRIEF, revise: { baseVersion: 1 } } } });
+    expect(generic.statusCode).toBe(409);
+    expect(generic.json().message).toMatch(/architecture\/revise/);
+    res = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture/revise`, payload: { baseVersion: 1, brief: BRIEF, aspects: ['OPENING', 'STRUCTURE'] } });
+    expect(res.statusCode).toBe(202);
+    expect(res.json<JobView>()).toMatchObject({ type: 'STORY_ARCHITECTURE' });
+    await c.runner.drain();
+    view = await story(app, p.id);
+    expect(view.architectures.map((a) => `v${a.version} ${a.status} ${a.origin}${a.revisionOfVersion ? ` of v${a.revisionOfVersion}` : ''}`)).toEqual(['v2 IN_REVIEW REVISION of v1', 'v1 SUPERSEDED NEW']);
+    const content = view.architecture!.content!;
+    expect('engineVersion' in content && content.provenance).toMatchObject({ kind: 'REVISION', baseVersion: 1, brief: BRIEF, aspects: ['OPENING', 'STRUCTURE'], diff: { substantial: true } });
+    expect(view.architecture!.notes).toBe(BRIEF);
+    const old = await story(app, p.id, '?architecture=1');
+    expect(old.architecture).toMatchObject({ version: 1, status: 'SUPERSEDED', angle: { key: 'A2' } });
+    expect(old.architecture!.content!.sequences.length).toBeGreaterThan(0);
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/story?exploration=9` })).statusCode).toBe(404);
+  });
+
+  it('refuses revisions and angles where the story engine is a MOCK', async () => {
+    const { app } = await start();
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
+    await db.project.update({ where: { id: p.id }, data: { status: 'STORY_SELECTION' } });
+    const angles = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/angles`, payload: {} });
+    expect(angles.statusCode).toBe(409);
+    expect(angles.json().message).toMatch(/real story engine/);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture/revise`, payload: { baseVersion: 1, brief: BRIEF } })).statusCode).toBe(409);
+    expect((await story(app, p.id)).editorial).toMatchObject({ revise: { allowed: false }, angles: { allowed: false } });
   });
 });
 

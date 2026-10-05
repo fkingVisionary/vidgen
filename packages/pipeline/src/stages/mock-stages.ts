@@ -19,6 +19,7 @@ const NOT_DONE: Record<JobType, string> = {
   RESEARCH: 'No research was performed. No sources or claims were created.',
   STORY_MINING: 'No story mining was performed. No story candidates were created.',
   STORY_ARCHITECTURE: 'No story architecture was written.',
+  STORY_ANGLES: 'No narrative angles were explored.',
   SCRIPT: 'No script was written.',
   VOICE: 'No speech was synthesised (mock audio is a beep followed by silence).',
   VISUAL_PLAN: 'No storyboard was created.',
@@ -71,6 +72,7 @@ const handlers: StageHandler[] = [
   },
   textStage('STORY_MINING', 'story.mine'),
   textStage('STORY_ARCHITECTURE', 'story.architecture'),
+  textStage('STORY_ANGLES', 'story.angles'),
   textStage('SCRIPT', 'script.draft'),
   {
     type: 'VOICE',

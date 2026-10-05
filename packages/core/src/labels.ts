@@ -1,7 +1,9 @@
 import type { HistoricalValueKey, OpportunityScoreKey, StoryScoreKey, StoryValueKey } from './contracts/story.ts';
 import type {
   ApprovalGate,
+  ArchitectureOrigin,
   BeatFunction,
+  ChangeArea,
   CandidatePriority,
   CandidateStatus,
   CastKind,
@@ -16,6 +18,7 @@ import type {
   Presentation,
   ProjectStatus,
   ReconstructionLevel,
+  RevisionAspect,
   SourceType,
   SpeechKind,
   Stage,
@@ -77,6 +80,7 @@ export const JOB_TYPE_LABELS: Record<JobType, string> = {
   RESEARCH: 'Research',
   STORY_MINING: 'Story Mining',
   STORY_ARCHITECTURE: 'Story Architecture',
+  STORY_ANGLES: 'Story angles',
   SCRIPT: 'Script',
   VOICE: 'Voice / narration',
   VISUAL_PLAN: 'Visual plan (storyboard)',
@@ -293,4 +297,32 @@ export const OPPORTUNITY_SCORE_LABELS: Record<OpportunityScoreKey, string> = {
   visual: 'Visual punch',
   emotion: 'Emotional pull',
   pace: 'Fits the short format',
+};
+
+// ---------------------------------------------------------------------------
+// Editorial revision loop and alternative angles
+// ---------------------------------------------------------------------------
+
+export const REVISION_ASPECT_LABELS: Record<RevisionAspect, string> = {
+  ANGLE: 'Angle',
+  POV: 'Point of view',
+  EMOTIONAL_CENTRE: 'Emotional centre',
+  OPENING: 'Opening',
+  STRUCTURE: 'Structure',
+  PACING: 'Pacing',
+  NARRATIVE_STRATEGY: 'Narrative strategy',
+  CENTRAL_QUESTION: 'Central question',
+  HUMAN_STAKES: 'Human stakes',
+};
+
+export const CHANGE_AREA_LABELS: Record<ChangeArea, string> = {
+  ...REVISION_ASPECT_LABELS,
+  UNITS: 'Story units',
+  EVIDENCE: 'Evidence and presentation',
+  OTHER: 'Other',
+};
+
+export const ARCHITECTURE_ORIGIN_LABELS: Record<ArchitectureOrigin, string> = {
+  NEW: 'Built from the selection',
+  REVISION: 'Revision',
 };

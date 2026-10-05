@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import {
+  ARCHITECTURE_ORIGINS,
   BEAT_FUNCTIONS,
   CAST_KINDS,
+  CHANGE_AREAS,
   CHARACTER_KINDS,
   HISTORICAL_STATUSES,
   INFORMATION_CLASSES,
@@ -9,6 +11,7 @@ import {
   POV_STRATEGIES,
   PRESENTATIONS,
   RECONSTRUCTION_LEVELS,
+  REVISION_ASPECTS,
   SPEECH_KINDS,
   TIME_JUMPS,
 } from '../enums.ts';
@@ -371,6 +374,78 @@ export const ReconstructionSummary = z.object({
 });
 export type ReconstructionSummary = z.infer<typeof ReconstructionSummary>;
 
+// ---------------------------------------------------------------------------
+// Editorial revision loop
+// ---------------------------------------------------------------------------
+
+/** One change a revision made, and why: the architect's account. */
+export const RevisionChange = z.object({ area: z.enum(CHANGE_AREAS), what: z.string(), why: z.string() });
+export type RevisionChange = z.infer<typeof RevisionChange>;
+
+export const RevisionChangeLog = z.object({
+  summary: z.string(),
+  changes: z.array(RevisionChange),
+  /** What the revision deliberately kept. */
+  kept: z.array(z.string()),
+});
+export type RevisionChangeLog = z.infer<typeof RevisionChangeLog>;
+
+const Change = z.object({ changed: z.boolean(), before: z.string(), after: z.string() });
+
+/** What a revision actually changed against its base, computed by code (not the model's account). */
+export const ArchitectureDiff = z.object({
+  /** Units added or removed, reordered, merged or split, a new opening, mode, POV or central question. */
+  substantial: z.boolean(),
+  sequences: z.object({ before: z.number().int(), after: z.number().int(), titlesBefore: z.array(z.string()), titlesAfter: z.array(z.string()) }),
+  /** Story units in order of first appearance. */
+  unitsBefore: z.array(z.string()),
+  unitsAfter: z.array(z.string()),
+  unitsAdded: z.array(z.string()),
+  unitsRemoved: z.array(z.string()),
+  /** The units both versions tell appear in a different order. */
+  reordered: z.boolean(),
+  /** Units now told in one sequence that were told in different ones. */
+  merged: z.array(z.array(z.string())),
+  /** Units told in one sequence before that are now told in different ones. */
+  split: z.array(z.array(z.string())),
+  opening: Change,
+  centralQuestion: Change,
+  narrativeMode: Change,
+  pov: Change,
+  logline: Change,
+  humanStakes: Change,
+  castAdded: z.array(z.string()),
+  castRemoved: z.array(z.string()),
+  durationSec: z.object({ before: z.number(), after: z.number() }),
+  beats: z.object({ before: z.number().int(), after: z.number().int() }),
+  reconstruction: z.object({ before: z.string(), after: z.string() }),
+});
+export type ArchitectureDiff = z.infer<typeof ArchitectureDiff>;
+
+/** An explored angle an architecture was built on, or revised toward. */
+export const AngleOrigin = z.object({ explorationId: z.string(), explorationVersion: z.number().int(), key: z.string(), title: z.string() });
+export type AngleOrigin = z.infer<typeof AngleOrigin>;
+
+/** How an architecture version came about. Null on versions built before revisions existed. */
+export const ArchitectureProvenance = z.object({
+  kind: z.enum(ARCHITECTURE_ORIGINS),
+  /** REVISION: the version that was revised (it is kept unchanged). */
+  baseVersion: z.number().int().nullable(),
+  baseId: z.string().nullable(),
+  /** The editor's brief for this version. */
+  brief: z.string().nullable(),
+  /** REVISION: what the editor said is not working. */
+  aspects: z.array(z.enum(REVISION_ASPECTS)),
+  angle: AngleOrigin.nullable(),
+  /** REVISION: the architect's account of what changed and why. */
+  changeLog: RevisionChangeLog.nullable(),
+  /** REVISION: what differs from the base, computed by code on the final version (after both reviewers). */
+  diff: ArchitectureDiff.nullable(),
+  /** Units the version could use beyond the selection: approved by the editor but not selected. */
+  reserveKeys: z.array(z.string()),
+});
+export type ArchitectureProvenance = z.infer<typeof ArchitectureProvenance>;
+
 /** StoryArchitecture.content in Story Engine 2.0: a cinematic blueprint (not a script) inside the evidence boundary. */
 export const StoryArchitectureContentV2 = z.object({
   engineVersion: z.literal(2),
@@ -390,6 +465,7 @@ export const StoryArchitectureContentV2 = z.object({
   sequences: z.array(StorySequenceV2),
   unusedCandidates: z.array(z.object({ candidateKey: z.string(), reason: z.string() })),
   reconstruction: ReconstructionSummary,
+  provenance: ArchitectureProvenance.nullable().default(null),
 });
 export type StoryArchitectureContentV2 = z.infer<typeof StoryArchitectureContentV2>;
 
@@ -444,3 +520,64 @@ export const ContentOpportunityContent = z.object({
   notes: z.array(z.string()),
 });
 export type ContentOpportunityContent = z.infer<typeof ContentOpportunityContent>;
+
+// ---------------------------------------------------------------------------
+// Alternative angles
+// ---------------------------------------------------------------------------
+
+/**
+ * One narrative approach to the same curated story units: a treatment to
+ * compare before committing to an architecture, not an architecture. Every
+ * unit is a unit of the story pack; its evidence is those units' claims.
+ */
+export const StoryAngle = z.object({
+  /** A1, A2, A3. */
+  key: z.string(),
+  title: z.string(),
+  logline: z.string(),
+  centralQuestion: z.string(),
+  emotionalCentre: z.string(),
+  /** Who the viewer follows. */
+  humanAnchor: z.string(),
+  narrativeMode: z.enum(NARRATIVE_MODES),
+  secondaryModes: z.array(z.enum(NARRATIVE_MODES)),
+  povStrategy: PovChoice,
+  opening: z.object({ concept: z.string(), basis: z.enum(INFORMATION_CLASSES), unitKey: z.string().nullable() }),
+  movements: z.array(z.object({ title: z.string(), unitKeys: z.array(z.string()), what: z.string() })),
+  resolution: z.string(),
+  /** Units used, in order of first appearance. */
+  unitKeys: z.array(z.string()),
+  /** Selected units the angle leaves out, and why. */
+  unusedUnits: z.array(z.object({ unitKey: z.string(), reason: z.string() })),
+  /** The claims of the units used (derived): the angle's evidence. */
+  claimKeys: ClaimKeys,
+  historicalStatus: z.enum(HISTORICAL_STATUSES),
+  historicalConfidence: z.number().int().min(0).max(10),
+  /** How it differs from the other angles. */
+  differs: z.string(),
+  strengths: z.array(z.string()),
+  risks: z.array(z.string()),
+  /** What the rules found worth knowing (not blocking), e.g. a HIGH-priority unit left out. */
+  warnings: z.array(z.string()),
+  /** What the rules adjusted. */
+  notes: z.array(z.string()),
+});
+export type StoryAngle = z.infer<typeof StoryAngle>;
+
+/** How two angles differ (computed): mode, POV, opening, human anchor, central question, structure. */
+export const AngleComparison = z.object({ a: z.string(), b: z.string(), differences: z.array(z.string()) });
+export type AngleComparison = z.infer<typeof AngleComparison>;
+
+/** StoryExploration.content: the angles explored from one story pack. */
+export const StoryExplorationContent = z.object({
+  angles: z.array(StoryAngle),
+  removed: z.array(z.object({ title: z.string(), reason: z.string() })),
+  /** Units the angles could use: the editor's selection, then units the editor approved but did not select. */
+  poolKeys: z.array(z.string()),
+  reserveKeys: z.array(z.string()),
+  comparisons: z.array(AngleComparison),
+  /** Explored as alternatives to this architecture version. */
+  basedOnVersion: z.number().int().nullable(),
+  editorNotes: z.string().nullable(),
+});
+export type StoryExplorationContent = z.infer<typeof StoryExplorationContent>;

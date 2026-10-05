@@ -20,6 +20,7 @@ const units: SelectedUnit[] = normalizeMined(FAKE_VALID.slice(0, 8), evidence, {
   priority: 'NORMAL',
   editorNotes: null,
   selectionOrder: null,
+  reserve: false,
 }));
 const raw = fakeArchitectOutput(
   units.map((u) => ({ key: u.key, claims: u.claimKeys, characters: u.characters.map((c) => ({ name: c.name, kind: c.kind })) })),

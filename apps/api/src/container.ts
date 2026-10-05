@@ -3,7 +3,7 @@ import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers, t
 import type { JobType } from '@docengine/core';
 import { createProviders, describeProviders, type ProviderSet } from '@docengine/providers';
 import { createResearchStage, type ResearchConfig } from '@docengine/research';
-import { createStoryArchitectureStage, createStoryMiningStage, type StoryConfig } from '@docengine/story';
+import { createStoryAnglesStage, createStoryArchitectureStage, createStoryMiningStage, type StoryConfig } from '@docengine/story';
 import type { Logger } from 'pino';
 import { providerSelection, providerSettings, type Env } from './env.ts';
 
@@ -45,9 +45,10 @@ export function createContainer(
     handlers.RESEARCH = createResearchStage({ maxCostUsd: env.RESEARCH_MAX_COST_USD, maxSourcesToRetrieve: env.RESEARCH_MAX_SOURCES, ...overrides.researchConfig });
   }
   if (!providers.ai.info.mock) {
-    const story: Partial<StoryConfig> = { maxCostUsd: { mining: env.STORY_MAX_COST_USD, architecture: env.STORY_MAX_COST_USD }, ...overrides.storyConfig };
+    const story: Partial<StoryConfig> = { maxCostUsd: { mining: env.STORY_MAX_COST_USD, architecture: env.STORY_MAX_COST_USD, angles: env.STORY_MAX_COST_USD }, ...overrides.storyConfig };
     handlers.STORY_MINING = createStoryMiningStage(story);
     handlers.STORY_ARCHITECTURE = createStoryArchitectureStage(story);
+    handlers.STORY_ANGLES = createStoryAnglesStage(story);
   }
   const realStages = Object.values(handlers).filter((h) => !h.mock).map((h) => h.type);
   const runner = new JobRunner({

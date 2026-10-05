@@ -81,6 +81,11 @@ export interface SelectedUnit {
   storyDesign: StoryDesign | null;
   /** The editor's position for this unit in the selection, if the editor ordered it. */
   selectionOrder: number | null;
+  /**
+   * Not in the selection, but approved by the editor: a revision or an angle
+   * may bring it in (e.g. to replace a sequence); leaving it out needs no reason.
+   */
+  reserve: boolean;
 }
 
 export const FINDING_KINDS = [
@@ -705,7 +710,7 @@ export function buildArchitecture(raw: ArchitectOutput, evidence: EvidenceBase, 
   // ── Editor: priorities, unused units, order ───────────────────────────────
   const reasons = new Map(raw.unusedCandidates.map((u) => [u.candidateKey.trim(), clean(u.reason)]));
   const unusedCandidates = units
-    .filter((u) => !used.has(u.key))
+    .filter((u) => !used.has(u.key) && !u.reserve)
     .map((u) => {
       const reason = reasons.get(u.key) ?? '';
       if (u.priority === 'HIGH') global('HIGH_PRIORITY_UNUSED', `${u.key} "${u.title}" is HIGH priority but no sequence uses it`);
@@ -737,6 +742,7 @@ export function buildArchitecture(raw: ArchitectOutput, evidence: EvidenceBase, 
       sequences,
       unusedCandidates,
       reconstruction,
+      provenance: null,
     },
     notes,
     findings,
