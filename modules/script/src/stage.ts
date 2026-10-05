@@ -1,5 +1,6 @@
 import {
   CURRENT_SCRIPT_ENGINE,
+  RetrievedExample,
   ScriptJobInput,
   StoryArchitectureContentV2,
   fmtClock,
@@ -14,7 +15,7 @@ import {
 } from '@docengine/core';
 import { NonRetryableError, type StageContext, type StageHandler } from '@docengine/pipeline';
 import { ProviderError } from '@docengine/providers';
-import { CostCeiling, EvidenceBase, StepCheckpoint } from '@docengine/story/shared';
+import { CostCeiling, EvidenceBase, StepCheckpoint, wordTokens } from '@docengine/story/shared';
 import { z } from 'zod';
 import { DEFAULT_SCRIPT_CONFIG, SCRIPT_STEPS, type ScriptConfig, type ScriptMode, type ScriptStep } from './config.ts';
 import { compareDrafts, diffBlocks, evidenceChanges } from './compare.ts';
@@ -27,7 +28,7 @@ import { renderArchitecture, renderEvidence, renderScript } from './render.ts';
 import { issueResolution, reviewPatch, reviewSummary } from './review.ts';
 import { CRAFT_KINDS, blockingCount, checkScript, cutPlan, isBlocking, ruleDigest, type RuleDigest, type ScriptFinding, type ScriptFindingKind } from './rules.ts';
 import { FactCheckOutput, NarrationOutput, PerformanceOutput, PlannerOutput, RefineOutput, ScriptEditorOutput, WriterOutput } from './schemas.ts';
-import { approvedHouseExamples, changeReport, diagnose, loadCorpus, withHouseExamples, type Corpus } from '@docengine/writing';
+import { approvedHouseExamples, asRecord, changeReport, diagnose, loadCorpus, withHouseExamples } from '@docengine/writing';
 import { moneyUses, narrationBlocks, scriptNames } from './editorial.ts';
 import { composeLineage, countKinds, moneyUsed, moveToVisual, narrationBase, narrationGuard, narrationRecord, planNarration, renderNarrationContext, toNarrationPatch, uncertaintyOf, type NarrationPlan } from './narration.ts';
 import { buildScope, type ScriptScope } from './scope.ts';
@@ -65,7 +66,10 @@ const Unavailable = z.object({ unavailable: z.string() });
 const EditStep = z.union([ScriptEditorOutput, Unavailable]);
 const FactStep = z.union([FactCheckOutput, Unavailable]);
 const PerformStep = z.union([PerformanceOutput, Unavailable]);
-const NarrateStep = z.union([NarrationOutput, Unavailable]);
+/** The corpus a narration pass was given, saved with its output: a resumed run records what the model saw, not what the corpus holds now. */
+const Given = { corpusVersion: z.string(), retrieved: z.array(RetrievedExample) };
+const Narrated = NarrationOutput.extend(Given);
+const NarrateStep = z.union([Narrated, Unavailable.extend(Given)]);
 
 type Mode = ScriptMode;
 
@@ -161,7 +165,7 @@ class ScriptRun {
 
     const reviewChanges: ScriptReviewChange[] = [];
     const judged = { scope, target, allowed, base: base?.draft ?? null, kept: keptLines };
-    /** Where each block the reviewers saw went, reviewer by reviewer (for lineage and the money context used). */
+    /** Where each block the reviewers saw went, reviewer by reviewer (for lineage and the blocks the narration record names). */
     const keyMaps: Map<string, string | null>[] = [];
 
     // B½. The Human Narration Pass (Writing Engine 2): targeted edits from the corpus and the diagnostics, judged one by one.
@@ -170,22 +174,26 @@ class ScriptRun {
     let narrationOut: NarrationOutput | null = null;
     let narrationUnavailable: string | null = null;
     let moved: { ref: string; note: string }[] = [];
-    let corpus: Corpus | null = null;
+    /** The corpus version and the examples the pass was given (as saved with its output). */
+    let given: { corpusVersion: string; retrieved: RetrievedExample[] } | null = null;
     if (!narrating) await this.steps.skip('narrate');
     else {
       await this.ceiling.check();
-      corpus = withHouseExamples(loadCorpus(), await approvedHouseExamples(ctx.db));
+      const corpus = withHouseExamples(loadCorpus(), await approvedHouseExamples(ctx.db));
       if (corpus.errors.length) notes.push(`Writing corpus: ${corpus.errors.length} example(s) failed validation and were left out`);
-      // Blocks a narration pass already edited in the base (a pass on a pass's output): its judgment calls stand.
-      const handled = mode === 'NARRATION' && base?.content?.narration ? new Set((base.content.reviewChanges ?? []).filter((c) => c.reviewer === 'NARRATION' && c.status === 'ACCEPTED' && c.savedRef).map((c) => c.savedRef!)) : undefined;
+      // Blocks a narration pass already edited in the base (a pass on a pass's output, or on a restored copy of one, which keeps its ledger): its judgment calls stand.
+      const handled = mode === 'NARRATION' ? new Set((base?.content?.reviewChanges ?? []).filter((c) => c.reviewer === 'NARRATION' && c.status === 'ACCEPTED' && c.savedRef).map((c) => c.savedRef!)) : undefined;
       const plan = planNarration(draft, scope, { kept: keptLines, corpus, allowed, findings: draftFindings, handled });
       narrationPlan = plan;
-      const narrated = await this.steps.step('narrate', NarrateStep, () =>
-        this.unavailableOnError(() => this.call('narrate', 'script.narrate', NarrationOutput, 'NarrationPass', narrationSystemPrompt(), this.narratePrompt(draft, scope, target, allowed, brief, plan, base, mode), (x) => ({ edits: x.edits.length, kept: x.kept.length }))),
-      );
+      const sent = { corpusVersion: plan.corpusVersion, retrieved: asRecord(plan.retrieved) };
+      const narrate = () => this.call('narrate', 'script.narrate', NarrationOutput, 'NarrationPass', narrationSystemPrompt(), this.narratePrompt(draft, scope, target, allowed, brief, plan, base, mode), (x) => ({ edits: x.edits.length, kept: x.kept.length }));
+      // A narration pass on its own would save a copy of the base: it fails instead, and saves nothing, so a retry calls the model again.
+      const narrated =
+        mode === 'NARRATION'
+          ? await this.steps.step('narrate', Narrated, async () => ({ ...(await narrate().catch(narrationFailed)), ...sent }))
+          : await this.steps.step('narrate', NarrateStep, async () => ({ ...(await this.unavailableOnError(narrate)), ...sent }));
+      given = { corpusVersion: narrated.corpusVersion, retrieved: narrated.retrieved };
       if ('unavailable' in narrated) {
-        // A narration pass on its own would save a copy of the base: fail instead.
-        if (mode === 'NARRATION') throw new NonRetryableError(`The narration pass could not run: ${narrated.unavailable}`);
         narrationUnavailable = narrated.unavailable;
         notes.push(`Narration pass unavailable: ${narrated.unavailable}`);
       } else {
@@ -197,9 +205,9 @@ class ScriptRun {
         reviewChanges.push(...r.changes);
         keyMaps.push(r.keyMap);
         notes.push(...r.notes, ...[reviewSummary('Narration pass', r.changes)].filter((x): x is string => x !== null));
-        await ctx.progress(`Narration pass: ${plan.needs.size} block(s) needed work; ${r.changes.filter((c) => c.status === 'ACCEPTED').length} edit(s) kept, ${r.changes.filter((c) => c.status === 'REJECTED').length} rejected, ${r.changes.filter((c) => c.status === 'SKIPPED').length} skipped; ${plan.retrieved.length} corpus example(s) retrieved (corpus ${plan.corpusVersion})`, {
+        await ctx.progress(`Narration pass: ${plan.needs.size} block(s) needed work; ${r.changes.filter((c) => c.status === 'ACCEPTED').length} edit(s) kept, ${r.changes.filter((c) => c.status === 'REJECTED').length} rejected, ${r.changes.filter((c) => c.status === 'SKIPPED').length} skipped; ${given.retrieved.length} corpus example(s) retrieved (corpus ${given.corpusVersion})`, {
           changes: r.changes.map((c) => `${c.id} ${c.ref ?? ''} ${c.status}${c.status === 'ACCEPTED' ? '' : `: ${c.rejectionReason}`}`).slice(0, 60),
-          retrieved: plan.retrieved.map((x) => `${x.example.id}@${x.example.version} (${x.reason})`),
+          retrieved: given.retrieved.map((x) => `${x.id}@${x.version} (${x.reason})`),
         });
       }
     }
@@ -270,20 +278,39 @@ class ScriptRun {
     const afterUses = moneyUses(draft, scope);
     const after = diagnose({ blocks: narrationBlocks(draft), findings: countKinds(findings), money: afterUses, names });
     const lineage = mode === 'NARRATION' ? composeLineage(base!.draft, keyMaps) : null;
-    const narration = narrating
-      ? narrationRecord({
-          plan: narrationPlan,
-          out: narrationOut,
-          unavailable: narrationUnavailable,
-          changes: reviewChanges,
-          after,
-          afterUses,
-          names,
-          used: narrationOut && narrationPlan ? moneyUsed(narrationOut, reviewChanges, narrationPlan) : [],
-          moved,
-          lineage,
-          corpusVersion: corpus?.version ?? loadCorpus().version,
-        })
+    /** Where a block the narration pass saw is in the saved version, through the reviewers' renumbering (null: removed). */
+    const savedAt = (ref: string) => keyMaps.reduce<string | null>((key, m) => (key !== null && m.has(key) ? (m.get(key) ?? null) : key), ref);
+    // Money context a later reviewer took out again is not recorded as used: the record says what the saved text gives — the sum, and the context in its own words, as the guard judged the pass's edit.
+    const added = narrationOut && narrationPlan ? moneyUsed(narrationOut, reviewChanges, narrationPlan) : [];
+    const offered = new Map((narrationPlan?.money.contexts ?? []).map((c) => [c.id, c]));
+    const spaced = (t: string) => ` ${wordTokens(t).join(' ')} `;
+    const savedText = new Map(allBlocks(draft).map((b) => [b.key, spaced(b.text)]));
+    const used = added.filter((u) => {
+      const c = offered.get(u.contextId);
+      return !!c && afterUses.some((x) => x.ref === u.ref && x.contexts.some((k) => k.id === c.id)) && [c.explanation, c.comparisonValue].some((p) => savedText.get(u.ref)?.includes(spaced(p)));
+    });
+    for (const u of added) if (!used.includes(u)) notes.push(`Narration pass: the money context ${u.contextId} it added at ${u.ref} is no longer in the saved text (a later reviewer changed the block)`);
+    // The record names the corpus and the examples the pass was given, and every block in the saved version's numbering.
+    const narration = given
+      ? {
+          ...narrationRecord({
+            plan: narrationPlan,
+            out: narrationOut,
+            unavailable: narrationUnavailable,
+            changes: reviewChanges,
+            after,
+            afterUses,
+            names,
+            used,
+            moved: moved.flatMap((m) => {
+              const ref = savedAt(m.ref);
+              return ref ? [{ ...m, ref }] : [];
+            }),
+            lineage,
+            corpusVersion: given.corpusVersion,
+          }),
+          retrieved: given.retrieved.map((x) => ({ ...x, refs: x.refs.flatMap((ref) => savedAt(ref) ?? []) })),
+        }
       : undefined;
     const changeLog = mode === 'NARRATION' ? narrationChangeLog(reviewChanges, narrationOut, draft, keptLines) : mode === 'REFINEMENT' ? { ...writerOut!.changeLog, kept: keptLines } : (writerOut?.changeLog ?? null);
 
@@ -740,6 +767,11 @@ class ScriptRun {
       SELECT SUM(COALESCE(actual_cost_usd, estimated_cost_usd))::text AS spent FROM provider_calls WHERE job_id = ${this.ctx.job.id}::uuid`;
     return Math.round(Number(row?.spent ?? 0) * 10_000) / 10_000;
   }
+}
+
+/** A narration pass on its own that cannot run (a permanent provider error) fails the job. */
+function narrationFailed(err: unknown): never {
+  throw err instanceof ProviderError && !err.retryable ? new NonRetryableError(`The narration pass could not run: ${err.message}`) : err;
 }
 
 function summarizeWriter(x: WriterOutput): Record<string, unknown> {

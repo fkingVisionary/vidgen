@@ -207,7 +207,7 @@ enum (`WritingExampleStatus`) and one new table (`writing_examples`, the house
 candidates from approved scripts). No existing row is changed; the Voice
 Engine's tables and code are untouched.
 
-The script prompt version changed (`script-2.0-2026-10-05.1`) and the script
+The script prompt version changed (`script-2.0-2026-10-05.2`) and the script
 job has a new step, `narrate`: a Retry of a script job started before the
 deploy starts its model calls again. A draft now makes six model calls
 (planner, writer, narration pass, script editor, fact checker, performance);

@@ -1,8 +1,9 @@
 import { QualityReport, ScriptContent, runtimeTarget, type JobType } from '@docengine/core';
 import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers } from '@docengine/pipeline';
-import { ALL_MOCK, createProviders, type ProviderSet } from '@docengine/providers';
+import { ALL_MOCK, ProviderError, createProviders, type ProviderSet } from '@docengine/providers';
 import { createStoryArchitectureStage, createStoryMiningStage } from '@docengine/story';
 import { seedFakeDossier } from '@docengine/story/testing';
+import { loadCorpus, textHash } from '@docengine/writing';
 import { describe, expect, it } from 'vitest';
 import { tulipInput, useTestDatabase } from '../../../test/helpers.ts';
 import { compareDrafts, evidenceChanges } from './compare.ts';
@@ -12,7 +13,7 @@ import { createScriptStage } from './stage.ts';
 import { loadVersion } from './store.ts';
 import { NARRATION_CHECKLIST, REFINEMENT_CHECKLIST, refineSystemPrompt } from './prompts.ts';
 import type { WriterOutput } from './schemas.ts';
-import { FakeScriptAI, parseScript } from './testing.ts';
+import { FakeScriptAI, fakeNarration, parseMoneyContexts, parseNeeds, parseScript } from './testing.ts';
 
 const db = useTestDatabase();
 
@@ -42,7 +43,7 @@ async function run(s: Setup, projectId: string, type: JobType, input?: Record<st
 const statusOf = async (id: string) => (await db.project.findUniqueOrThrow({ where: { id } })).status;
 
 /** A project with an approved Story Engine 2.0 architecture (synthetic dossier; a fictional composite in sequence 1). */
-async function approvedArchitecture(s: Setup) {
+async function approvedArchitecture(s: Setup, options: FakeScriptAI['architectOptions'] = {}) {
   const p = await s.projects.createProject({ ...tulipInput, targetMinutesMin: 2, targetMinutesMax: 4 }, 'test');
   await db.project.update({ where: { id: p.id }, data: { status: 'RESEARCH_COMPLETE', phaseSeq: 2 } });
   await seedFakeDossier(db, p.id);
@@ -50,7 +51,7 @@ async function approvedArchitecture(s: Setup) {
   const pack = await db.storyPack.findFirstOrThrow({ where: { projectId: p.id }, orderBy: { version: 'desc' } });
   await db.storyCandidate.updateMany({ where: { packId: pack.id }, data: { selected: false } });
   await db.storyCandidate.updateMany({ where: { packId: pack.id, title: { in: SIX } }, data: { selected: true } });
-  s.ai.architectOptions = { secondsPerSequence: 30, composite: { name: 'Pieter Graanhout' } };
+  s.ai.architectOptions = { secondsPerSequence: 30, composite: { name: 'Pieter Graanhout' }, ...options };
   expect((await run(s, p.id, 'STORY_ARCHITECTURE')).status).toBe('SUCCEEDED');
   await s.projects.recordApproval(p.id, { gate: 'STORY', decision: 'APPROVED' }, 'editor');
   expect(await statusOf(p.id)).toBe('STORY_APPROVED');
@@ -719,7 +720,7 @@ describe('script engine (fake AI, real database)', () => {
     expect(s.ai.prompts['script.edit']![0]).toContain('# Changes already judged in this run');
   });
 
-  it('fails a narration pass that cannot run, saving no copy of the base', async () => {
+  it('fails a narration pass that cannot run, saving no copy of the base — and a retry, once the cause is fixed, runs the pass again', async () => {
     const s = setup();
     const projectId = await scripted(s);
     s.ai.brokenTask = 'script.narrate';
@@ -729,6 +730,174 @@ describe('script engine (fake AI, real database)', () => {
     expect(done.status).toBe('FAILED');
     expect(done.error).toMatch(/The narration pass could not run/);
     expect(await db.script.count({ where: { projectId } })).toBe(1);
+    // The failure is not saved as the pass's result: fixed (a key, the credit, a model id), the retry calls the model again.
+    s.ai.brokenTask = null;
+    const calls = s.ai.calls['script.narrate']!;
+    const retry = await s.projects.retryJob(job.id, 'editor');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: retry.id } })).status).toBe('SUCCEEDED');
+    expect(s.ai.calls['script.narrate']).toBe(calls + 1);
+    expect(ScriptContent.parse((await version(projectId, 2)).row.content).provenance).toMatchObject({ origin: 'NARRATION', baseVersion: 1 });
     await expect(s.projects.narrateScript(projectId, { baseVersion: 7 }, 'editor')).rejects.toThrow(/Script v7 not found/);
+  });
+
+  it('keeps an earlier pass’s judgment calls on a restored copy of its version: the pass plans exactly what it would on the original', async () => {
+    const s = setup({ narration: ['NARRATION'] });
+    // Three deliberate contrasts (a judgment call, flagged once there are two; no refrain settles them): two after a fake dramatic beat the pass removes, the third kept on purpose as it is.
+    const KEPT = 'It was not a gamble, but a bet on the spring.';
+    s.ai.writerTransform = (out) => {
+      const [a, b, c] = out.sections.flatMap((x) => x.blocks).filter((x) => x.infoClass === 'DOCUMENTED' && !x.speakerId);
+      a!.text = 'And then, the market turned. It was not a trade, but a promise.';
+      b!.text = 'But then, the buyers sign contracts, not for flowers, but for bulbs that are still in the ground.';
+      c!.text = KEPT;
+      return out;
+    };
+    const projectId = await scripted(s);
+    s.ai.narrator = (prompt) => ({ ...fakeNarration(prompt), kept: [KEPT] });
+    await s.projects.narrateScript(projectId, { baseVersion: 1 }, 'editor');
+    await s.runner.drain();
+    const v2 = await version(projectId, 2);
+    const edited = ScriptContent.parse(v2.row.content).reviewChanges!.filter((c) => c.reviewer === 'NARRATION' && c.status === 'ACCEPTED');
+    expect(edited).toHaveLength(2);
+    expect(allBlocksOf(v2).filter((b) => /not a trade, but a promise|not for flowers, but for bulbs/.test(b.text)).map((b) => b.key)).toEqual(edited.map((c) => c.savedRef));
+    const kept = allBlocksOf(v2).find((b) => b.text === KEPT)!.key;
+    expect(parseNeeds(s.ai.prompts['script.narrate']!.at(-1)!).has(kept)).toBe(true);
+    expect(ScriptContent.parse(v2.row.content).provenance.changeLog!.kept).toEqual([KEPT]);
+
+    // A pass on v2 leaves the contrasts it kept alone; so does a pass on a restored copy of v2, though the copy has no narration record.
+    s.ai.narrator = (prompt) => ({ verdict: 'Everything could be better (test).', edits: parseScript(prompt).filter((b) => !b.speaker).map((b) => ({ ref: b.ref, text: `${b.text} Again.`, reason: 'Drift (test).', fixes: ['RHYTHM' as const], moneyContext: [], visualNote: null })), kept: [] });
+    await s.projects.narrateScript(projectId, { baseVersion: 2 }, 'editor');
+    await s.runner.drain();
+    await s.editing.restore(projectId, { version: 2 }, 'editor');
+    const copy = await version(projectId, 4);
+    expect(ScriptContent.parse(copy.row.content)).toMatchObject({ provenance: { origin: 'RESTORE', baseVersion: 2 } });
+    expect(ScriptContent.parse(copy.row.content).narration).toBeUndefined();
+    expect(ScriptContent.parse(copy.row.content).provenance.changeLog).toEqual({ summary: 'Restored from v2', changes: [], kept: [KEPT] });
+    await s.projects.narrateScript(projectId, { baseVersion: 4 }, 'editor');
+    await s.runner.drain();
+    const [onOriginal, onCopy] = s.ai.prompts['script.narrate']!.slice(-2).map(parseNeeds);
+    expect(onCopy).toEqual(onOriginal);
+    expect([...onCopy!.keys()].some((ref) => ref === kept || edited.some((c) => c.savedRef === ref))).toBe(false);
+    expect(allBlocksOf(await version(projectId, 5)).map((b) => b.text)).toEqual(allBlocksOf(copy).map((b) => b.text));
+  });
+
+  it('records the corpus examples the pass was given, when a retry reuses its output after the corpus changed', async () => {
+    const s = setup({ narration: ['NARRATION'] });
+    s.ai.writerTransform = theatrical;
+    const projectId = await scripted(s);
+    // The script editor is overloaded on every attempt: the job fails after the narration pass.
+    const editor = s.ai.editor;
+    s.ai.editor = () => {
+      throw new ProviderError('fake-ai', 'overloaded (test)', true);
+    };
+    const job = await s.projects.narrateScript(projectId, { baseVersion: 1 }, 'editor');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('FAILED');
+    const sent = s.ai.prompts['script.narrate']!.at(-1)!;
+    // Meanwhile a person approves a house example for openings.
+    const opening = 'Nobody in the room could say what the paper was worth (test). Everyone agreed it was worth more tomorrow.';
+    await db.writingExample.create({
+      data: { exampleId: 'house-test-opening', text: opening, textHash: textHash(opening), category: 'hook', quality: 'excellent', traits: ['tension', 'restraint', 'curiosity', 'transition_by_consequence'], strengths: [], weaknesses: [], spokenRhythm: 'Two lines (test).', narrativeFunction: 'Opens the film (test).', whyItWorks: 'It withholds the answer (test).', sourceType: 'house', copyrightSafe: true, approvedForRetrieval: true, status: 'APPROVED', createdBy: 'editor' },
+    });
+    s.ai.editor = editor;
+    const retry = await s.projects.retryJob(job.id, 'editor');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: retry.id } })).status).toBe('SUCCEEDED');
+    // The pass's output was reused (no second call): the record names the corpus and the examples that call was given.
+    expect(s.ai.calls['script.narrate']).toBe(1);
+    const n = ScriptContent.parse((await version(projectId, 2)).row.content).narration!;
+    expect(n.corpusVersion).toBe(loadCorpus().version);
+    const texts = new Map(loadCorpus().examples.map((e) => [e.id, e.text.replace(/\s+/g, ' ').trim()]));
+    expect(n.retrieved.length).toBeGreaterThan(0);
+    expect(n.retrieved.filter((r) => !sent.includes(`"${texts.get(r.id)}"`))).toEqual([]);
+    // A new pass is given the house example, and says so.
+    await s.projects.narrateScript(projectId, { baseVersion: 1 }, 'editor');
+    await s.runner.drain();
+    expect(s.ai.prompts['script.narrate']!.at(-1)).toContain(opening);
+    expect(ScriptContent.parse((await version(projectId, 3)).row.content).narration!.retrieved.map((r) => r.id)).toContain('house-test-opening');
+  });
+
+  it('records where the moved picture description and the retrieved examples’ blocks are in the saved version, after the script editor renumbers', async () => {
+    const s = setup();
+    s.ai.writerTransform = theatrical;
+    const projectId = await scripted(s);
+    const first = ScriptContent.parse((await version(projectId, 1)).row.content).narration!;
+    expect(first.visualMoved).toHaveLength(1);
+    const moved = first.visualMoved[0]!;
+    const [section, at] = moved.ref.split('.').map(Number) as [number, number];
+    const down = (ref: string) => {
+      const [n, i] = ref.split('.').map(Number) as [number, number];
+      return n === section && i >= at ? `${n}.${i + 1}` : ref;
+    };
+    // The same draft again; the script editor inserts a line just before that block, which moves it and the rest of its section down one.
+    const editor = s.ai.editor;
+    s.ai.editor = (prompt) => ({ ...editor(prompt), insertions: [{ after: `${section}.${at - 1}`, reason: 'A question to turn on (test).', block: { text: 'What were they really buying (test)?', infoClass: 'FRAMING', beatIds: [], claimKeys: [], speakerId: null, speechKind: null, visual: { intent: 'ON_SCREEN_TEXT', mustShow: [], mustAvoid: [], priority: 'NORMAL', note: '' } } }] });
+    await s.projects.generateScript(projectId, {}, 'editor');
+    await s.runner.drain();
+    const v2 = await version(projectId, 2);
+    const content = ScriptContent.parse(v2.row.content);
+    expect(content.reviewChanges!.find((c) => c.reviewer === 'SCRIPT_EDITOR')).toMatchObject({ type: 'INSERT', status: 'ACCEPTED', savedRef: moved.ref });
+    const n = content.narration!;
+    expect(n.visualMoved).toEqual([{ ref: down(moved.ref), note: moved.note }]);
+    expect(allBlocksOf(v2).find((b) => b.key === n.visualMoved[0]!.ref)!.visual.note).toContain(moved.note);
+    expect(n.retrieved.some((r) => r.refs.includes(down(moved.ref)))).toBe(true);
+    expect(n.retrieved).toEqual(first.retrieved.map((r) => ({ ...r, refs: r.refs.map(down) })));
+  });
+
+  it('records only the money context the saved text still gives: a later reviewer that takes it out takes it out of the record', async () => {
+    const s = setup();
+    const projectId = await approvedArchitecture(s, { contextClaims: [{ claimKey: 'C018', purpose: 'what a skilled worker earned (test)' }] });
+    const price = 'Records suggest that Cornelis Proefman refused to accept bulbs he had bought for 1,200 guilders.';
+    s.ai.writerTransform = (out) => {
+      out.sections.flatMap((x) => x.blocks).find((b) => b.claimKeys.includes('C008') && b.infoClass === 'UNCERTAIN' && !b.speakerId)!.text = price;
+      return out;
+    };
+    // The fact checker puts the bare price back.
+    s.ai.factChecker = (prompt) => {
+      const b = parseScript(prompt).find((x) => x.text.startsWith(price))!;
+      return { verdict: 'The price is enough (test).', issues: [], edits: [{ ref: b.ref, reason: 'The bare price (test).', text: price, infoClass: null, claimKeys: null, beatIds: null }], removals: [], insertions: [] };
+    };
+    const job = await s.projects.generateScript(projectId, {}, 'editor');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
+    const v1 = await version(projectId, 1);
+    const content = ScriptContent.parse(v1.row.content);
+    const block = allBlocksOf(v1).find((b) => b.text.startsWith(price))!;
+    // The pass gave the price its meaning; the fact checker's change (kept) took it out again.
+    expect(content.reviewChanges!.find((c) => c.reviewer === 'NARRATION' && c.savedRef === block.key)).toMatchObject({ status: 'ACCEPTED', proposedText: expect.stringContaining("years' pay") });
+    expect(content.reviewChanges!.find((c) => c.reviewer === 'FACT_CHECKER')).toMatchObject({ status: 'ACCEPTED', savedRef: block.key });
+    expect(block.text).toBe(price);
+    expect(content.narration!.money.used).toEqual([]);
+    expect(QualityReport.parse(v1.row.qualityReport).normalizations).toContainEqual(expect.stringMatching(new RegExp(`money context M\\d+ it added at ${block.key.replace('.', '\\.')} is no longer in the saved text`)));
+  });
+
+  it('records money context the pass gave in the evidence’s own words, with no word for pay in them, when no later reviewer changed the block', async () => {
+    const s = setup();
+    const projectId = await approvedArchitecture(s, { contextClaims: [{ claimKey: 'C018', purpose: 'what a house cost (test)' }] });
+    // The evidence sets the price beside an asset, not a wage: its context is the evidence's own sentence.
+    const house = 'A canal house cost 4,000 guilders.';
+    await db.researchClaim.updateMany({ where: { claimKey: 'C018', dossier: { projectId } }, data: { statement: house } });
+    await db.claimCitation.updateMany({ where: { claim: { claimKey: 'C018', dossier: { projectId } } }, data: { quote: house } });
+    const price = 'Records suggest that Cornelis Proefman refused to accept bulbs he had bought for 1,200 guilders.';
+    s.ai.writerTransform = (out) => {
+      out.sections.flatMap((x) => x.blocks).find((b) => b.claimKeys.includes('C008') && b.infoClass === 'UNCERTAIN' && !b.speakerId)!.text = price;
+      return out;
+    };
+    let cited = '';
+    s.ai.narrator = (prompt) => {
+      const b = parseScript(prompt).find((x) => x.text === price)!;
+      cited = [...parseMoneyContexts(prompt)].find(([, explanation]) => explanation.includes(house))![0];
+      return { verdict: 'The price beside a house (test).', edits: [{ ref: b.ref, text: `${price} ${house}`, reason: 'What the sum meant (test).', fixes: ['CONTEXT'], moneyContext: [cited], visualNote: null }], kept: [] };
+    };
+    const job = await s.projects.generateScript(projectId, {}, 'editor');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
+    const v1 = await version(projectId, 1);
+    const content = ScriptContent.parse(v1.row.content);
+    const block = allBlocksOf(v1).find((b) => b.text.startsWith(price))!;
+    expect(block.text).toBe(`${price} ${house}`);
+    expect(content.reviewChanges!.filter((c) => c.savedRef === block.key).map((c) => `${c.reviewer} ${c.status}`)).toEqual(['NARRATION ACCEPTED']);
+    expect(content.narration!.money.used).toEqual([{ contextId: cited, ref: block.key }]);
+    expect(QualityReport.parse(v1.row.qualityReport).normalizations.filter((n) => n.includes('is no longer in the saved text'))).toEqual([]);
   });
 });

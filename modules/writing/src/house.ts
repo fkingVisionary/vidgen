@@ -72,62 +72,63 @@ export function candidateLines(blocks: readonly NarrationBlock[], opts: { max?: 
   return out.slice(0, opts.max ?? 12);
 }
 
-/** Save proposals as candidates (a wording already proposed is skipped). Returns how many were new. */
+/**
+ * Save proposals as candidates (a wording already proposed is skipped).
+ * Returns how many were new. One statement: a request proposing the same
+ * lines at the same time (two tabs, a retry) skips them too, never fails.
+ */
 export async function saveCandidates(db: Db, args: { projectId: string; scriptId: string; scriptVersion: number; proposals: readonly CandidateProposal[]; actor: string }): Promise<number> {
-  let made = 0;
-  for (const p of args.proposals) {
-    const hash = textHash(p.text);
-    const exists = await db.writingExample.findUnique({ where: { textHash: hash }, select: { id: true } });
-    if (exists) continue;
-    await db.writingExample.create({
-      data: {
-        exampleId: `house-${args.scriptId.slice(-8)}-${p.blockKey.replace('.', '-')}`,
-        projectId: args.projectId,
-        scriptId: args.scriptId,
-        scriptVersion: args.scriptVersion,
-        blockKey: p.blockKey,
-        text: p.text,
-        textHash: hash,
-        category: p.category,
-        quality: 'good',
-        traits: p.traits,
-        strengths: [],
-        weaknesses: [],
-        spokenRhythm: p.spokenRhythm,
-        narrativeFunction: p.narrativeFunction,
-        sourceType: 'house',
-        sourceReference: `Approved script v${args.scriptVersion}, block ${p.blockKey}`,
-        copyrightSafe: true,
-        approvedForRetrieval: false,
-        status: 'CANDIDATE',
-        diagnostics: {} as Prisma.InputJsonValue,
-        createdBy: args.actor,
-      },
-    });
-    made++;
-  }
-  return made;
+  const { count } = await db.writingExample.createMany({
+    data: args.proposals.map((p) => ({
+      exampleId: `house-${args.scriptId.slice(-8)}-${p.blockKey.replace('.', '-')}`,
+      projectId: args.projectId,
+      scriptId: args.scriptId,
+      scriptVersion: args.scriptVersion,
+      blockKey: p.blockKey,
+      text: p.text,
+      textHash: textHash(p.text),
+      category: p.category,
+      quality: 'good',
+      traits: p.traits,
+      strengths: [],
+      weaknesses: [],
+      spokenRhythm: p.spokenRhythm,
+      narrativeFunction: p.narrativeFunction,
+      sourceType: 'house',
+      sourceReference: `Approved script v${args.scriptVersion}, block ${p.blockKey}`,
+      copyrightSafe: true,
+      approvedForRetrieval: false,
+      status: 'CANDIDATE',
+      diagnostics: {} as Prisma.InputJsonValue,
+      createdBy: args.actor,
+    })),
+    skipDuplicates: true,
+  });
+  return count;
 }
+
+/** A database row in the shape of a corpus example (not yet checked). */
+const corpusFields = (r: WritingExample) => ({
+  id: r.exampleId,
+  version: r.version,
+  text: r.text,
+  category: r.category,
+  quality: r.quality,
+  traits: r.traits,
+  strengths: r.strengths,
+  weaknesses: r.weaknesses,
+  spokenRhythm: r.spokenRhythm,
+  narrativeFunction: r.narrativeFunction,
+  ...(r.whyItWorks ? { whyItWorks: r.whyItWorks } : {}),
+  ...(r.whyItFails ? { whyItFails: r.whyItFails } : {}),
+  source: { type: r.sourceType, ...(r.sourceReference ? { reference: r.sourceReference } : {}) },
+  copyrightSafe: r.copyrightSafe,
+  approvedForRetrieval: r.approvedForRetrieval,
+});
 
 /** A database row as a corpus example (what retrieval and the dashboard read). */
 export function toCorpusExample(r: WritingExample): WritingCorpusExample | null {
-  const parsed = WritingCorpusExample.safeParse({
-    id: r.exampleId,
-    version: r.version,
-    text: r.text,
-    category: r.category,
-    quality: r.quality,
-    traits: r.traits,
-    strengths: r.strengths,
-    weaknesses: r.weaknesses,
-    spokenRhythm: r.spokenRhythm,
-    narrativeFunction: r.narrativeFunction,
-    ...(r.whyItWorks ? { whyItWorks: r.whyItWorks } : {}),
-    ...(r.whyItFails ? { whyItFails: r.whyItFails } : {}),
-    source: { type: r.sourceType, ...(r.sourceReference ? { reference: r.sourceReference } : {}) },
-    copyrightSafe: r.copyrightSafe,
-    approvedForRetrieval: r.approvedForRetrieval,
-  });
+  const parsed = WritingCorpusExample.safeParse(corpusFields(r));
   return parsed.success ? parsed.data : null;
 }
 
@@ -141,7 +142,9 @@ export class ExampleDecisionError extends Error {}
 
 /**
  * A person's decision on a house example. Approving needs a reason it works
- * (it teaches the writer); a change to its annotation makes a new version.
+ * (it teaches the writer), and the example must be one retrieval can read (a
+ * bad one also says why it fails): it is refused here, never approved and
+ * then silently left out. A change to its annotation makes a new version.
  */
 export async function decideExample(db: Db, id: string, input: WritingExampleDecisionInput, actor: string): Promise<WritingExample> {
   const row = await db.writingExample.findUnique({ where: { id } });
@@ -152,15 +155,20 @@ export async function decideExample(db: Db, id: string, input: WritingExampleDec
   const whyItWorks = input.whyItWorks?.trim() || row.whyItWorks;
   if (input.decision === 'APPROVE' && !whyItWorks) throw new ExampleDecisionError('Say why it works: the reason is what teaches the writer');
   const annotated = (input.category && input.category !== row.category) || (input.quality && input.quality !== row.quality) || (input.whyItWorks && input.whyItWorks !== row.whyItWorks) || (input.whyItFails && input.whyItFails !== row.whyItFails);
+  const decided = {
+    status,
+    approvedForRetrieval: status === 'APPROVED',
+    ...(input.category ? { category: input.category } : {}),
+    ...(input.quality ? { quality: input.quality } : {}),
+    ...(whyItWorks ? { whyItWorks } : {}),
+    ...(input.whyItFails ? { whyItFails: input.whyItFails } : {}),
+  };
+  const unusable = status === 'APPROVED' ? WritingCorpusExample.safeParse(corpusFields({ ...row, ...decided })).error : undefined;
+  if (unusable) throw new ExampleDecisionError(`Retrieval cannot use it as it stands: ${unusable.issues[0]!.message}`);
   return db.writingExample.update({
     where: { id },
     data: {
-      status,
-      approvedForRetrieval: status === 'APPROVED',
-      ...(input.category ? { category: input.category } : {}),
-      ...(input.quality ? { quality: input.quality } : {}),
-      ...(whyItWorks ? { whyItWorks } : {}),
-      ...(input.whyItFails ? { whyItFails: input.whyItFails } : {}),
+      ...decided,
       version: annotated && row.status !== 'CANDIDATE' ? row.version + 1 : row.version,
       reviewedBy: actor,
       reviewedAt: new Date(),

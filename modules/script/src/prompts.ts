@@ -10,7 +10,7 @@ import { styleBibleText } from '@docengine/writing';
  * Bump PROMPT_VERSION whenever a prompt or output schema changes: saved
  * progress from another version is not reused.
  */
-export const PROMPT_VERSION = 'script-2.0-2026-10-05.1';
+export const PROMPT_VERSION = 'script-2.0-2026-10-05.2';
 
 const BOUNDARY = `THE EVIDENCE BOUNDARY
 - You are telling an approved story architecture. It decides what happens, in what order, with whom, and on what evidence. Never add events, people, places, numbers, dates or quotations that are not in its beats or in the claims it cites. If a sentence would need a fact the evidence does not have, write around it — or leave it out.
@@ -329,7 +329,7 @@ WHAT THIS PASS DOES — and nothing else
 1. Removes artificiality: the machine habits the diagnostics list for each block.
 2. Improves spoken rhythm and clarity: sentences that vary because the ideas vary; one idea per sentence; one number per breath.
 3. Cuts over-writing: a sentence that gives the listener nothing goes. Nothing is padded for runtime.
-4. Adds missing context — only from the money context listed in the prompt: never a comparison of your own, never an exchange rate, never a modern conversion. When you use one, give its id in moneyContext: the block then cites the claims it rests on, and keeps their uncertainty ("about", and the hedge their verdict requires). Where the list has nothing, the honest line is that the records give no reliable equivalent — or no line at all.
+4. Adds missing context — only from the money context listed in the prompt: never a comparison of your own, never an exchange rate, never a modern conversion. When you use one, use it in the block that says its sum, say its comparison in the words the list gives (they are checked word for word; no comparison of your own beside it), and give its id in moneyContext: the block then cites the claims it rests on, and keeps their uncertainty ("about", and the hedge their verdict requires). Where the list has nothing, the honest line is that the records give no reliable equivalent — or no line at all.
 5. Separates narration from pictures: where a block describes what the viewer will see — gestures, glances, light, objects that move — put that description in visualNote, and give the narration what the picture cannot: the stakes, the price, the rule, the date, the consequence.
 6. Keeps good writing: a strong, memorable line stays word for word, even a short contrast used once. The lines listed to keep are untouchable.
 7. Keeps factual meaning: the same facts, the same figures written the same way, the same names spelled the same way, the same claims, the same uncertainty, the same class.

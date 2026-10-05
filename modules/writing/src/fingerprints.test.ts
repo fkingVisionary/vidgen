@@ -1,6 +1,6 @@
 import { AI_PATTERNS, type AiPattern, type AiSignal } from '@docengine/core';
 import { describe, expect, it } from 'vitest';
-import { STOCK_PHRASES, actionable, aiSignals, blockPatterns, describesPicture, overThreshold, summarise } from './fingerprints.ts';
+import { STOCK_PHRASES, actionable, aiSignals, blockPatterns, describesPicture, overThreshold, stockPhrases, summarise } from './fingerprints.ts';
 import type { NarrationBlock } from './text.ts';
 
 /**
@@ -171,6 +171,19 @@ describe('fragment runs', () => {
     expect(aiSignals(one('Production slowed in the spring of 1910. Wages fell. By the autumn the first strike had begun in the dye works.'))).toEqual([]);
   });
 
+  it('a quotation with its attribution is not a fragment: its words are masked, not missing', () => {
+    const letters = '"We are ruined," he wrote. "Nothing is left," his brother replied. "Sell everything you can," said the notary. The family left the town that winter.';
+    const { signals, summary } = detect(film([letters], [letters]));
+    expect(of(signals, 'fragment_run')).toEqual([]);
+    expect(summary.overThreshold).toEqual([]);
+  });
+
+  it('initials and titles do not end a sentence', () => {
+    const { signals } = detect(film(['W. E. B. Du Bois founded the journal in 1910 and edited it for decades.'], ['It was 1916. T. E. Lawrence rode north with a small band of men.', 'Dr. Snow kept his map. St. James parish kept the register.']));
+    expect(of(signals, 'fragment_run')).toEqual([]);
+    expect(signals).toEqual([]);
+  });
+
   it('a run continues across the blocks of a section, but not across sections', () => {
     const within = of(aiSignals(film(['The orders stopped in March. Wages fell.', 'Strikes began. Mills closed. The owners did nothing for a year.'])), 'fragment_run');
     expect(within).toEqual([{ pattern: 'fragment_run', ref: '1.2', excerpt: 'Wages fell. Strikes began. Mills closed.', kind: 'DENSITY' }]);
@@ -252,12 +265,20 @@ describe('hype adverbs and "Imagine…" openers', () => {
     expect(aiSignals(one('It was a remarkably cold winter, and the canals froze in November.'))).toEqual([]);
   });
 
-  it.each(['Imagine a city without clean water.', 'Picture this: a harbour full of ships and no one to unload them.', 'Now, imagine the noise of the trading floor.', 'Close your eyes and listen to the looms.'])('flags "%s" as an Imagine opener', (line) => {
+  it.each([
+    'Imagine a city without clean water.',
+    'Picture this: a harbour full of ships and no one to unload them.',
+    'Now, imagine the noise of the trading floor.',
+    'Close your eyes and listen to the looms.',
+    'Picture the canal basin in its heyday.',
+    'Picture a harbour in 1640.',
+  ])('flags "%s" as an Imagine opener', (line) => {
     expect(of(aiSignals(one(line)), 'imagine_opener')).toEqual([{ pattern: 'imagine_opener', ref: '1.1', excerpt: line, kind: 'HARD' }]);
   });
 
   it('"imagine" as a verb in a sentence is not an opener', () => {
     expect(aiSignals(one('Few people in 1850 could imagine a city without walls.'))).toEqual([]);
+    expect(aiSignals(one('Picture books were rare in the colony before 1800.'))).toEqual([]);
   });
 
   it('"What if…" is a DENSITY opener: once is allowed', () => {
@@ -276,9 +297,28 @@ describe('trailer, mystery and explained emotion', () => {
     ['This is the untold story of the canal.', 'mystery_language'],
     ['A palpable sense of dread filled the room.', 'emotion_explained'],
     ["Here's the thing: nobody checked the books.", 'truth_reveal'],
+    ['Their destiny lay in the east.', 'trailer_language'],
+    ['Destiny, it seemed, had other ideas.', 'trailer_language'],
+    ["The guild met at noon, and that's when it happened.", 'dramatic_transition'],
+    ['The air was thick with tension.', 'emotion_explained'],
+    ["That's where it all began.", 'dramatic_transition'],
   ])('flags "%s" (%s)', (line, pattern) => {
     const { signals } = detect(one(line));
     expect(signals).toEqual([{ pattern, ref: '1.1', excerpt: line, kind: 'HARD' }]);
+  });
+
+  it('names and literal uses of the same words are not the habit', () => {
+    for (const line of [
+      'The Bayeux Tapestry shows Harold sworn on holy relics.',
+      'Pearl fishers dive into the lagoon forty times a day.',
+      'Settlers called it Manifest Destiny.',
+      'In December 1952 the air was thick with sulphur.',
+      "The archive is in Leiden; that's where it was found in 1951.",
+    ])
+      expect(aiSignals(one(line)), line).toEqual([]);
+    // The narrator's own phrase is still one, at the start of a sentence or inside it.
+    expect(of(aiSignals(one('The town was a rich tapestry of trades. Tapestry is the word every guidebook used.')), 'stock_phrase')).toEqual([{ pattern: 'stock_phrase', ref: '1.1', excerpt: 'tapestry', kind: 'HARD' }]);
+    expect(of(aiSignals(one("Let's dive into the history of the guild.")), 'stock_phrase').map((s) => s.excerpt)).toEqual(["let's dive", 'dive into the history']);
   });
 
   it('"The truth is…" is fine once and formulaic twice', () => {
@@ -343,6 +383,26 @@ describe('"not X, but Y" contrasts', () => {
       expect(aiSignals(one(hedge)), hedge).toEqual([]);
     const known = "It wasn't known for its tulips. It was known for its herring.";
     expect(aiSignals(one(known))).toEqual([{ pattern: 'contrast_formula', ref: '1.1', excerpt: known, kind: 'DENSITY' }]);
+  });
+
+  it.each([
+    "It wasn't greed — it was fear.",
+    "Salt wasn't just a seasoning — it was white gold, the lifeblood of kingdoms.",
+    'The bridge was not a success; it was a disaster.',
+    "Clara Voss wasn't just a physician. She was a force of nature.",
+    "The bulb wasn't a flower. It was a lottery ticket.",
+  ])('in one sentence, or with a named subject, it is the same formula: "%s"', (text) => {
+    expect(aiSignals(one(text))).toEqual([{ pattern: 'contrast_formula', ref: '1.1', excerpt: text, kind: 'DENSITY' }]);
+  });
+
+  it('a named subject that is simply not something, and a hedge joined by a dash, are not the formula', () => {
+    for (const text of ['The ship was not insured. It was lost in a storm off the coast.', 'There was not a single buyer. It was over by noon.', 'It is not clear — it was, at least, promised.'])
+      expect(aiSignals(one(text)), text).toEqual([]);
+  });
+
+  it('joined by a dash or a semicolon, the two sentences are read as they would be apart', () => {
+    for (const text of ['The ship was not insured; it was lost in a storm off the coast.', 'The cargo wasn’t insured — they were told so only later.', 'The harvest wasn’t large; it was, however, enough.'])
+      expect(aiSignals(one(text)), text).toEqual([]);
   });
 
   it('"It\'s nothing like…" is not a negation', () => {
@@ -432,6 +492,18 @@ describe('repeated endings', () => {
       ]),
     );
     expect(of(signals, 'repeated_ending').map((s) => s.ref)).toEqual(['1.3']);
+  });
+
+  it('a block closed by a quotation does not end short: the last words are the record speaking', () => {
+    const signals = aiSignals(
+      film([
+        'The council met in the spring to discuss the walls. The treasurer said: "The town has no money left for the walls."',
+        'The masons stopped work in May and went home. Their foreman said: "Nobody has paid us since the winter."',
+        'The mayor wrote to the duke for a loan of grain. The duke replied: "We have nothing left to lend this year."',
+        'By the autumn the walls had fallen in two places. A clerk noted: "Nobody will rebuild them before the floods."',
+      ]),
+    );
+    expect(of(signals, 'repeated_ending')).toEqual([]);
   });
 
   it('varied endings are left alone', () => {
@@ -533,6 +605,40 @@ describe('narration describing the picture', () => {
       expect(describesPicture(line), line).toBe(false);
       expect(aiSignals(one(line)), line).toEqual([]);
     }
+  });
+
+  it('figurative seeing, film history and the idioms of the hand are not the picture', () => {
+    for (const line of [
+      'You can see why the council hesitated.',
+      'In the parish registers we see the same surname three times.',
+      'Lugosi was the first vampire on screen to speak.',
+      'Parliament nods the bill through.',
+      'Control of the mill drifts into the hands of his creditors.',
+      'The flood would wipe out the harvest.',
+      'The flood was wiping out the harvest.',
+      'The town was shrugging off the loss.',
+      'On the other hand, prices drift lower.',
+      'The guild gains the upper hand as credit tightens.',
+      'The letters shed light on a feud that lingers.',
+      'The council turns a blind eye as debts linger.',
+    ]) {
+      expect(describesPicture(line), line).toBe(false);
+      expect(aiSignals(one(line)), line).toEqual([]);
+    }
+    expect(describesPicture('Here we see the harbour at dusk.')).toBe(true);
+    // Pointing at the picture is the picture, whatever else the sentence says; a bare "We see" that informs is the record.
+    expect(describesPicture('Here we see the contract that ruined him.')).toBe(true);
+    expect(describesPicture('In this engraving, made in 1637, the auction room is full.')).toBe(true);
+    expect(describesPicture('We see the harbour at dusk.')).toBe(true);
+    expect(describesPicture('We see the same surname again in the records of 1640.')).toBe(false);
+    expect(describesPicture('The pen trembles in her hands.')).toBe(true);
+  });
+
+  it('a documented fact naming the people, places and year of its own picture is not an echo of it', () => {
+    const visual = { note: 'Engraving of the Haarlem auction room, 1637', mustShow: [{ detail: "Wouter Winckel's tulip collection" }, { detail: 'the orphanage of Alkmaar' }] };
+    const fact = "In February 1637 the orphans sold Wouter Winckel's tulip collection at auction in Alkmaar.";
+    expect(describesPicture(fact, visual)).toBe(false);
+    expect(aiSignals([block('1.1', fact, { visual })])).toEqual([]);
   });
 
   it('a thin visual note is not enough to call narration an echo', () => {
@@ -744,6 +850,11 @@ describe('blockPatterns and the stock lexicon', () => {
       'stock_phrase',
     ]);
     expect(blockPatterns(block('1.1', 'The bridge held until the spring floods of 1740.'))).toEqual([]);
+  });
+
+  it("stockPhrases: the phrases a text says in the narrator's own words, not in a name or a quotation", () => {
+    expect(stockPhrases('The Bayeux Tapestry is long. It is a testament to patience. One weaver called it "a rich tapestry of thread".')).toEqual(['a testament to']);
+    expect(stockPhrases('The town was a rich tapestry of trades.')).toEqual(['tapestry']);
   });
 
   it('every stock phrase is lower case and is caught whatever its capitals or typographic apostrophes', () => {

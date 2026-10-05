@@ -14,7 +14,7 @@ import { ALL_MOCK, createProviders } from '@docengine/providers';
 import { FAKE_CORPUS_GATE, FakeResearchAI, FakeResearchProvider } from '@docengine/research/testing';
 import { FakeStoryAI, seedFakeDossier } from '@docengine/story/testing';
 import { FakeScriptAI } from '@docengine/script/testing';
-import { StoryArchitectureContent, type ResearchView, type ScriptCompareView, type ScriptEditorialView, type ScriptView, type StoryView, type VoiceMomentView, type VoicePlanView, type VoiceRenderPlan, type VoiceView, type WritingCorpusView, type WritingExampleView } from '@docengine/core';
+import { StoryArchitectureContent, type ResearchView, type ScriptBlockView, type ScriptChangeReport, type ScriptCompareView, type ScriptEditorialView, type ScriptView, type StoryView, type VoiceMomentView, type VoicePlanView, type VoiceRenderPlan, type VoiceView, type WritingCorpusView, type WritingExampleView } from '@docengine/core';
 import { Prisma } from '@docengine/database';
 
 const db = useTestDatabase();
@@ -724,7 +724,7 @@ describe('script API', () => {
 describe('writing engine API', () => {
   const SIX = ['The Semper Augustus price', 'The ruin that never happened', 'Proefman in court', 'The tavern colleges', 'Striped tulips', 'The courts step back'];
 
-  async function drafted(app: FastifyInstance, c: AppContainer) {
+  async function drafted(app: FastifyInstance, c: AppContainer, options: FakeScriptAI['architectOptions'] = {}) {
     const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: { ...tulipInput, targetMinutesMin: 2, targetMinutesMax: 4 } })).json<ProjectDetailView>();
     await db.project.update({ where: { id: p.id }, data: { status: 'RESEARCH_COMPLETE', phaseSeq: 2 } });
     await seedFakeDossier(db, p.id);
@@ -733,7 +733,7 @@ describe('writing engine API', () => {
     const pack = await db.storyPack.findFirstOrThrow({ where: { projectId: p.id }, orderBy: { version: 'desc' } });
     await db.storyCandidate.updateMany({ where: { packId: pack.id }, data: { selected: false } });
     await db.storyCandidate.updateMany({ where: { packId: pack.id, title: { in: SIX } }, data: { selected: true } });
-    (c.providers.ai as FakeScriptAI).architectOptions = { secondsPerSequence: 30, composite: { name: 'Pieter Graanhout' } };
+    (c.providers.ai as FakeScriptAI).architectOptions = { secondsPerSequence: 30, composite: { name: 'Pieter Graanhout' }, ...options };
     await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture`, payload: {} });
     await c.runner.drain();
     await app.inject({ method: 'POST', url: `/api/projects/${p.id}/approvals`, payload: { gate: 'STORY', decision: 'APPROVED' } });
@@ -769,6 +769,58 @@ describe('writing engine API', () => {
     expect(cmp.changeReport).toMatchObject({ pairing: 'EXACT', totals: { blocksBefore: cmp.facts.a.blocks } });
   });
 
+  it('credits a change to whoever made the wording: a reviewer of the run, or the editor who reworded it by hand since (also on a restored copy)', async () => {
+    const { app, c } = await start({ SCRIPT_NARRATION_MODES: 'none' }, { fakeScript: true });
+    // A draft written without the pass, with a fake dramatic beat at the end of two narrator lines (not the first of a section, which the performance pass marks) and a bare sum the evidence gives context to.
+    const price = 'Records suggest that Cornelis Proefman refused to accept bulbs he had bought for 1,200 guilders.';
+    (c.providers.ai as FakeScriptAI).writerTransform = (out) => {
+      out.sections.flatMap((x) => x.blocks).find((b) => b.claimKeys.includes('C008') && b.infoClass === 'UNCERTAIN' && !b.speakerId)!.text = price;
+      const plain = out.sections.flatMap((x) => x.blocks.slice(1)).filter((b) => b.infoClass === 'DOCUMENTED' && !b.speakerId);
+      plain[0]!.text = `${plain[0]!.text} Everything was about to change.`;
+      plain.at(-1)!.text = `${plain.at(-1)!.text} But this was only the beginning.`;
+      return out;
+    };
+    const id = await drafted(app, c, { contextClaims: [{ claimKey: 'C018', purpose: 'what a skilled worker earned (test)' }] });
+    const scriptOf = async (v: number) => (await app.inject({ method: 'GET', url: `/api/projects/${id}/script?version=${v}` })).json<ScriptView>();
+    const editorialOf = async (v: number) => (await app.inject({ method: 'GET', url: `/api/projects/${id}/script/versions/${v}/editorial` })).json<ScriptEditorialView>();
+    const changed = (r: ScriptChangeReport) => r.blocks.filter((x) => x.status !== 'UNCHANGED').map((x) => [x.ref, x.changedBy, x.reasons]);
+    const byHand = async (v: number, key: string, change: (b: ScriptBlockView) => Record<string, unknown>) => {
+      const b = (await scriptOf(v)).script!.sections.flatMap((x) => x.blocks).find((x) => x.key === key)!;
+      expect((await app.inject({ method: 'PATCH', url: `/api/script-blocks/${b.id}`, payload: change(b) })).statusCode).toBe(200);
+    };
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/narrate`, payload: { baseVersion: 1 } })).statusCode).toBe(202);
+    await c.runner.drain();
+    const passed = await editorialOf(2);
+    const sum = passed.report!.blocks.find((x) => x.original === price)!;
+    expect(sum).toMatchObject({ status: 'REWRITTEN', revised: expect.stringContaining("years' pay"), moneyContext: [expect.stringMatching(/^M\d+$/)] });
+    expect(passed.report!.totals.moneyContextAdded).toBe(1);
+    const [k, j] = changed(passed.report!).flatMap(([ref]) => (ref === sum.ref ? [] : [ref as string]));
+    expect(changed(passed.report!)).toHaveLength(3);
+    expect(changed(passed.report!)).toEqual(changed(passed.report!).map(([ref]) => [ref, ['NARRATION'], [expect.stringMatching(/^N\d+: /)]]));
+
+    // Reworded by hand after the pass (the sum without its context): the wording is the editor's; the pass, and the money context it gave, are credited only where its wording stands.
+    await byHand(2, k!, (b) => ({ text: `${b.text} The clerks kept the tally (test).` }));
+    await byHand(2, sum.ref!, () => ({ text: `${price} The clerks kept the tally (test).` }));
+    const edited = await editorialOf(2);
+    expect(changed(edited.report!)).toEqual(changed(passed.report!).map((x) => (x[0] === j ? x : [x[0], [], ['Edited by dashboard']])));
+    expect(edited.report!.blocks.find((x) => x.ref === sum.ref)!.moneyContext).toEqual([]);
+    expect(edited.report!.totals.moneyContextAdded).toBe(0);
+    expect(edited.layers.find((l) => l.key === k)!.editorial).toEqual(['Edited by dashboard']);
+    expect(edited.layers.find((l) => l.key === j)!.editorial).toEqual(passed.layers.find((l) => l.key === j)!.editorial);
+
+    // v2 restored as v4: the copy carries v2's ledger, which is the pass's on v1 — nothing between v2 and v4 is the pass's, even where its wording stands.
+    await app.inject({ method: 'POST', url: `/api/projects/${id}/script/restore`, payload: { version: 1 } });
+    const restored = (await app.inject({ method: 'POST', url: `/api/projects/${id}/script/restore`, payload: { version: 2 } })).json<ScriptView>().script!;
+    expect(restored).toMatchObject({ version: 4, origin: 'RESTORE', revisionOfVersion: 2 });
+    expect(changed((await editorialOf(4)).report!)).toEqual([]);
+    await byHand(4, j!, () => ({ infoClass: 'UNCERTAIN' }));
+    expect(changed((await editorialOf(4)).report!)).toEqual([[j, [], ['Edited by dashboard']]]);
+    expect(changed((await app.inject({ method: 'GET', url: `/api/projects/${id}/script/compare?a=2&b=4` })).json<ScriptCompareView>().changeReport!)).toEqual([[j, [], ['Edited by dashboard']]]);
+    // …and its checklist keeps its name: the narration pass's, not a refinement's.
+    expect(restored.content!.editor!.assessment!.length).toBeGreaterThan(0);
+    expect(restored.qualityReport!.judgments!.find((x) => x.id === 'checklist')!.label).toMatch(/^Narration checklist/);
+  });
+
   it('serves the house corpus, proposes house-style candidates from an approved script only, and puts one in retrieval only when a person approves it with a reason', async () => {
     const { app, c } = await start({}, { fakeScript: true });
     const corpus = (await app.inject({ method: 'GET', url: '/api/writing/corpus' })).json<WritingCorpusView>();
@@ -784,18 +836,28 @@ describe('writing engine API', () => {
     expect(early.statusCode).toBe(409);
     expect(early.json().message).toMatch(/approved scripts only/);
     await app.inject({ method: 'POST', url: `/api/projects/${id}/approvals`, payload: { gate: 'SCRIPT', decision: 'APPROVED' } });
-    const proposed = (await app.inject({ method: 'POST', url: `/api/projects/${id}/script/versions/1/house-candidates`, payload: {} })).json<{ proposed: number; created: number; corpus: WritingCorpusView }>();
-    expect(proposed.created).toBe(proposed.proposed);
+    // Two requests at once (two tabs, a client retry): each wording is saved once, and neither request fails.
+    const both = await Promise.all([0, 1].map(() => app.inject({ method: 'POST', url: `/api/projects/${id}/script/versions/1/house-candidates`, payload: {} })));
+    expect(both.map((r) => r.statusCode)).toEqual([200, 200]);
+    const [first, second] = both.map((r) => r.json<{ proposed: number; created: number }>());
+    expect(first!.proposed).toBeGreaterThan(0);
+    expect(second!.proposed).toBe(first!.proposed);
+    expect(first!.created + second!.created).toBe(first!.proposed);
     // Proposing again creates nothing new: one candidate per wording.
     expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/versions/1/house-candidates`, payload: {} })).json<{ created: number }>().created).toBe(0);
-    const candidates = proposed.corpus.house.filter((h) => h.status === 'CANDIDATE');
-    if (!candidates.length) return; // the fake draft may offer no signal-free line long enough
+    const proposed = (await app.inject({ method: 'GET', url: '/api/writing/corpus' })).json<WritingCorpusView>();
+    const candidates = proposed.house.filter((h) => h.status === 'CANDIDATE');
+    expect(candidates).toHaveLength(first!.proposed);
     const one = candidates[0]!;
     // Candidates are not retrieved.
-    expect(proposed.corpus.examples.some((e) => e.id === one.exampleId)).toBe(false);
+    expect(proposed.examples.some((e) => e.id === one.exampleId)).toBe(false);
     const noReason = await app.inject({ method: 'POST', url: `/api/writing/examples/${one.id}/decision`, payload: { decision: 'APPROVE' } });
     expect(noReason.statusCode).toBe(409);
     expect(noReason.json().message).toMatch(/why it works/);
+    // A model to avoid says why it fails, or retrieval could not read it: refused, not approved and then left out.
+    const bad = await app.inject({ method: 'POST', url: `/api/writing/examples/${one.id}/decision`, payload: { decision: 'APPROVE', quality: 'bad', whyItWorks: 'The sum is right (test).' } });
+    expect(bad.statusCode).toBe(409);
+    expect(bad.json().message).toMatch(/why it fails/);
     const ok = await app.inject({ method: 'POST', url: `/api/writing/examples/${one.id}/decision`, payload: { decision: 'APPROVE', whyItWorks: 'Plain, specific and in proportion (test).' } });
     expect(ok.json<WritingExampleView>()).toMatchObject({ status: 'APPROVED', whyItWorks: 'Plain, specific and in proportion (test).', reviewedBy: expect.any(String) });
     const after = (await app.inject({ method: 'GET', url: '/api/writing/corpus' })).json<WritingCorpusView>();

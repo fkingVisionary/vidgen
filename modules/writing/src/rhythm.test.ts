@@ -143,6 +143,14 @@ describe('ending repetition', () => {
     expect(rhythmProfile([block('1.1', 'It failed. It failed again.')]).endingRepetition).toBe(0);
   });
 
+  it('a block closed by a quotation does not end short: its last words are the record’s', () => {
+    const p = rhythmProfile([
+      block('1.1', 'The council met in the spring. The treasurer said: "The town has no money left for the walls."'),
+      block('1.2', 'The masons stopped work in May. Their foreman said: "Nobody has paid us since the winter."'),
+    ]);
+    expect(p.endingRepetition).toBe(0);
+  });
+
   it('reads the ending without a closing aside: the aside is not how the block ends', () => {
     const p = rhythmProfile([
       block('1.1', 'The guild raised its fees for the first time that year.'),
@@ -180,6 +188,15 @@ describe("only the narrator's words", () => {
     const p = rhythmProfile([block('1.1', 'In his last letter the harbour master wrote to the council: "Ships wait. Crews wait. Prices rise." The council did not reply.')]);
     // "In his last letter … to the council" (11 words) and "The council did not reply." (5): the quotation counts as no words and ends its sentence.
     expect(p).toMatchObject({ sentences: 2, meanWords: 8, fragmentShare: 0, longestFragmentRun: 0 });
+  });
+
+  it('a quotation with its attribution is not a fragment, and initials do not end a sentence', () => {
+    const p = rhythmProfile([
+      block('1.1', '"We are ruined," he wrote. "Nothing is left," his brother replied. The family left the town that winter.'),
+      block('1.2', 'W. E. B. Du Bois founded the journal in 1910.'),
+    ]);
+    // "…" he wrote. (2 words), "…" his brother replied. (3), 7 words, and 10 ("w e b du bois founded the journal in 1910").
+    expect(p).toMatchObject({ sentences: 4, meanWords: 5.5, fragmentShare: 0, longestFragmentRun: 0 });
   });
 
   it('an empty script gives zeros, never NaN', () => {

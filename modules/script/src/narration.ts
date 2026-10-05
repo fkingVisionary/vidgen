@@ -10,6 +10,7 @@ import {
   countWords,
   diagnose,
   moneyGaps,
+  moneyMentions,
   namesAltered,
   quantities,
   quantitiesAdded,
@@ -18,6 +19,8 @@ import {
   renderMoneyContexts,
   retrievalNeeds,
   retrieve,
+  spokenRatio,
+  unitFor,
   type BlockNeed,
   type Corpus,
   type Diagnosis,
@@ -133,35 +136,105 @@ export function toNarrationPatch(out: NarrationOutput, draft: ScriptDraft, plan:
   };
 }
 
-/** The uncertainty families a text's wording carries (for "every hedge kept"). */
-export function uncertaintyOf(text: string): Set<string> {
-  const out = new Set<string>();
-  if (HEDGE_PATTERN.test(text)) out.add('hedge');
-  if (DISPUTED_PATTERN.test(text)) out.add('disputed');
-  if (UNVERIFIED_PATTERN.test(text)) out.add('unverified');
-  if (MYTH_PATTERN.test(text)) out.add('legend');
+/** The uncertainty families, each as a pattern that finds every wording of it. */
+const FAMILIES = Object.entries({ hedge: HEDGE_PATTERN, disputed: DISPUTED_PATTERN, unverified: UNVERIFIED_PATTERN, legend: MYTH_PATTERN }).map(([family, p]) => [family, new RegExp(p.source, 'gi')] as const);
+
+/**
+ * The uncertainty families a text's wording carries, each with how often it
+ * is said (for "every hedge kept": one hedge dropped where two claims each
+ * had one is a hedge lost, though the family is still there).
+ */
+export function uncertaintyOf(text: string): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const [family, p] of FAMILIES) {
+    const n = text.match(p)?.length ?? 0;
+    if (n) out.set(family, n);
+  }
   return out;
 }
 
-const CALENDAR = /\b(?:January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/g;
+const NAMED_DAYS = 'January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday';
+const CALENDAR = new RegExp(String.raw`\b(?:${NAMED_DAYS})\b`, 'g');
+const NAMED_DAY = new RegExp(`^(?:${NAMED_DAYS})$`);
 const SEASONS = /\b(?:spring|summer|autumn|winter)\b/gi;
-/** Months, weekdays and seasons a text names: a date is a fact, kept as it was. (Months and days only when capitalised: "may" is a verb.) */
-export const calendarWords = (text: string) => new Set([...text.matchAll(CALENDAR), ...text.matchAll(SEASONS)].map((m) => m[0].toLowerCase()));
+/** Words that place a date within its span ("early April", "the end of the decade", "the late seventeenth century"). */
+const QUALIFIERS = new Set(['early', 'mid', 'middle', 'late', 'end', 'beginning', 'start', 'turn', 'close', 'dawn']);
+/** Words that may stand between a qualifier and its date ("the end of the year", "late in the decade", "early that spring"). */
+const LINKS = new Set(['of', 'the', 'in', 'that', 'this']);
+/** Ordinals said in words ("the second auction", "the seventeenth century"): figures the quantities do not count ("third" is one already). */
+const ORDINALS = new Set('first second fourth fifth sixth seventh eighth ninth tenth eleventh twelfth thirteenth fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth twentieth thirtieth fortieth fiftieth sixtieth seventieth eightieth ninetieth hundredth thousandth millionth'.split(' '));
+
+/** The date a qualifier can place, starting at word i: a month or weekday, a season, a year or decade, a span ("the year"), a century. */
+function dateAt(words: readonly string[], i: number): string | null {
+  const w = words[i];
+  if (!w) return null;
+  const lower = w.toLowerCase();
+  if (NAMED_DAY.test(w) || /^(?:spring|summer|autumn|winter|week|month|year|decade|century|centuries|\d{3,4}s?)$/.test(lower)) return lower;
+  const next = words[i + 1]?.toLowerCase();
+  return (ORDINALS.has(lower) || lower === 'third' || /^\d+(?:st|nd|rd|th)$/.test(lower)) && (next === 'century' || next === 'centuries') ? `${lower} ${next}` : null;
+}
+
+/**
+ * Months, weekdays and seasons a text names, and each date with the
+ * qualifier that places it ("early april", "end year", "late seventeenth
+ * century"): a date is a fact, kept as it was. (Months and days only when
+ * capitalised: "may" is a verb.)
+ */
+export function calendarWords(text: string): Set<string> {
+  const out = new Set([...text.matchAll(CALENDAR), ...text.matchAll(SEASONS)].map((m) => m[0].toLowerCase()));
+  // A qualifier places only a date in its own clause.
+  for (const clause of text.split(/[.!?;:,()"“”—–]/)) {
+    const words = clause.match(/[\p{L}\p{N}]+/gu) ?? [];
+    words.forEach((w, i) => {
+      if (!QUALIFIERS.has(w.toLowerCase())) return;
+      let j = i + 1;
+      while (LINKS.has(words[j]?.toLowerCase() ?? '')) j++;
+      const date = dateAt(words, j);
+      if (date) out.add(`${w.toLowerCase()} ${date}`);
+    });
+  }
+  return out;
+}
+
+/** The ordinals a text says in words. */
+const ordinalsOf = (text: string) => wordTokens(text).filter((w) => ORDINALS.has(w));
+
+/** The items of `a` that `b` does not have as often (a multiset difference). */
+function without<T>(a: readonly T[], b: readonly T[]): T[] {
+  const left = [...b];
+  return a.filter((x) => {
+    const i = left.indexOf(x);
+    if (i >= 0) left.splice(i, 1);
+    return i < 0;
+  });
+}
 
 /** Words that give a sum of money its meaning: added only from the evidence's money context. (A plural possessive ends in an apostrophe, where "\b" cannot follow.) */
-const COMPARISON = /\b(?:earn(?:ed|s|t)?|wages?|salary|income|a (?:year|month|week|day)'?s|as much as|enough to buy|the price of a|in today'?s money|modern money|equivalent)\b|\b(?:years|months|weeks|days)'(?!\w)/;
+const COMPARISON = /\b(?:earn(?:ed|s|t)?|wages?|salary|income|a (?:year|month|week|day)'?s|as much as|enough to buy|the price of a|in today'?s money|modern money|equivalent)\b|\b(?:years|months|weeks|days)'(?!\w)/g;
+const comparisonsIn = (normalized: string) => normalized.match(COMPARISON) ?? [];
+/** A phrase said whole: not run on into a longer word or a possessive ("a craftsman" is not "a craftsman's son"). */
+const whole = (words: string) => new RegExp(String.raw`(?<![\p{L}\p{N}'])${words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\p{L}\p{N}'])`, 'gu');
+/** Wording as compared: normalized, without the full stop that ends it. */
+const phrase = (s: string) => normalize(s).replace(/[.!?]+$/, '');
+
+/** The pass's edits by the id the review judges each under (it numbers a patch's edits in order: N1, N2, …): two edits may name the same block. */
+const byChange = (out: NarrationOutput) => new Map(out.edits.map((e, i) => [`N${i + 1}`, e]));
 
 /**
  * The narration pass's own invariants for one edit, on top of the evidence
  * rules: a settled block is not touched (skipped); a speaker's line or a
- * quotation is never touched; every figure stays; new figures and money
- * comparisons come only from the money context the edit cites; names keep
- * their spelling; every hedge stays; lines to keep stay; no new machine
- * habit; and a block grows by a third at most (more only with money context).
+ * quotation is never touched, and no quotation is added; every figure and
+ * date stays, and none is added; new figures and money comparisons come only
+ * from the money context the edit cites, which is for a sum the block says
+ * and is said in its own words (where the evidence gives none, the honest
+ * line is no comparison); names keep their spelling; every hedge
+ * stays; lines to keep stay; no new machine habit; and a block grows by a
+ * third at most (more only with money context).
  */
 export function narrationGuard(plan: NarrationPlan, out: NarrationOutput, scope: ScriptScope): NonNullable<ReviewContext['guard']> {
-  const edits = new Map(out.edits.map((e) => [e.ref.trim(), e]));
+  const edits = byChange(out);
   const contexts = new Map(plan.money.contexts.map((c) => [c.id, c]));
+  const { currencies } = scopeMoney(scope);
   const known = knownNames(scope);
   const kept = plan.kept.map((l) => normalize(l));
   const spaced = (t: string) => ` ${wordTokens(t).join(' ')} `;
@@ -171,27 +244,51 @@ export function narrationGuard(plan: NarrationPlan, out: NarrationOutput, scope:
     if (!plan.needs.has(change.ref)) return 'Settled: the diagnostics found nothing to fix in this block — it stays as written';
     const found: ScriptFinding[] = [];
     if (before.speakerId) found.push(f('NARRATION_QUOTE_TOUCHED', "a speaker's line is the record's words, not the narrator's"));
-    for (const q of quotedPassages(before.text)) if (!after.text.includes(q)) found.push(f('NARRATION_QUOTE_TOUCHED', `the quotation "${q.slice(0, 60)}" is no longer word for word`));
-    const lost = quantitiesLost(before.text, after.text);
+    // Every quotation, however short: a word changed inside quotation marks is put in the record's mouth.
+    const quoted = quotedPassages(before.text, 1);
+    const touched = quoted.filter((q) => !after.text.includes(q));
+    for (const q of touched) found.push(f('NARRATION_QUOTE_TOUCHED', `the quotation "${q.slice(0, 60)}" is no longer word for word`));
+    const invented = touched.length ? [] : quotedPassages(after.text, 1).filter((q) => !quoted.some((x) => x.includes(q)));
+    if (invented.length) found.push(f('NARRATION_QUOTE_TOUCHED', `adds the quotation "${invented[0]!.slice(0, 60)}", which the block did not quote`));
+    const ordinals = [ordinalsOf(before.text), ordinalsOf(after.text)] as const;
+    const lost = [...quantitiesLost(before.text, after.text), ...without(ordinals[0], ordinals[1])];
     if (lost.length) found.push(f('NARRATION_FIGURE_CHANGED', `the figure(s) ${lost.join(', ')} are no longer said as before`));
+    const newOrdinals = without(ordinals[1], ordinals[0]);
+    if (newOrdinals.length) found.push(f('NARRATION_FIGURE_CHANGED', `adds the figure(s) ${newOrdinals.join(', ')}, which the block did not say`));
     const dated = calendarWords(before.text);
     const days = calendarWords(after.text);
     const changedDates = [...dated].filter((w) => !days.has(w));
     if (changedDates.length) found.push(f('NARRATION_FIGURE_CHANGED', `the date word(s) ${changedDates.join(', ')} are no longer said`));
     const newDates = [...days].filter((w) => !dated.has(w));
     if (newDates.length) found.push(f('NARRATION_FIGURE_CHANGED', `adds the date word(s) ${newDates.join(', ')}, which the block did not say`));
-    const cited = (edits.get(change.ref)?.moneyContext ?? []).map((id) => contexts.get(id.trim())).filter((c): c is HistoricalMoneyContext => !!c);
-    const unknownIds = (edits.get(change.ref)?.moneyContext ?? []).filter((id) => !contexts.has(id.trim()));
+    const ids = (edits.get(change.id)?.moneyContext ?? []).map((id) => id.trim());
+    const cited = ids.map((id) => contexts.get(id)).filter((c): c is HistoricalMoneyContext => !!c);
+    const unknownIds = ids.filter((id) => !contexts.has(id));
     if (unknownIds.length) found.push(f('NARRATION_MONEY_UNSOURCED', `cites money context ${unknownIds.join(', ')}, which the evidence does not support`));
-    const allowed = new Set(cited.flatMap((c) => [c.amount, ...quantities(`${c.explanation} ${c.comparisonValue}`), ...(c.ratio ? [Math.round(c.ratio)] : [])]));
-    const added = quantitiesAdded(before.text, after.text).filter((q) => !allowed.has(q));
+    const sums = moneyMentions(after.text, currencies);
+    // A cited context is said in its own words: its comparison, or the evidence's sentence beside the sum. The rest of the edit is judged without them — so the wage a context sets the sum beside is said only as the evidence says it (in other words, its period would be the pass's: "a month" for "a year").
+    const text = normalize(after.text);
+    const own = (c: HistoricalMoneyContext) => [c.explanation, c.comparisonValue].map(phrase).filter(Boolean).map(whole);
+    // The honest line is no comparison where the evidence gives none for the sums the block says.
+    const honest = sums.length > 0 && !sums.some((m) => plan.money.contexts.some((c) => c.amount === m.amount && c.currency === m.currency));
+    const rest = [...cited.flatMap(own), ...(honest ? [whole(phrase(NO_EQUIVALENT))] : [])].reduce((t, p) => t.replace(p, ' '), text);
+    const allowed = new Set(cited.flatMap((c) => [c.amount, ...quantities(c.explanation), ...(c.ratio ? [spokenRatio(c.ratio).value] : [])]));
+    const added = quantitiesAdded(normalize(before.text), rest).filter((q) => !allowed.has(q));
     if (added.length) found.push(f(cited.length ? 'NARRATION_MONEY_UNSOURCED' : 'NARRATION_FIGURE_CHANGED', `adds the figure(s) ${added.join(', ')}, which ${cited.length ? 'the money context it cites does not give' : 'the block did not say'}`));
-    if (!cited.length && COMPARISON.test(normalize(after.text)) && !COMPARISON.test(normalize(before.text))) found.push(f('NARRATION_MONEY_UNSOURCED', `adds a money comparison without citing the evidence's money context ("${NO_EQUIVALENT}" is the honest line when there is none)`));
+    // A cited context is for a sum the block says, and is said whole.
+    for (const c of cited) {
+      if (!sums.some((m) => m.amount === c.amount && m.currency === c.currency)) found.push(f('NARRATION_MONEY_UNSOURCED', `cites ${c.id}, which is for ${c.amountText} ${unitFor(c.currency, c.amount)} — a sum this block does not say`));
+      else if (!own(c).some((p) => text.search(p) >= 0)) found.push(f('NARRATION_MONEY_UNSOURCED', `cites ${c.id} but does not say its comparison ("${c.explanation}")`));
+    }
+    const fresh = without(comparisonsIn(rest), comparisonsIn(normalize(before.text)));
+    if (fresh.length) found.push(f('NARRATION_MONEY_UNSOURCED', cited.length ? `adds a money comparison ("${fresh[0]}") the money context it cites does not give` : `adds a money comparison without citing the evidence's money context ("${NO_EQUIVALENT}" is the honest line when there is none)`));
     const renamed = namesAltered(before.text, after.text, known);
     if (renamed.length) found.push(f('NARRATION_NAME_CHANGED', `${renamed.join('; ')} — a historical name keeps its spelling`));
     const hedges = uncertaintyOf(after.text);
-    const dropped = [...uncertaintyOf(before.text)].filter((h) => !hedges.has(h));
-    if (dropped.length) found.push(f('NARRATION_HEDGE_DROPPED', `the ${dropped.join(' and ')} wording of the original is gone`));
+    const fewer = [...uncertaintyOf(before.text)].filter(([h, n]) => (hedges.get(h) ?? 0) < n);
+    const gone = fewer.filter(([h]) => !hedges.has(h)).map(([h]) => h);
+    if (gone.length) found.push(f('NARRATION_HEDGE_DROPPED', `the ${gone.join(' and ')} wording of the original is gone`));
+    for (const [h, n] of fewer.filter(([x]) => hedges.has(x))) found.push(f('NARRATION_HEDGE_DROPPED', `the original's ${h} wording is said ${n} times, the edit's only ${hedges.get(h)}: a hedge is gone`));
     const lines = kept.filter((l) => normalize(before.text).includes(l) && !normalize(after.text).includes(l));
     if (lines.length) found.push(f('NARRATION_KEPT_LINE_LOST', `the line to keep "${lines[0]!.slice(0, 70)}" is gone`));
     const echoes = plan.refrains.filter((p) => spaced(before.text).includes(` ${p} `) && !spaced(after.text).includes(` ${p} `));
@@ -212,7 +309,9 @@ const toPlain = (b: DraftBlock) => ({ key: b.key, section: Number(b.key.split('.
  * A narration pass on its own starts from a copy of the base version: every
  * block as it was (text, evidence, class, speaker, visual direction,
  * delivery, central question), sections awaiting review again. The base is
- * never changed.
+ * never changed. A line a person wrote stays theirs (its generated wording
+ * and who edited it come along), but not the time of the edit: that marks a
+ * fact issue fixed, and this run's fact checker has not seen it yet.
  */
 export function narrationBase(base: LoadedScript): ScriptDraft {
   return {
@@ -226,17 +325,22 @@ export function narrationBase(base: LoadedScript): ScriptDraft {
       reviewedBy: null,
       reviewedAt: null,
       written: true,
-      blocks: s.blocks.map((b) => ({ ...b, rowId: undefined, generatedText: b.text, editedBy: null, editedAt: null, claimKeys: [...b.claimKeys], beatIds: [...b.beatIds], delivery: { ...b.delivery, emphasis: b.delivery.emphasis.map((e) => ({ ...e })) }, visual: { ...b.visual, mustShow: b.visual.mustShow.map((m) => ({ ...m, claimKeys: [...m.claimKeys] })), mustAvoid: [...b.visual.mustAvoid] }, presentation: b.presentation.map((p) => ({ ...p })) })),
+      blocks: s.blocks.map((b) => ({ ...b, rowId: undefined, editedAt: null, claimKeys: [...b.claimKeys], beatIds: [...b.beatIds], delivery: { ...b.delivery, emphasis: b.delivery.emphasis.map((e) => ({ ...e })) }, visual: { ...b.visual, mustShow: b.visual.mustShow.map((m) => ({ ...m, claimKeys: [...m.claimKeys] })), mustAvoid: [...b.visual.mustAvoid] }, presentation: b.presentation.map((p) => ({ ...p })) })),
     })),
   };
 }
 
 /** The picture description the kept edits moved out of the narration, written into each block's visual note. */
 export function moveToVisual(draft: ScriptDraft, out: NarrationOutput, changes: readonly ScriptReviewChange[], scope: ScriptScope): { draft: ScriptDraft; moved: { ref: string; note: string }[] } {
-  const notes = new Map(out.edits.filter((e) => e.visualNote?.trim()).map((e) => [e.ref.trim(), e.visualNote!.trim()]));
+  const edits = byChange(out);
   const moved: { ref: string; note: string }[] = [];
   const at = new Map<string, string>();
-  for (const c of changes) if (c.status === 'ACCEPTED' && c.savedRef && c.ref && notes.has(c.ref)) at.set(c.savedRef, notes.get(c.ref)!);
+  for (const c of changes) {
+    const note = c.status === 'ACCEPTED' ? edits.get(c.id)?.visualNote?.trim() : undefined;
+    if (!note || !c.savedRef) continue;
+    const was = at.get(c.savedRef);
+    if (!was?.includes(note)) at.set(c.savedRef, was ? `${was} ${note}` : note);
+  }
   if (!at.size) return { draft, moved };
   const sections = draft.sections.map((s) => ({
     ...s,
@@ -262,12 +366,14 @@ export function composeLineage(base: ScriptDraft, maps: readonly ReadonlyMap<str
 /** Money context the kept edits used, at the block where each landed (a change's savedRef follows the later reviewers' renumbering). */
 export function moneyUsed(out: NarrationOutput, changes: readonly ScriptReviewChange[], plan: NarrationPlan): { contextId: string; ref: string }[] {
   const ids = new Set(plan.money.contexts.map((c) => c.id));
-  const used: { contextId: string; ref: string }[] = [];
-  for (const e of out.edits) {
-    const c = changes.find((x) => x.reviewer === 'NARRATION' && x.ref === e.ref.trim() && x.status === 'ACCEPTED');
-    if (c?.savedRef) for (const id of e.moneyContext.map((x) => x.trim()).filter((x) => ids.has(x))) used.push({ contextId: id, ref: c.savedRef });
+  const edits = byChange(out);
+  const used = new Map<string, { contextId: string; ref: string }>();
+  for (const c of changes) {
+    const e = c.reviewer === 'NARRATION' && c.status === 'ACCEPTED' ? edits.get(c.id) : undefined;
+    if (!e || !c.savedRef) continue;
+    for (const id of e.moneyContext.map((x) => x.trim()).filter((x) => ids.has(x))) used.set(`${id} ${c.savedRef}`, { contextId: id, ref: c.savedRef });
   }
-  return used;
+  return [...used.values()];
 }
 
 /** The record of a narration pass, saved with the version it made. */

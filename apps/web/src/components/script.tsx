@@ -30,6 +30,7 @@ import {
   type ScriptDelivery,
   type ScriptPause,
   type ScriptSectionView,
+  type ScriptSummaryView,
   type ScriptVersionView,
   type ScriptView,
   type SectionReviewStatus,
@@ -256,7 +257,8 @@ function BlockRow({ block: b, claims, cast, editable, first, last, onMove, movin
   const [editing, setEditing] = useState(false);
   const tone = CLASS_TONE[b.infoClass];
   const speaker = b.speakerId ? cast.get(b.speakerId) : undefined;
-  const edited = b.editedAt !== null;
+  // A copied version keeps who edited a line by hand, not when.
+  const edited = b.editedBy !== null || b.editedAt !== null;
   return (
     <li data-block={b.key} className={`border-l-4 px-4 py-2 ${tone.bar} ${tone.bg}`}>
       {editing ? (
@@ -456,7 +458,7 @@ export function VersionsTab({ projectId, view: v, onVersion }: { projectId: stri
               </label>
             ))}
           </div>
-          {compare.data && <Comparison cmp={compare.data} />}
+          {compare.data && <Comparison cmp={compare.data} scripts={v.scripts} />}
           {compare.error && <p className="text-sm text-red-700">{compare.error.message}</p>}
         </Section>
       )}
@@ -468,7 +470,7 @@ const GATE_TONE = (passed: boolean) => (passed ? 'text-emerald-700' : 'text-red-
 const CLASS_ORDER: ScriptBlockClass[] = ['DOCUMENTED', 'RECONSTRUCTION', 'UNCERTAIN', 'FICTION', 'FRAMING'];
 
 /** Two versions side by side: the numbers, what changed and why, the evidence, the checklist, then the text. */
-function Comparison({ cmp }: { cmp: ScriptCompareView }) {
+function Comparison({ cmp, scripts }: { cmp: ScriptCompareView; scripts: readonly ScriptSummaryView[] }) {
   const { a, b, facts, totals, evidence } = cmp;
   const ev = [...evidence.claimsAdded.map((k) => `+${k}`), ...evidence.claimsRemoved.map((k) => `−${k}`)];
   const figs = [...evidence.figuresAdded.map((k) => `+${k}`), ...evidence.figuresRemoved.map((k) => `−${k}`)];
@@ -535,7 +537,7 @@ function Comparison({ cmp }: { cmp: ScriptCompareView }) {
           {(cmp.changeLog.kept ?? []).length > 0 && <p className="mt-1 text-stone-600">Kept word for word: {cmp.changeLog.kept!.map((l) => `“${l}”`).join(' · ')}</p>}
         </div>
       )}
-      {cmp.assessment.length > 0 && <AssessmentList items={cmp.assessment} against={a.version} title={b.origin === 'NARRATION' ? 'Narration checklist' : 'Refinement checklist'} />}
+      {cmp.assessment.length > 0 && <AssessmentList items={cmp.assessment} run={answeredBy(scripts, b)} />}
       {cmp.changeReport && (
         <details className="rounded border border-violet-200 bg-violet-50/30 p-2" open={b.origin === 'NARRATION'}>
           <summary className="cursor-pointer font-medium text-violet-900">Block by block: original → revised → why</summary>
@@ -571,10 +573,19 @@ function Comparison({ cmp }: { cmp: ScriptCompareView }) {
 
 const ANSWER_TONE: Record<ScriptAssessmentItem['answer'], string> = { YES: 'bg-emerald-100 text-emerald-800', PARTLY: 'bg-amber-100 text-amber-900', NO: 'bg-red-100 text-red-800' };
 
-/** The script editor's refinement checklist, answered against the version refined. */
-export function AssessmentList({ items, against, title = 'Refinement checklist' }: { items: ScriptAssessmentItem[]; against: number | null; title?: string }) {
+/** The version whose run answered a version's checklist: a restored copy carries the answers of the version it copies. */
+export function answeredBy(scripts: readonly ScriptSummaryView[], s: ScriptSummaryView): ScriptSummaryView {
+  const byVersion = new Map(scripts.map((x) => [x.version, x]));
+  let run = s;
+  for (let n = 0; run.origin === 'RESTORE' && run.revisionOfVersion !== null && n < scripts.length; n++) run = byVersion.get(run.revisionOfVersion) ?? run;
+  return run;
+}
+
+/** The script editor's checklist (a refinement's or a narration pass's), as answered by `run` against the version it started from. */
+export function AssessmentList({ items, run }: { items: ScriptAssessmentItem[]; run: ScriptSummaryView }) {
+  const title = run.origin === 'NARRATION' ? 'Narration checklist' : 'Refinement checklist';
   return (
-    <Section title={`${title} — the script editor${against ? `, against v${against}` : ''} (model judgment)`}>
+    <Section title={`${title} — the script editor${run.revisionOfVersion ? `, against v${run.revisionOfVersion}` : ''} (model judgment)`}>
       <ol className="space-y-1.5 text-sm">
         {items.map((x, i) => (
           <li key={i} className="flex flex-wrap items-baseline gap-x-2">

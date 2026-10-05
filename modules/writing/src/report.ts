@@ -26,8 +26,8 @@ export interface ReportArgs {
   lineage: NarrationRecord['lineage'] | null;
   ledger: readonly ScriptReviewChange[];
   narration: NarrationRecord | null;
-  /** The uncertainty a block's wording carries (hedge families), as the script rules read it. */
-  uncertainty: (text: string) => ReadonlySet<string>;
+  /** The uncertainty a block's wording carries (each hedge family, with how often it is said), as the script rules read it. */
+  uncertainty: (text: string) => ReadonlyMap<string, number>;
 }
 
 /** Wording without case or punctuation — but a decimal point is part of a figure ("1.5" is not "15"). */
@@ -114,8 +114,8 @@ export function changeReport(args: ReportArgs): ScriptChangeReport {
     const after: AiPattern[] = b && !b.speakerId ? blockPatterns(b) : [];
     const claimsRemoved = a ? a.claimKeys.filter((k) => !(b?.claimKeys ?? []).includes(k)) : [];
     const claimsAdded = b ? b.claimKeys.filter((k) => !(a?.claimKeys ?? []).includes(k)) : [];
-    const hedgesA = a ? args.uncertainty(a.text) : new Set<string>();
-    const hedgesB = b ? args.uncertainty(b.text) : new Set<string>();
+    const hedgesA = a ? args.uncertainty(a.text) : new Map<string, number>();
+    const hedgesB = b ? args.uncertainty(b.text) : new Map<string, number>();
     const visualGone = before.includes('visual_description') && !after.includes('visual_description');
     if (visualGone) visualRemoved++;
     if (a && status !== 'UNCHANGED') {
@@ -138,7 +138,8 @@ export function changeReport(args: ReportArgs): ScriptChangeReport {
       reasons: why.reasons,
       changedBy: why.by,
       evidencePreserved: a && b ? claimsRemoved.length === 0 && a.infoClass === b.infoClass : null,
-      uncertaintyPreserved: a && b ? [...hedgesA].every((h) => hedgesB.has(h)) : null,
+      // Every hedge, not just every family: one of two hedges dropped leaves a claim stated as fact.
+      uncertaintyPreserved: a && b ? [...hedgesA].every(([h, n]) => (hedgesB.get(h) ?? 0) >= n) : null,
       claimsRemoved,
       claimsAdded,
       moneyContext: b ? used.filter((u) => u.ref === b.key).map((u) => u.contextId) : [],
@@ -149,7 +150,7 @@ export function changeReport(args: ReportArgs): ScriptChangeReport {
     });
   }
   const both = blocks.filter((x) => x.baseRef && x.ref);
-  const hedged = both.filter((x) => x.original && args.uncertainty(x.original).size > 0);
+  const hedged = both.filter((x) => x.original && [...args.uncertainty(x.original).values()].some((n) => n > 0));
   const before = summarise(args.base.blocks);
   const after = summarise(args.revised.blocks);
   const claims = (bs: readonly NarrationBlock[]) => new Set(bs.flatMap((b) => b.claimKeys));

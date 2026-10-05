@@ -1,6 +1,6 @@
 import { AI_PATTERNS, SCRIPT_TIMING, type AiPattern, type AiSignal, type FingerprintSummary } from '@docengine/core';
 import { normalize, wordTokens } from '@docengine/story/shared';
-import { clip, countWords, maskQuotes, narrationOnly, narratorSentences, sentencesOf, type NarrationBlock, type Sentence } from './text.ts';
+import { clip, countWords, maskQuotes, narrationOnly, narratorSentences, quotes, sentencesOf, type NarrationBlock, type Sentence } from './text.ts';
 
 /**
  * AI-pattern diagnostics: the habits that make narration sound
@@ -14,7 +14,7 @@ import { clip, countWords, maskQuotes, narrationOnly, narratorSentences, sentenc
  * Linear passes only — the rules run once per proposed change.
  */
 
-/** Stock phrases (the lexicon the script rules and prompts share). Lower case; matched on normalized text. */
+/** Stock phrases (the lexicon the script rules and prompts share). Lower case; matched in any case on the narrator's own words (`stockPhrases`). */
 export const STOCK_PHRASES = [
   "here's where things get interesting",
   'here is where things get interesting',
@@ -26,7 +26,10 @@ export const STOCK_PHRASES = [
   'fast-forward',
   'buckle up',
   "let's dive",
-  'dive into',
+  'dive into the world',
+  'dive into the story',
+  'dive into the details',
+  'dive into the history',
   'in a world where',
   "but that's not all",
   'the rest is history',
@@ -58,6 +61,18 @@ export const STOCK_PHRASES = [
   'history would remember',
 ] as const;
 
+/** Each stock phrase as a pattern on the narrator's own text: any capitals, typographic apostrophes and dashes, from the start of a word. */
+const STOCK = STOCK_PHRASES.map((phrase) => ({ phrase, re: new RegExp(`(?<![\\p{L}\\p{N}])${phrase.replace(/'/g, "['‘’]").replace(/-/g, '[-‐-―]').replace(/ /g, '\\s+')}`, 'giu') }));
+
+/** A match that starts with a capital inside a sentence belongs to a name ("the Tapestry Room"), not to the narrator's phrase. */
+const inName = (text: string, at: number) => /\p{Lu}/u.test(text[at] ?? '') && !/(?:^|\n|[.!?…:]["”’)]?)\s*["“‘(]?$/u.test(text.slice(0, at));
+
+/** The stock phrases a text says in the narrator's own words: not inside a quotation, not as part of a name ("the Tapestry Room"). */
+export function stockPhrases(text: string): string[] {
+  const raw = maskQuotes(text);
+  return STOCK.filter(({ re }) => [...raw.matchAll(re)].some((m) => !inName(raw, m.index!))).map((x) => x.phrase);
+}
+
 interface SentenceRule {
   pattern: AiPattern;
   kind: 'HARD' | 'DENSITY';
@@ -68,7 +83,7 @@ interface SentenceRule {
 const SENTENCE_RULES: SentenceRule[] = [
   // Fake dramatic beats and portentous closers.
   { pattern: 'dramatic_transition', kind: 'HARD', re: /^(?:and|but) then\b/ },
-  { pattern: 'dramatic_transition', kind: 'HARD', re: /\bthat'?s (?:when|where) (?:it|things|everything|the trouble|the story)\b/ },
+  { pattern: 'dramatic_transition', kind: 'HARD', re: /\bthat'?s (?:when|where) (?:it (?:all|gets|got|began|begins|started|starts|went|goes)|things|everything|the trouble|the story)\b|\bthat'?s when it (?:happened|changed)\b/ },
   { pattern: 'dramatic_transition', kind: 'HARD', re: /^that'?s when\b/ },
   { pattern: 'dramatic_transition', kind: 'HARD', re: /\b(?:was|is) (?:only|just) the beginning\b/ },
   { pattern: 'dramatic_transition', kind: 'HARD', re: /\b(?:everything|all of (?:that|this)|things|it all) (?:was|were|is) about to change\b/ },
@@ -82,15 +97,15 @@ const SENTENCE_RULES: SentenceRule[] = [
   // Hype adverbs as openers.
   { pattern: 'hype_adverb', kind: 'HARD', re: /^(?:incredibly|remarkably|astonishingly|shockingly|unbelievably|amazingly|staggeringly|interestingly|fascinatingly|crucially),/ },
   // "Imagine…" and "What if…".
-  { pattern: 'imagine_opener', kind: 'HARD', re: /^(?:now,? )?(?:imagine|picture (?:this|the scene|it)|close your eyes)\b/ },
+  { pattern: 'imagine_opener', kind: 'HARD', re: /^(?:now,? )?(?:imagine|picture (?:this|it|the \w+|an? \w+)|close your eyes)\b/ },
   { pattern: 'imagine_opener', kind: 'DENSITY', re: /^(?:but |so |and )?what if\b/ },
   // Trailer language.
-  { pattern: 'trailer_language', kind: 'HARD', re: /\b(?:destiny|fate had other plans|forever changed|changed forever|the unthinkable|unimaginable|would never be the same|against all odds|in a single moment|rocked the (?:world|nation|city)|the world would never|the stakes (?:have never been|could not be|couldn'?t be|were never) higher|one (?:man|woman)'s (?:obsession|quest|gamble|dream))\b/ },
+  { pattern: 'trailer_language', kind: 'HARD', re: /^destiny\b|\b(?:(?:was|is|seemed) destiny|(?:his|her|their|its|our) destiny|a date with destiny|destiny (?:awaited|awaits|called|beckoned|had)|fate had other plans|forever changed|changed forever|the unthinkable|unimaginable|would never be the same|against all odds|in a single moment|rocked the (?:world|nation|city)|the world would never|the stakes (?:have never been|could not be|couldn'?t be|were never) higher|one (?:man|woman)'s (?:obsession|quest|gamble|dream))\b/ },
   { pattern: 'trailer_language', kind: 'HARD', re: /\ba (?:story|tale) of (?:\w+, ){1,4}(?:and )?\w+\b/ },
   // Generic mystery.
   { pattern: 'mystery_language', kind: 'HARD', re: /\b(?:shrouded in (?:mystery|secrecy)|hidden truth|dark secrets?|the truth behind|untold story|lost to history|an enigma|cloaked in (?:mystery|secrecy)|veil of secrecy|mysterious circumstances|secrets? (?:that|which) would)\b/ },
   // Emotion explained.
-  { pattern: 'emotion_explained', kind: 'HARD', re: /\b(?:palpable|a (?:deep |growing )?sense of (?:dread|unease|wonder|awe|despair|foreboding)|hearts? (?:pounding|racing|sank|sinking)|the weight of (?:it all|history|the moment)|sends? (?:a )?chills?|heart-?breaking|gut-?wrenching|breath-?taking|spine-?(?:chilling|tingling)|the air (?:was|is) thick with|you can (?:almost )?(?:feel|taste|smell) the)\b/ },
+  { pattern: 'emotion_explained', kind: 'HARD', re: /\b(?:palpable|a (?:deep |growing )?sense of (?:dread|unease|wonder|awe|despair|foreboding)|hearts? (?:pounding|racing|sank|sinking)|the weight of (?:it all|history|the moment)|sends? (?:a )?chills?|heart-?breaking|gut-?wrenching|breath-?taking|spine-?(?:chilling|tingling)|the air (?:was|is) thick with (?:tension|fear|dread|anticipation|menace|suspicion|excitement|expectation)|you can (?:almost )?(?:feel|taste|smell) the)\b/ },
   // "The truth is…"
   { pattern: 'truth_reveal', kind: 'HARD', re: /^(?:but )?here'?s (?:the thing|the truth|the twist|the kicker)\b/ },
   { pattern: 'truth_reveal', kind: 'DENSITY', re: /^(?:but )?(?:the truth is|the truth was|in reality|the reality (?:is|was)|the real story)\b/ },
@@ -118,7 +133,12 @@ const SEEN = /\b(?:thumb|thumbs|finger|fingers|hand|hands|eyes|eye|brow|brows|li
 const GESTURE = /\b(?:leans?|leaning|glances?|glancing|nods?|nodding|shrugs?|shrugging|sighs?|sighing|smiles?|smiling|frowns?|frowning|blinks?|squints?|fidgets?|drums?|tapping|taps?|wipes?|wiping|twitches?)\b/;
 /** Ambient movement: a picture only with something seen ("candlelight flickers"); prices, credit and doubt drift, hover and tighten too. */
 const AMBIENT = /\b(?:flickers?|flickering|gutters?|guttering|glints?|gleams?|shimmers?|swirls?|creaks?|rustles?|hovers?|hovering|trembles?|trembling|lingers?|lingering|drifts?|dances?|dancing|curls?|tightens?|narrows?)\b/;
-const PICTURE_TALK = /\b(?:we see|you can see|on screen|in this (?:painting|picture|image|photograph|engraving|map|shot)|as we (?:look|watch))\b/;
+/** The same words as figures of speech: "nods the bill through", "wiping out", "into the hands of his creditors", "on the other hand", "shed light on", "a blind eye". */
+const IDIOM = /\b(?:(?:nods?|nodding) (?:[\w']+ ){0,3}through|(?:wipes?|wiping) out|(?:drums?|drumming) up|(?:taps?|tapping) into|(?:shrugs?|shrugging) off|(?:into|out of|at) the hands of|(?:into|in) (?:other|safe|private) hands|(?:change[sd]?|changing) hands|on the (?:one|other) hand|the upper hand|in light of|(?:came|comes|come|brought|brings|bring) to light|(?:sheds?|shedding|throws?|threw|casts?|casting) (?:new |fresh |some |little |more )?light on|a blind eye)\b/g;
+/** Talk of the picture itself: "Here we see…", "you can see the cracks", "On screen,", "in this engraving" — not "you can see why", "in the registers we see", "the first film on screen". */
+const PICTURE_TALK = /^(?:here|now) we (?:can )?see\b|\byou can (?:still )?see (?!(?:why|how|that|what|whether|who|where|when|if)\b)|^on screen\b|\bin this (?:painting|picture|image|photograph|engraving|map|shot)\b|\bas we (?:look|watch)\b/;
+/** "We see…" opening a sentence: the picture, unless what follows informs ("We see the same name in the records of 1640"). */
+const WE_SEE = /^we (?:can )?see\b/;
 const INFORMATIVE = /\d|\b(?:because|so that|which meant|that meant|cost|price|paid|worth|owed|law|court|contract|record|records|ledger|accounts?)\b/;
 
 /** A sentence that describes what the picture shows rather than adding what it cannot. */
@@ -126,26 +146,45 @@ export function describesPicture(sentence: string, visual?: NarrationBlock['visu
   const s = normalize(sentence);
   if (PICTURE_TALK.test(s)) return true;
   const words = wordTokens(s);
-  if (!INFORMATIVE.test(s) && ((GESTURE.test(s) && (SEEN.test(s) || words.length <= 8)) || (AMBIENT.test(s) && SEEN.test(s)))) return true;
-  // Narration that repeats the block's own visual direction word for word.
+  const literal = s.replace(IDIOM, ' ');
+  if (!INFORMATIVE.test(s) && (WE_SEE.test(s) || (GESTURE.test(literal) && (SEEN.test(literal) || words.length <= 8)) || (AMBIENT.test(literal) && SEEN.test(literal)))) return true;
+  // Narration that repeats the block's own visual direction word for word. Names and figures do not count: the fact and the picture of it share its people, places and years.
   if (visual) {
-    const shown = new Set(wordTokens([visual.note, ...visual.mustShow.map((m) => m.detail)].join(' ')).filter((w) => w.length > 3));
-    const mine = words.filter((w) => w.length > 3);
+    const texts = [visual.note, ...visual.mustShow.map((m) => m.detail)];
+    const names = properNouns([sentence, ...texts]);
+    const telling = (ws: readonly string[]) => ws.filter((w) => w.length > 3 && !/\d/.test(w) && !names.has(w));
+    const shown = new Set(telling(wordTokens(texts.join(' '))));
+    const mine = telling(words);
     if (shown.size >= 4 && mine.length >= 4 && mine.filter((w) => shown.has(w)).length / mine.length >= 0.7) return true;
   }
   return false;
 }
 
+/** The words texts capitalise other than at the start of a sentence (as word tokens): their names. */
+function properNouns(texts: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const t of texts)
+    for (const s of sentencesOf(t)) (s.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).forEach((w, i) => i > 0 && /^\p{Lu}/u.test(w) && wordTokens(w).forEach((x) => out.add(x)));
+  return out;
+}
+
 const CONTRAST_ONE = /\bnot (?:just |only |simply |merely )?(?:a |an |the |about )?[\w' -]{1,30},? but\b/;
 /** "It wasn't…", "It is not…", and the contracted "It's not…", "They're not…". */
 const NEGATED = /^(?:it|this|that|he|she|they|what [\w' ]{1,30})(?:\s+(?:(?:was|is|were|are)\s*n'?o?t|(?:was|is|were|are) not|did not|didn'?t)|'(?:s|re) not)\b/;
+/** "Salt wasn't just a seasoning.", "The bridge was not a success.": a named subject denied a kind of thing. */
+const NEGATED_NAMED = /^(?!there |here )[\w'-]+(?: [\w'-]+){0,3} (?:was|is|were|are)(?:n'?t| not) (?:just |only |simply |merely )?(?:a|an|about)\b/;
+const negated = (s: string) => NEGATED.test(s) || NEGATED_NAMED.test(s);
 const AFFIRMED = /^(?:it|this|that|he|she|they)(?:'s|'re| was| is| were| are)\b/;
 /**
  * "It is not known whether…", "It was not clear who…", "It is not recorded.": a
  * hedge about the record, not the "It wasn't X. It was Y." formula — which
  * "It wasn't known for its silver. It was known for its herring." still is.
  */
-const NOT_KNOWN = /(?:\bnot|n't) (?:entirely |altogether |yet |fully )?(?:known|clear|certain|sure|obvious|recorded|documented)(?:\s*(?:[.,;:]|$)| (?:that|to (?:have|be))\b|(?: [\w']+){0,4}? (?:whether|if|who|whom|whose|what|which|why|how|when|where)\b)/;
+const NOT_KNOWN = /(?:\bnot|n't) (?:entirely |altogether |yet |fully )?(?:known|clear|certain|sure|obvious|recorded|documented)(?:\s*(?:[.,;:-]|$)| (?:that|to (?:have|be))\b|(?: [\w']+){0,4}? (?:whether|if|who|whom|whose|what|which|why|how|when|where)\b)/;
+/** "It wasn't X. It was Y.": a denial that is no hedge, answered by an affirmation that is no denial. */
+const formula = (denied: string, affirmed: string) => negated(denied) && !NOT_KNOWN.test(denied) && AFFIRMED.test(affirmed) && !negated(affirmed);
+/** The formula's two sentences joined by a dash or a semicolon: "It wasn't greed — it was fear." */
+const JOINED = /^(.+?)\s*[-;]\s*((?:it|this|that|he|she|they)(?:'s|'re| was| is| were| are)\b.*)$/;
 
 /**
  * Every AI-pattern signal of the narration, in order. A pattern that only
@@ -158,8 +197,7 @@ export function aiSignals(blocks: readonly NarrationBlock[]): AiSignal[] {
   const narration = narrationOnly(blocks);
   for (const b of narration) {
     const raw = maskQuotes(b.text);
-    const plain = normalize(raw);
-    for (const p of STOCK_PHRASES) if (plain.includes(p)) add('stock_phrase', b.key, p, 'HARD');
+    for (const p of stockPhrases(b.text)) add('stock_phrase', b.key, p, 'HARD');
     const ss = sentencesOf(b.text);
     ss.forEach((s, i) => {
       const n = normalize(s);
@@ -170,12 +208,12 @@ export function aiSignals(blocks: readonly NarrationBlock[]): AiSignal[] {
         found.add(r.pattern);
         add(r.pattern, b.key, s, r.kind);
       }
-      const contrast = CONTRAST_ONE.test(n);
+      const joined = JOINED.exec(n);
+      const contrast = CONTRAST_ONE.test(n) || (joined !== null && formula(joined[1]!, joined[2]!));
       if (contrast) add('contrast_formula', b.key, s, 'DENSITY');
       const next = ss[i + 1];
-      // "It wasn't X. It was Y." — counted once: not again after a "not X, but Y" sentence, not when the next sentence is itself a negation, and never for a hedge.
-      const nextN = next ? normalize(next) : '';
-      if (next && !contrast && NEGATED.test(n) && !NOT_KNOWN.test(n) && AFFIRMED.test(nextN) && !NEGATED.test(nextN)) add('contrast_formula', b.key, `${s} ${next}`, 'DENSITY');
+      // "It wasn't X. It was Y." — counted once: not again after a contrast in one sentence, not when the next sentence is itself a negation, and never for a hedge.
+      if (next && !contrast && formula(n, normalize(next))) add('contrast_formula', b.key, `${s} ${next}`, 'DENSITY');
       if (next && n.endsWith('?') && countWords(s) <= 6 && countWords(next) <= 4) add('qa_pair', b.key, `${s} ${next}`, 'DENSITY');
       if (describesPicture(s, b.visual)) add('visual_description', b.key, s, 'HARD');
     });
@@ -218,7 +256,7 @@ function sequenceSignals(all: readonly Sentence[], add: (p: AiPattern, ref: stri
       flushRun();
       section = s.section;
     }
-    if (s.words > 0 && s.words <= 3) frag.push(s);
+    if (isFragment(s)) frag.push(s);
     else flushFrag();
     if (s.text.trim().endsWith('?')) {
       questions.push(s);
@@ -238,20 +276,28 @@ function sequenceSignals(all: readonly Sentence[], add: (p: AiPattern, ref: stri
 /** Blocks that end the way the block before them ended: a short fragment again and again, or the same last word. */
 function endingSignals(narration: readonly NarrationBlock[], add: (p: AiPattern, ref: string, excerpt: string, kind: 'HARD' | 'DENSITY') => void): void {
   let streak = 0;
-  let prev: { short: boolean; word: string } | null = null;
+  let prev: ReturnType<typeof blockEnding> | null = null;
   for (const b of narration) {
-    const last = sentencesOf(withoutAsides(b.text)).at(-1) ?? '';
-    const words = wordTokens(last);
-    const cur = { short: words.length > 0 && words.length <= 4, word: words.at(-1) ?? '' };
+    const cur = blockEnding(b.text);
     const same = prev !== null && ((prev.short && cur.short) || (cur.word.length > 3 && cur.word === prev.word));
     streak = same ? streak + 1 : 0;
-    if (streak >= 2) add('repeated_ending', b.key, last, 'DENSITY');
+    if (streak >= 2) add('repeated_ending', b.key, cur.last, 'DENSITY');
     prev = cur;
   }
 }
 
 /** A text without its parenthetical asides (an aside is not how a block ends). */
 export const withoutAsides = (text: string) => text.replace(/\s*\([^)]*\)/g, '');
+
+/** A sentence of one to three words — not a quotation with its attribution, which only looks short ("…," he wrote.). */
+export const isFragment = (s: Pick<Sentence, 'text' | 'words'>) => s.words > 0 && s.words <= 3 && !quotes(s.text);
+
+/** How a block ends: its last sentence, whether that is short, and its last word — none when a quotation closes it (the record's words, not the narrator's). */
+export function blockEnding(text: string): { last: string; short: boolean; word: string } {
+  const last = sentencesOf(withoutAsides(text)).at(-1) ?? '';
+  const words = wordTokens(last);
+  return { last, short: words.length > 0 && words.length <= 4 && !quotes(last), word: /"…"\W*$/.test(last) ? '' : (words.at(-1) ?? '') };
+}
 
 /** When a DENSITY pattern warns: its count against the script's length (words). */
 const THRESHOLD: Partial<Record<AiPattern, (n: number, words: number, minutes: number) => boolean>> = {

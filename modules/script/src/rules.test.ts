@@ -4,7 +4,9 @@ import { computeScriptReport } from './quality.ts';
 import { DISPUTED_PATTERN, MYTH_PATTERN, SCRIPT_BLOCKING, UNVERIFIED_PATTERN, checkScript, type ScriptFindingKind } from './rules.ts';
 import { fixtureBlock, fixtureDraft, fixtureScope } from './testing.ts';
 import { allBlocks } from './draft.ts';
+import { narrationBlocks } from './editorial.ts';
 import { scriptTiming } from '@docengine/core';
+import { diagnose } from '@docengine/writing';
 
 const scope = fixtureScope();
 /** A one-minute film (the fixture is about 50 seconds of narration). */
@@ -187,5 +189,36 @@ describe('the script rules', () => {
     expect(checkScript(d, scope, { target, factIssues: [issue] }).map((f) => f.kind)).toContain('OPEN_CRITICAL_FACT_ISSUE');
     d.sections[1]!.blocks[1]!.editedAt = new Date().toISOString();
     expect(checkScript(d, scope, { target, factIssues: [issue] }).map((f) => f.kind)).not.toContain('OPEN_CRITICAL_FACT_ISSUE');
+  });
+
+  it('blocks a direction or a claim key in the narration, and not an aside or a code that only looks like one', () => {
+    const at = (text: string) => kinds(withBlock(2, 1, { text, infoClass: 'DOCUMENTED', beatIds: ['2.2'], claimKeys: ['C007'] }));
+    expect(at('In April 1637 the courts sent the unsettled contracts back to the towns. (pause)')).toContain('DIRECTION_IN_NARRATION');
+    expect(at('In April 1637 the courts sent the unsettled contracts back to the towns (C007).')).toContain('DIRECTION_IN_NARRATION');
+    expect(SCRIPT_BLOCKING).toContain('DIRECTION_IN_NARRATION');
+    expect(at('In April 1637 the courts (slowly at first, then all at once) sent the unsettled contracts back to the towns.')).not.toContain('DIRECTION_IN_NARRATION');
+    // A "C" and three digits that is no claim of the scope — unless it is cited the way a key is.
+    expect(at('In April 1637 the courts sent the unsettled contracts back to the towns, filed as C907.')).not.toContain('DIRECTION_IN_NARRATION');
+    expect(at('In April 1637 the courts sent the unsettled contracts back to the towns (C907).')).toContain('DIRECTION_IN_NARRATION');
+    expect(at('In April 1637 the courts sent the unsettled contracts back to the towns. (pause for effect)')).toContain('DIRECTION_IN_NARRATION');
+    expect(at('In April 1637 the courts sent the unsettled contracts (cut to half their price) back to the towns.')).not.toContain('DIRECTION_IN_NARRATION');
+  });
+
+  it("warns about a stock phrase in the narrator's own words, not in a name or a quotation", () => {
+    const at = (text: string) => checkScript(withBlock(2, 1, { text, infoClass: 'DOCUMENTED', beatIds: ['2.2'], claimKeys: ['C007'] }), scope, { target }).filter((f) => f.kind === 'AI_PHRASES').map((f) => f.detail);
+    expect(at('In April 1637 the courts sent the unsettled contracts back to the towns, a testament to their caution.')).toEqual(['Stock phrases: "a testament to" (2.2)']);
+    expect(at('In April 1637 the courts met in the Tapestry Room and sent the unsettled contracts back to the towns.')).toEqual([]);
+    expect(at('In April 1637 a clerk called the dispute "a tapestry of lies" and sent the unsettled contracts back to the towns.')).toEqual([]);
+  });
+
+  it('warns about machine-writing habits exactly where the narration pass is asked to work: both count words alike', () => {
+    // Two "not X, but Y" contrasts in about a thousand words: whether that is one per 500 words depends on the count ("didn't" is two words to the diagnostics).
+    const d = fixtureDraft(scope);
+    const filler = Array(24).fill("The clerk didn't sign. The buyer wasn't there. The grower couldn't wait. They'd all gone home.").join(' ');
+    for (const b of [d.sections[0]!.blocks[2]!, d.sections[1]!.blocks[1]!]) b.text = `The dispute was not about the price, but about who would pay it. ${filler}`;
+    const warned = checkScript(d, scope, { target }).filter((f) => f.kind === 'AI_PATTERN' && f.detail.includes('contrast_formula')).map((f) => f.ref);
+    const asked = diagnose({ blocks: narrationBlocks(d) }).actionable.filter((s) => s.pattern === 'contrast_formula').map((s) => s.ref);
+    expect(warned).toEqual(asked);
+    expect(warned).toEqual([]);
   });
 });

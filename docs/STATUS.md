@@ -60,7 +60,7 @@ estimate, now decides the real length).
 | **Script boundary** (SCR) | Script code never writes research or story tables (static guard over the stage, the API and the read models) and does not use the research module; a draft leaves the research and story records unchanged | `boundaries.test.ts` (script), `script.int.test.ts` |
 | **Story API + dashboard** (M3) | `GET /api/projects/:id/story`, `PATCH /api/story-candidates/:id`, `POST …/story/mine`, `POST …/story/architecture` (selection checked first); Story page: ranked candidates with scores and the ranking formula, arcs, myth threads, evidence (claims, quotes, sources), editor controls (approve/reject/flag, in-the-documentary, priority, notes), selection vs AI proposal, architecture with sequences and per-sequence evidence, both gate reports, cost; approval panel (Approve / Reject → Rework / Flag). Project pages are linked by an Overview · Research dossier · Story bar; the Research and Story stage boxes open their pages; new pages open at the top; pages fit a phone screen | `app.int.test.ts`; Playwright run on fake-AI data (editor actions, selection limits, rejection) with no console errors; Playwright at a 412 px phone viewport: every route into the Story page, no horizontal overflow |
 
-Test counts at time of writing: **461 unit** (38 files) + **94 integration** (7 files), all passing.
+Test counts at time of writing: **910 unit** (48 files) + **106 integration** (8 files), all passing.
 
 ## GQF ACCEPTANCE RUN (Railway, 2026-10-05): refinement from script v1 → v4
 
@@ -149,6 +149,17 @@ a retry two minutes later succeeded.
   report (totals and up to twelve before/after examples with the reasons);
   the Editorial tab shows every block. All tests use the fake model; no
   ElevenLabs audio was generated.
+- **Writing Engine 2 limits** (deterministic heuristics, each erring towards
+  refusing an edit or saying nothing rather than inventing): the narration
+  guard counts hedges per kind, not per claim (a hedge moved from one claim
+  to another with the count unchanged passes); a cited money comparison is
+  accepted only in the evidence's own words (a paraphrase is refused); a
+  dropped ordinal word ("at first") is refused as a lost figure; money
+  reading gives no comparison where whose pay it is, or its period, cannot
+  be told; the leak check reads bracketed and parenthesised directions in
+  the narrator's words only (quotations and cast lines are the record's).
+  An adversarial review (six lenses, each finding reproduced by a skeptic)
+  and a second fix-and-review round preceded this deploy.
 - **Script Quality Rules** acceptance rerun (Tulip Mania, 2026-10-05, v1 → v3
   with the same empty director's field as v2, `1297c10`): four calls ≈ $2.40
   estimated, 11.6 minutes; v2 superseded (kept). The refinement step returned

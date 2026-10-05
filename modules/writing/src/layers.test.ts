@@ -57,6 +57,15 @@ describe('directionLeaks: production metadata inside the narration', () => {
     expect(directionLeaks('The price doubled. (pause) Then it doubled again.')).toEqual(['a stage direction in parentheses ("(pause)")']);
     expect(directionLeaks('(softly) Nobody paid.')).toEqual(['a stage direction in parentheses ("(softly)")']);
     expect(directionLeaks('Nobody paid. (Music swells.)')).toEqual(['a stage direction in parentheses ("(Music swells.)")']);
+    for (const cue of ['(long pause)', '(dramatic pause)', '(a beat)', '(whispering)', '(fade out)', '(Visual: the ledger)', '(cut to the harbour)']) {
+      expect(directionLeaks(`Nobody paid. ${cue} The bidding stopped.`), cue).toEqual([`a stage direction in parentheses ("${cue}")`]);
+    }
+  });
+
+  it('catches a pause or a sound cue however it goes on: the rest of it is direction too', () => {
+    for (const cue of ['(pause for effect)', '(pause here)', '(long pause, then quietly)', '(Music swells, then fades.)', '(music fades out)', '(sfx bell tolls)', '(fade to black)']) {
+      expect(directionLeaks(`Nobody paid. ${cue} The bidding stopped.`), cue).toEqual([`a stage direction in parentheses ("${cue}")`]);
+    }
   });
 
   it('catches an edit instruction such as CUT TO or FADE OUT', () => {
@@ -71,10 +80,32 @@ describe('directionLeaks: production metadata inside the narration', () => {
     expect(directionLeaks('Proefman agreed to pay C008 1,200 guilders.')).toEqual(['a claim key ("C008")']);
   });
 
+  it('given the claim keys in play, reads a "C" and three digits as a claim key only when it is one of them', () => {
+    const keys = new Set(['C008', 'C009']);
+    expect(directionLeaks('One bulb was reportedly offered for 5,500 guilders (C009).', keys)).toEqual(['a claim key ("C009")']);
+    expect(directionLeaks('The C130 that crashed at the base was never found.', keys)).toEqual([]);
+    expect(directionLeaks('The C130 that crashed at the base was never found; see C008.', keys)).toEqual(['a claim key ("C008")']);
+    // Cited the way a key is cited, it is a claim key whatever the scope: the voice would read it out.
+    expect(directionLeaks('One bulb was reportedly offered for 5,500 guilders (C045).', keys)).toEqual(['a claim key ("C045")']);
+    expect(directionLeaks('One bulb was reportedly offered for 5,500 guilders (C044, C045).', keys)).toEqual(['a claim key ("C044")']);
+  });
+
   it('leaves ordinary parentheses alone: an aside is narration, not a direction', () => {
     expect(directionLeaks('The test (the first of three) was held in Haarlem.')).toEqual([]);
     expect(directionLeaks('Some buyers (test)')).toEqual([]);
     expect(directionLeaks('A craftsman earned roughly 300 guilders (about a guilder a working day).')).toEqual([]);
+    // An aside that only uses a word a direction would use.
+    for (const aside of [
+      'Prices fell (slowly at first, then all at once) through the spring of 1637.',
+      'Prices fell (slowly, then all at once) through the spring.',
+      'The tax (measured in bushels of grain) fell due each autumn.',
+      'The poets (the Beat generation) met in the bar.',
+      'The town (quietly prosperous for a century) held out.',
+      'The guild paid for everything (music included).',
+      'The truce (a pause in the fighting) held until the spring.',
+      'Wages (cut to half in 1637) no longer fed a family.',
+    ])
+      expect(directionLeaks(aside), aside).toEqual([]);
   });
 
   it('leaves ordinary words alone: a lower-case "cut to", a sentence that starts "Note", a year, a colon', () => {

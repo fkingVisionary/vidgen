@@ -1,5 +1,5 @@
 import type { HistoricalMoneyContext, NameEntry } from '@docengine/core';
-import { actionable, aiSignals, currenciesOf, directionLeaks, moneyContexts, moneyInNarration, nameLayer, type KnownName, type MoneyUse, type NarrationBlock } from '@docengine/writing';
+import { actionable, aiSignals, currenciesOf, directionLeaks, moneyContexts, moneyInNarration, nameLayer, summarise, type KnownName, type MoneyUse, type NarrationBlock } from '@docengine/writing';
 import { allBlocks, type DraftBlock, type ScriptDraft } from './draft.ts';
 import { namesInScript } from './craft.ts';
 import type { ScriptFinding } from './rules.ts';
@@ -66,11 +66,12 @@ export function editorialFindings(draft: ScriptDraft, scope: ScriptScope, out: S
   for (const b of allBlocks(draft)) {
     // A cast member's line is the record's words (an editorial "[…]" in it is not a direction).
     if (b.speakerId) continue;
-    const leaks = directionLeaks(b.text);
+    const leaks = directionLeaks(b.text, scope.claimSet);
     if (leaks.length) out.push({ kind: 'DIRECTION_IN_NARRATION', ref: b.key, detail: `Block ${b.key} has ${leaks.join(', ')} in its narration: the voice would speak it — directions belong in the delivery and visual layers` });
   }
-  const words = blocks.filter((b) => !b.speakerId).reduce((n, b) => n + b.text.split(/\s+/).length, 0);
-  const signals = actionable(aiSignals(blocks), words);
+  // Thresholds against the diagnostics' own word count: the rules warn exactly where the narration pass is asked to work.
+  const all = aiSignals(blocks);
+  const signals = actionable(all, summarise(blocks, all).words);
   const byBlock = new Map<string, Set<string>>();
   for (const s of signals) {
     // Stock phrases and question counts have their own rules (AI_PHRASES, RHETORICAL_QUESTIONS).

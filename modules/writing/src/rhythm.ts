@@ -1,6 +1,6 @@
 import type { RhythmProfile } from '@docengine/core';
 import { normalize, wordTokens } from '@docengine/story/shared';
-import { withoutAsides } from './fingerprints.ts';
+import { blockEnding, isFragment } from './fingerprints.ts';
 import { clip, maskQuotes, narrationOnly, narratorSentences, sentencesOf, type NarrationBlock } from './text.ts';
 
 /**
@@ -53,7 +53,7 @@ export function rhythmProfile(blocks: readonly NarrationBlock[]): RhythmProfile 
     const prev = all[i - 1];
     // A section boundary breaks every run, fragments included (as the AI-pattern check reads them).
     const sameSection = prev !== undefined && prev.section === s.section;
-    fragRun = s.words <= 3 ? (sameSection ? fragRun : 0) + 1 : 0;
+    fragRun = isFragment(s) ? (sameSection ? fragRun : 0) + 1 : 0;
     longestFragmentRun = Math.max(longestFragmentRun, fragRun);
     if (sameSection) {
       const a = wordTokens(prev.text)[0];
@@ -69,13 +69,8 @@ export function rhythmProfile(blocks: readonly NarrationBlock[]): RhythmProfile 
   const narration = narrationOnly(blocks);
   let repeatedEnds = 0;
   for (let i = 1; i < narration.length; i++) {
-    const end = (b: NarrationBlock) => {
-      const last = sentencesOf(withoutAsides(b.text)).at(-1) ?? '';
-      const w = wordTokens(last);
-      return { short: w.length > 0 && w.length <= 4, word: w.at(-1) ?? '' };
-    };
-    const a = end(narration[i - 1]!);
-    const b = end(narration[i]!);
+    const a = blockEnding(narration[i - 1]!.text);
+    const b = blockEnding(narration[i]!.text);
     if ((a.short && b.short) || (b.word.length > 3 && a.word === b.word)) repeatedEnds++;
   }
   const tongueTwisters = narration.flatMap((b) => sentencesOf(maskQuotes(b.text)).filter(tongueTwister).map((s) => ({ ref: b.key, excerpt: clip(s, 80) })));
@@ -84,7 +79,7 @@ export function rhythmProfile(blocks: readonly NarrationBlock[]): RhythmProfile 
     meanWords: round(mean, 1),
     sdWords: round(sd, 1),
     variation: mean > 0 ? round(sd / mean) : 0,
-    fragmentShare: round(lengths.filter((x) => x <= 3).length / n),
+    fragmentShare: round(all.filter(isFragment).length / n),
     longShare: round(lengths.filter((x) => x > 25).length / n),
     longestFragmentRun,
     clausesPerSentence: round(clauses / n),

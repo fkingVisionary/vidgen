@@ -222,14 +222,16 @@ export function applyPerformance(draft: ScriptDraft, perf: PerformanceOutput, sc
   for (const p of perf.blocks) {
     const r = parseRef(p.ref);
     const s = r && sections.find((x) => x.sequence === r.sequence);
-    const b = s && allowed.has(s.sequence) ? s.blocks[r.index] : undefined;
-    if (!s || !b || !r) {
+    // By key, not position: a section the editor reordered keeps its blocks' keys (a narration pass on its own copies them as they are).
+    const i = s && r ? s.blocks.findIndex((x) => x.key === `${r.sequence}.${r.index + 1}`) : -1;
+    const b = s && allowed.has(s.sequence) ? s.blocks[i] : undefined;
+    if (!s || !b) {
       notes.push(`Performance: ${p.ref} is not a block it may change; skipped`);
       continue;
     }
     const missing = p.emphasis.filter((e) => !b.text.includes(e.text.trim()));
     if (missing.length) notes.push(`Performance: emphasis on ${missing.map((e) => `"${e.text}"`).join(', ')} in ${p.ref} is not in its text; dropped`);
-    s.blocks[r.index] = derive({ ...b, delivery: { pace: p.pace, energy: p.energy, emotion: p.emotion, emphasis: p.emphasis, pauseBefore: p.pauseBefore, pauseAfter: p.pauseAfter } }, scope);
+    s.blocks[i] = derive({ ...b, delivery: { pace: p.pace, energy: p.energy, emotion: p.emotion, emphasis: p.emphasis, pauseBefore: p.pauseBefore, pauseAfter: p.pauseAfter } }, scope);
   }
   const pronunciations = mergePronunciations(
     draft.pronunciations,

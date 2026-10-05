@@ -1,7 +1,8 @@
-import { WRITING_CATEGORIES } from '@docengine/core';
+import { WRITING_CATEGORIES, type WritingExampleDecisionInput } from '@docengine/core';
+import type { Database, WritingExample } from '@docengine/database';
 import { describe, expect, it } from 'vitest';
 import { aiSignals } from './fingerprints.ts';
-import { candidateLines, textHash, type CandidateProposal } from './house.ts';
+import { ExampleDecisionError, approvedHouseExamples, candidateLines, decideExample, textHash, toCorpusExample, type CandidateProposal } from './house.ts';
 import { countWords, type NarrationBlock } from './text.ts';
 
 /**
@@ -10,7 +11,8 @@ import { countWords, type NarrationBlock } from './text.ts';
  * are a model to follow: narrator lines (never a speaker's), of a speakable
  * length (8–90 words), with no AI-pattern signal at all, at most two per
  * category, a hook from the film's opening and an ending from its last
- * section. The database side (saving, deciding) is tested elsewhere.
+ * section. A person's decision is tested on a one-row stand-in for the table;
+ * saving to the database is tested with the API.
  */
 
 const block = (key: string, text: string, extra: Partial<NarrationBlock> = {}): NarrationBlock => ({
@@ -302,5 +304,83 @@ describe('textHash: one wording, one example', () => {
     expect(textHash('The bulbs’ price  rose.')).toBe(textHash("the bulbs' price rose."));
     expect(textHash('The bulbs’ price rose.')).not.toBe(textHash('The bulbs’ price fell.'));
     expect(textHash('x')).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe('decideExample: an approved example is one retrieval can use', () => {
+  const line = FILM.find((b) => b.key === '2.4')!.text;
+  const CANDIDATE: WritingExample = {
+    id: 'row-1',
+    exampleId: 'house-0000abcd-2-4',
+    version: 1,
+    projectId: null,
+    scriptId: null,
+    scriptVersion: 3,
+    blockKey: '2.4',
+    text: line,
+    textHash: textHash(line),
+    category: 'explanation',
+    quality: 'good',
+    traits: ['plain_language'],
+    strengths: [],
+    weaknesses: [],
+    spokenRhythm: candidateLines(FILM).find((p) => p.blockKey === '2.4')!.spokenRhythm,
+    narrativeFunction: 'Explains what happened',
+    whyItWorks: null,
+    whyItFails: null,
+    sourceType: 'house',
+    sourceReference: 'Approved script v3, block 2.4',
+    copyrightSafe: true,
+    approvedForRetrieval: false,
+    status: 'CANDIDATE',
+    diagnostics: {},
+    createdBy: 'editor',
+    reviewedBy: null,
+    reviewedAt: null,
+    reviewNote: null,
+    createdAt: new Date('2026-10-01T00:00:00Z'),
+    updatedAt: new Date('2026-10-01T00:00:00Z'),
+  };
+
+  /** One house example in a stand-in for the table: what deciding writes, and what retrieval reads back. */
+  function table() {
+    let stored = CANDIDATE;
+    const db = {
+      writingExample: {
+        findUnique: async () => stored,
+        update: async ({ data }: { data: Partial<WritingExample> }) => (stored = { ...stored, ...data }),
+        findMany: async () => (stored.status === 'APPROVED' && stored.approvedForRetrieval && stored.copyrightSafe ? [stored] : []),
+      },
+    } as unknown as Database;
+    return { db, decide: (input: WritingExampleDecisionInput) => decideExample(db, CANDIDATE.id, input, 'editor'), row: () => stored };
+  }
+
+  it('refuses a model to avoid without why it fails, and a borderline one without both reasons: nothing is saved', async () => {
+    for (const quality of ['bad', 'borderline'] as const) {
+      const t = table();
+      const refused = t.decide({ decision: 'APPROVE', quality, whyItWorks: 'Plain and specific (test).' });
+      await expect(refused).rejects.toThrow(ExampleDecisionError);
+      await expect(refused).rejects.toThrow(/^Retrieval cannot use it as it stands: a (model to avoid says why it fails|borderline example says what works and what fails)$/);
+      expect(t.row()).toBe(CANDIDATE);
+      expect(await approvedHouseExamples(t.db)).toEqual([]);
+    }
+  });
+
+  it('approves them with their reasons, and retrieval reads them as they were approved', async () => {
+    const bad = table();
+    const saved = await bad.decide({ decision: 'APPROVE', quality: 'bad', whyItWorks: 'The sum is right (test).', whyItFails: 'It explains what the listener already knows (test).' });
+    expect(saved).toMatchObject({ status: 'APPROVED', approvedForRetrieval: true, quality: 'bad' });
+    expect(toCorpusExample(saved)).toMatchObject({ id: CANDIDATE.exampleId, quality: 'bad', whyItFails: 'It explains what the listener already knows (test).' });
+    expect((await approvedHouseExamples(bad.db)).map((e) => e.id)).toEqual([CANDIDATE.exampleId]);
+    const borderline = table();
+    await borderline.decide({ decision: 'APPROVE', quality: 'borderline', whyItWorks: 'Plain (test).', whyItFails: 'Long for one breath (test).' });
+    expect((await approvedHouseExamples(borderline.db)).map((e) => e.quality)).toEqual(['borderline']);
+  });
+
+  it('a good example still needs only why it works', async () => {
+    const t = table();
+    await expect(t.decide({ decision: 'APPROVE' })).rejects.toThrow(/why it works/);
+    await t.decide({ decision: 'APPROVE', whyItWorks: 'Plain, specific and in proportion (test).' });
+    expect((await approvedHouseExamples(t.db)).map((e) => [e.id, e.quality])).toEqual([[CANDIDATE.exampleId, 'good']]);
   });
 });

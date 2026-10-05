@@ -1,4 +1,4 @@
-import { sentences, wordTokens } from '@docengine/story/shared';
+import { wordTokens } from '@docengine/story/shared';
 
 /**
  * The narration as the diagnostics read it: what the narrator says, block by
@@ -40,6 +40,19 @@ export const maskQuotes = (text: string) =>
   text.replace(/["“]([^"”]*)["”]/g, (quote: string, inner: string, at: number) =>
     /[.!?…]\s*$/.test(inner) && /^(?:\s*$|\s+["“]?\p{Lu})/u.test(text.slice(at + quote.length)) ? '"…".' : '"…"',
   );
+
+/** A sentence that carries a masked quotation: its length is not what the listener hears. */
+export const quotes = (sentence: string) => sentence.includes('"…"');
+
+/**
+ * Sentences of a text, split at . ! ? … and line breaks — but not after an
+ * initial or a title ("J. R. Hale", "Dr. Hale", "St. Mary's").
+ */
+const sentences = (text: string) =>
+  text
+    .split(/(?<!(?<![\p{L}\p{N}'’])(?:\p{Lu}|Mr|Mrs|Ms|Dr|St|Jr|Sr)\.)(?<=[.!?…])\s+|\n+/u)
+    .map((s) => s.trim())
+    .filter(Boolean);
 
 export const narrationOnly = (blocks: readonly NarrationBlock[]) => blocks.filter((b) => !b.speakerId);
 

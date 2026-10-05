@@ -212,17 +212,39 @@ export async function loadScriptCompare(db: Database, projectId: string, a: numb
   };
 }
 
-/** a → b block by block: exact for a narration pass made from a (its own lineage), matched by evidence and wording otherwise. */
+/** The blocks a person edited by hand: who, and whether the wording is no longer the one the run wrote. */
+function handEdits(draft: ScriptDraft): Map<string, { by: string; reworded: boolean }> {
+  return new Map(draft.sections.flatMap((s) => s.blocks.flatMap((b) => (b.editedBy ? [[b.key, { by: b.editedBy, reworded: b.text !== b.generatedText }] as const] : []))));
+}
+
+/**
+ * a → b block by block: exact for a narration pass made from a (its own
+ * lineage), matched by evidence and wording otherwise. The reviewers are
+ * credited only for the run that made b from a (a restored copy carries the
+ * ledger of the run that made the version it copies), and only where their
+ * wording stands; a change by hand is credited to whoever made it.
+ */
 function reportBetween(a: LoadedScript, b: LoadedScript): ScriptChangeReport {
-  const own = b.content?.provenance.baseId === a.row.id ? (b.content?.narration ?? null) : null;
-  return changeReport({
+  const step = b.content?.provenance.baseId === a.row.id && b.content.provenance.origin !== 'RESTORE';
+  const own = step ? (b.content?.narration ?? null) : null;
+  const hand = handEdits(b.draft);
+  const reworded = (key: string | null) => key !== null && hand.get(key)?.reworded === true;
+  const report = changeReport({
     base: { id: a.row.id, version: a.row.version, blocks: narrationBlocks(a.draft) },
     revised: { id: b.row.id, version: b.row.version, blocks: narrationBlocks(b.draft) },
     lineage: own?.lineage ?? null,
-    ledger: b.content?.provenance.baseId === a.row.id ? (b.content?.reviewChanges ?? []) : [],
-    narration: own,
+    // Timing marks stand through a change of wording; a reviewer's wording, and the money context in it, do not.
+    ledger: step ? (b.content?.reviewChanges ?? []).filter((c) => c.type === 'PERFORMANCE' || !reworded(c.savedRef)) : [],
+    narration: own && { ...own, money: { ...own.money, used: own.money.used.filter((u) => !reworded(u.ref)) } },
     uncertainty: uncertaintyOf,
   });
+  return {
+    ...report,
+    blocks: report.blocks.map((x) => {
+      const h = x.ref === null ? undefined : hand.get(x.ref);
+      return h && x.status !== 'UNCHANGED' ? { ...x, reasons: [...x.reasons, `Edited by ${h.by}`] } : x;
+    }),
+  };
 }
 
 /**
@@ -246,6 +268,7 @@ export async function loadScriptEditorial(db: Database, projectId: string, versi
   const baseId = content?.provenance.baseId ?? null;
   const base = baseId && baseId !== row.id ? await loadById(db, baseId) : null;
   const ledger = content?.reviewChanges ?? [];
+  const hand = handEdits(draft);
   const layers: LayeredBlockView[] = draft.sections.flatMap((s) =>
     s.blocks.map((b) => ({
       key: b.key,
@@ -260,8 +283,11 @@ export async function loadScriptEditorial(db: Database, projectId: string, versi
         pauses: [b.delivery.pauseBefore.length !== 'NONE' ? `before: ${b.delivery.pauseBefore.length.toLowerCase()}${b.delivery.pauseBefore.reason ? ` (${b.delivery.pauseBefore.reason.toLowerCase()})` : ''}` : null, b.delivery.pauseAfter.length !== 'NONE' ? `after: ${b.delivery.pauseAfter.length.toLowerCase()}${b.delivery.pauseAfter.reason ? ` (${b.delivery.pauseAfter.reason.toLowerCase()})` : ''}` : null].filter((x): x is string => x !== null),
       },
       evidence: { claimKeys: b.claimKeys, presentation: b.presentation.map((p) => `${p.claimKey}: ${p.presentation.toLowerCase().replace(/_/g, ' ')}`) },
-      editorial: ledger.filter((c) => c.status === 'ACCEPTED' && c.savedRef === b.key).map((c) => `${c.id}: ${c.reason}`),
-      leaks: directionLeaks(b.text),
+      editorial: [
+        ...ledger.filter((c) => c.status === 'ACCEPTED' && c.savedRef === b.key && (c.type === 'PERFORMANCE' || !hand.get(b.key)?.reworded)).map((c) => `${c.id}: ${c.reason}`),
+        ...(hand.has(b.key) ? [`Edited by ${hand.get(b.key)!.by}`] : []),
+      ],
+      leaks: directionLeaks(b.text, scope?.claimSet),
     })),
   );
   return {

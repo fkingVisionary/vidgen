@@ -1,9 +1,9 @@
 import type { RuntimeTarget } from '@docengine/core';
 import { EvidenceBase } from '@docengine/story/shared';
 import { fakeEvidenceInput } from '@docengine/story/testing';
-import type { BlockNeed, Corpus } from '@docengine/writing';
+import { NO_EQUIVALENT, type BlockNeed, type Corpus } from '@docengine/writing';
 import { describe, expect, it } from 'vitest';
-import { allBlocks, derive, type DraftBlock, type ScriptDraft } from './draft.ts';
+import { allBlocks, applyPerformance, derive, type DraftBlock, type ScriptDraft } from './draft.ts';
 import { calendarWords, composeLineage, moneyUsed, moveToVisual, narrationBase, narrationGuard, narrationRecord, planNarration, renderNarrationContext, toNarrationPatch, uncertaintyOf, type NarrationPlan } from './narration.ts';
 import { renderScript } from './render.ts';
 import { INVARIANT, reviewPatch, type ProposedChange } from './review.ts';
@@ -237,6 +237,24 @@ describe('the narration guard (each edit judged on its own)', () => {
     expect(judge('2.2', 'The courts sent the unsettled contracts back to the towns in April 1637.').change.status).toBe('ACCEPTED');
   });
 
+  it('rejects an edit that changes or adds an ordinal, a century or the place of a date in its span — words the figures do not count', () => {
+    const SAID = 'In early April 1637, for the second time, the courts of the seventeenth century sent the unsettled contracts back to the towns.';
+    const draft = reword(scope, fixtureDraft(scope), { '2.2': `${SAID} That was only the beginning.` });
+    const second = judge('2.2', SAID.replace('second', 'fourth'), { draft }).change;
+    expect(second).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_FIGURE_CHANGED'] });
+    expect(second.rejectionReason).toBe('Violates factual meaning (every figure kept) — Block 2.2: the figure(s) second are no longer said as before [NARRATION_FIGURE_CHANGED] (and 1 more: NARRATION_FIGURE_CHANGED)');
+    expect(judge('2.2', SAID.replace('seventeenth', 'sixteenth'), { draft }).change.rejectionReason).toContain('the figure(s) seventeenth are no longer said as before');
+    const late = judge('2.2', SAID.replace('early', 'late'), { draft }).change;
+    expect(late).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_FIGURE_CHANGED'] });
+    expect(late.rejectionReason).toContain('the date word(s) early april are no longer said');
+    expect(late.rejectionReason).toContain('(and 1 more: NARRATION_FIGURE_CHANGED)');
+    // A day the block never gave.
+    expect(judge('2.2', SAID.replace('In early April', 'On the first of April'), { draft }).change.rejectionReason).toContain('adds the figure(s) first, which the block did not say');
+    expect(judge('2.2', COURTS.replace('In April', 'In late April'), { draft: flagged() }).change.rejectionReason).toContain('adds the date word(s) late april, which the block did not say');
+    // The same date, ordinal and century in another order: the same facts.
+    expect(judge('2.2', 'For the second time, in early April 1637, the courts of the seventeenth century sent the unsettled contracts back to the towns.', { draft }).change.status).toBe('ACCEPTED');
+  });
+
   it('rejects a money comparison the evidence does not give — uncited, or citing an id it does not know', () => {
     const wage = judge('2.1', 'Records suggest that Cornelis Proefman refused the bulbs he had bought, for 1,200 guilders, as much as a craftsman earned in years.').change;
     expect(wage).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_MONEY_UNSOURCED'] });
@@ -274,6 +292,18 @@ describe('the narration guard (each edit judged on its own)', () => {
     expect(softer.rejectionReason).toContain('the hedge wording of the original is gone');
     // Keeping the hedge, the same cut is fine.
     expect(judge('3.2', 'Even the most famous price is disputed. It appears a single bulb was offered for 5,500 guilders.', { draft }).change.status).toBe('ACCEPTED');
+  });
+
+  it('rejects an edit that drops one hedge of two, though a hedge of the same kind is still there', () => {
+    const draft = reword(scope, fixtureDraft(scope), { '2.1': 'Records suggest that Cornelis Proefman refused the bulbs he had bought, for 1,200 guilders. He perhaps never paid. And then, everything changed.' });
+    const one = judge('2.1', 'Records suggest that Cornelis Proefman refused the bulbs he had bought, for 1,200 guilders. He never paid.', { draft }).change;
+    expect(one).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_HEDGE_DROPPED'] });
+    expect(one.rejectionReason).toBe("Violates uncertainty presentation — Block 2.1: the original's hedge wording is said 2 times, the edit's only 1: a hedge is gone [NARRATION_HEDGE_DROPPED]");
+    // An attribution left in place is no cover for the hedge it loses.
+    const attributed = reword(scope, fixtureDraft(scope), { '2.1': 'According to the court, Cornelis Proefman probably refused the bulbs he had bought, for 1,200 guilders. And then, everything changed.' });
+    expect(judge('2.1', 'According to the court, Cornelis Proefman refused the bulbs he had bought, for 1,200 guilders.', { draft: attributed }).change.rulesImpacted).toContain('NARRATION_HEDGE_DROPPED');
+    // Both hedges kept, one of them in other words: fine.
+    expect(judge('2.1', 'Records suggest that Cornelis Proefman refused the bulbs he had bought, for 1,200 guilders. He probably never paid.', { draft }).change.status).toBe('ACCEPTED');
   });
 
   it('rejects an edit that loses a line to keep', () => {
@@ -350,6 +380,19 @@ describe('the narration guard (each edit judged on its own)', () => {
     expect(blockAt(outcome.draft, '2.1').text).toBe(`${QUOTED} And then, everything changed.`);
   });
 
+  it('keeps a quotation of one or two words word for word too, and adds none', () => {
+    const SHORT = 'Records suggest that Cornelis Proefman refused the bulbs he had bought, for 1,200 guilders: "wind trade", he called it.';
+    const draft = reword(scope, fixtureDraft(scope), { '2.1': `${SHORT} And then, everything changed.` });
+    expect(judge('2.1', SHORT, { draft }).change.status).toBe('ACCEPTED');
+    // The evidence rules leave a quotation this short alone: only the guard stops the rewording.
+    const reworded = judge('2.1', SHORT.replace('wind trade', 'wind business'), { draft }).change;
+    expect(reworded).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_QUOTE_TOUCHED'] });
+    expect(reworded.rejectionReason).toBe('Violates recorded-quote integrity — Block 2.1: the quotation "wind trade" is no longer word for word [NARRATION_QUOTE_TOUCHED]');
+    const added = judge('2.1', 'Records suggest that Cornelis Proefman refused the "bulbs" he had bought, for 1,200 guilders.').change;
+    expect(added).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_QUOTE_TOUCHED'] });
+    expect(added.rejectionReason).toContain('adds the quotation "bulbs", which the block did not quote');
+  });
+
   it('judges every edit of a pass separately: one bad edit never costs the good ones', () => {
     const { outcome } = narrate(scope, flagged(), [
       { ref: '2.1', text: 'Records suggest that Cornelius Proefman refused the bulbs he had bought, for 1,200 guilders.' },
@@ -381,12 +424,12 @@ describe('the narration guard (each edit judged on its own)', () => {
 // ── Money context: the fixture with a contemporary wage cited (C018) ─────────
 
 /** The fixture architecture, with the craftsman's wage cited by the court beat: the evidence now gives the sums their meaning. */
-function moneyScope(): ScriptScope {
+function moneyScope(evidence = new EvidenceBase(fakeEvidenceInput())): ScriptScope {
   const architecture = fixtureArchitecture();
   const court = architecture.sequences[1]!;
   court.beats[0]!.claimKeys.push('C018');
   court.claimKeys.push('C018');
-  return buildScope({ architectureId: 'arch-test', architectureVersion: 1, architecture, evidence: new EvidenceBase(fakeEvidenceInput()) });
+  return buildScope({ architectureId: 'arch-test', architectureVersion: 1, architecture, evidence });
 }
 
 describe('money context from the evidence', () => {
@@ -436,13 +479,81 @@ describe('money context from the evidence', () => {
     const draft = fixtureDraft(mscope);
     const five = narrate(mscope, draft, [{ ref: '2.1', text: `${PROEFMAN} That was about five years' pay for a skilled craftsman.`, moneyContext: ['M1'] }]).outcome.changes[0]!;
     expect(five).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_MONEY_UNSOURCED'] });
-    expect(five.rejectionReason).toBe('Violates money context from the evidence only — Block 2.1: adds the figure(s) 5, which the money context it cites does not give [NARRATION_MONEY_UNSOURCED]');
+    expect(five.rejectionReason).toBe('Violates money context from the evidence only — Block 2.1: adds the figure(s) 5, which the money context it cites does not give [NARRATION_MONEY_UNSOURCED] (and 2 more: NARRATION_MONEY_UNSOURCED)');
+    // …and the guard on its own says why: not the figure, not the context's comparison, a comparison of the pass's own.
+    expect(guardOn(mscope, planFor(mscope, draft), draft, '2.1', `${PROEFMAN} That was about five years' pay for a skilled craftsman.`, ['M1']).map((x) => x.detail)).toEqual([
+      'Block 2.1: adds the figure(s) 5, which the money context it cites does not give',
+      'Block 2.1: cites M1 but does not say its comparison ("about four years\' pay for a skilled craftsman")',
+      'Block 2.1: adds a money comparison ("years\'") the money context it cites does not give',
+    ]);
 
     // Uncited, the context's own words are a new figure and a comparison of the pass's own.
     const uncited = narrate(mscope, draft, [{ ref: '2.1', text: FOUR_YEARS }]).outcome.changes[0]!;
     expect(uncited).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_FIGURE_CHANGED', 'NARRATION_MONEY_UNSOURCED'] });
     expect(uncited.rejectionReason).toBe('Violates factual meaning (every figure kept); money context from the evidence only — Block 2.1: adds the figure(s) 4, which the block did not say [NARRATION_FIGURE_CHANGED] (and 1 more: NARRATION_MONEY_UNSOURCED)');
     expect(blockAt(narrate(mscope, draft, [{ ref: '2.1', text: FOUR_YEARS }]).outcome.draft, '2.1').claimKeys).toEqual(['C008']);
+  });
+
+  it('rejects a cited context for another sum: its comparison would be told of a sum it is not about, and its claims linked to a block that does not say them', () => {
+    const draft = fixtureDraft(mscope);
+    const DISPUTED = 'Even the most famous price is disputed: it appears a single bulb was offered for 5,500 guilders.';
+    // 5,500 guilders told as M1's four years' pay (M1 is for 1,200): the comparison is off by more than four times.
+    const wrong = narrate(mscope, draft, [{ ref: '3.2', text: `${DISPUTED} That was about four years' pay for a skilled craftsman.`, moneyContext: ['M1'] }]).outcome;
+    expect(wrong.changes[0]).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_MONEY_UNSOURCED'] });
+    expect(wrong.changes[0]!.rejectionReason).toBe('Violates money context from the evidence only — Block 3.2: cites M1, which is for 1,200 guilders — a sum this block does not say [NARRATION_MONEY_UNSOURCED]');
+    expect(blockAt(wrong.draft, '3.2').claimKeys).toEqual(['C009']);
+    // The context for its own sum is kept.
+    expect(narrate(mscope, draft, [{ ref: '3.2', text: `${DISPUTED} That was more than eighteen years' pay for a skilled craftsman.`, moneyContext: ['M2'] }]).outcome.changes[0]!.status).toBe('ACCEPTED');
+  });
+
+  it("rejects a comparison of the pass's own behind a cited context — the wage said as a count of years, a comparison the context does not give", () => {
+    const draft = fixtureDraft(mscope);
+    const plan = planFor(mscope, draft);
+    // The wage (300 guilders a year) is the context's, but "300 years' pay" is not.
+    const years = narrate(mscope, draft, [{ ref: '2.1', text: `${PROEFMAN} That was about 300 years' pay for a skilled craftsman.`, moneyContext: ['M1'] }]).outcome.changes[0]!;
+    expect(years).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_MONEY_UNSOURCED'] });
+    expect(years.rejectionReason).toContain('adds the figure(s) 300, which the money context it cites does not give');
+    const lifetime = narrate(mscope, draft, [{ ref: '2.1', text: `${PROEFMAN.slice(0, -1)}, more than a craftsman could earn in a lifetime.`, moneyContext: ['M1'] }]).outcome.changes[0]!;
+    expect(lifetime).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_MONEY_UNSOURCED'] });
+    expect(guardOn(mscope, plan, draft, '2.1', `${PROEFMAN.slice(0, -1)}, more than a craftsman could earn in a lifetime.`, ['M1']).map((x) => x.detail)).toEqual([
+      'Block 2.1: cites M1 but does not say its comparison ("about four years\' pay for a skilled craftsman")',
+      'Block 2.1: adds a money comparison ("earn") the money context it cites does not give',
+    ]);
+    // The wage beside the sum, said as the evidence says it: kept.
+    expect(guardOn(mscope, plan, draft, '2.1', `${PROEFMAN} A skilled craftsman earned roughly 300 guilders a year.`, ['M1'])).toEqual([]);
+    // In other words, its period is the pass's to get wrong ("a month" for "a year"): refused, however it is put.
+    for (const wage of ['on 300 guilders a month', 'whose day brought in 300 guilders', 'whose year brought in 300 guilders']) {
+      expect([wage, guardOn(mscope, plan, draft, '2.1', `${PROEFMAN} That was about four years' pay for a skilled craftsman, ${wage}.`, ['M1']).map((x) => x.detail)]).toEqual([wage, ['Block 2.1: adds the figure(s) 300, which the money context it cites does not give']]);
+    }
+    // The comparison run on into another's ("a craftsman's apprentice") is not the context's.
+    expect(guardOn(mscope, plan, draft, '2.1', `${PROEFMAN} That was about four years' pay for a skilled craftsman's apprentice.`, ['M1']).map((x) => x.detail)).toEqual([
+      'Block 2.1: cites M1 but does not say its comparison ("about four years\' pay for a skilled craftsman")',
+      'Block 2.1: adds a money comparison ("years\'") the money context it cites does not give',
+    ]);
+    expect(guardOn(mscope, plan, draft, '2.1', `${PROEFMAN} That was about four years' pay for a skilled craftsman at the time.`, ['M1'])).toEqual([]);
+  });
+
+  it('lets the honest line stand where the evidence gives no comparison for the sum — and only there', () => {
+    const HONEST = `${PROEFMAN} ${NO_EQUIVALENT}`;
+    // The plain fixture cites no wage: the 1,200 guilders have no context, and the pass may say so.
+    expect(judge('2.1', HONEST).change).toMatchObject({ status: 'ACCEPTED', rejectionReason: null });
+    // With a context for the sum, the line would be untrue: the comparison is there to give.
+    const draft = fixtureDraft(mscope);
+    expect(guardOn(mscope, planFor(mscope, draft), draft, '2.1', HONEST).map((x) => x.kind)).toEqual(['NARRATION_MONEY_UNSOURCED']);
+    // A block that says no sum has nothing to say it of.
+    expect(judge('2.2', `${COURTS} ${NO_EQUIVALENT}`).change.rulesImpacted).toEqual(['NARRATION_MONEY_UNSOURCED']);
+  });
+
+  it('allows only the figure the comparison says: a ratio of 2.5 is "more than two", and "three" is not the evidence\'s', () => {
+    const input = fakeEvidenceInput();
+    const wage = (c: (typeof input.claims)[number]) => (c.key === 'C018' ? { ...c, statement: 'A skilled craftsman earned roughly 480 guilders a year.', citations: [] } : c);
+    const s = moneyScope(new EvidenceBase({ ...input, claims: input.claims.map(wage) }));
+    const draft = fixtureDraft(s);
+    const plan = planFor(s, draft);
+    expect(plan.money.contexts[0]).toMatchObject({ id: 'M1', ratio: 2.5, explanation: "more than two years' pay for a skilled craftsman" });
+    const SAID = `${PROEFMAN} That was more than two years' pay for a skilled craftsman`;
+    expect(guardOn(s, plan, draft, '2.1', `${SAID}.`, ['M1'])).toEqual([]);
+    expect(guardOn(s, plan, draft, '2.1', `${SAID}, nearly three.`, ['M1']).map((x) => x.detail)).toEqual(['Block 2.1: adds the figure(s) 3, which the money context it cites does not give']);
   });
 
   it('lets a block that gains money context grow further than a polish — and no further', () => {
@@ -535,6 +646,31 @@ describe('what a pass leaves behind', () => {
     expect(moveToVisual(none.outcome.draft, none.out, none.outcome.changes, scope).draft).toBe(none.outcome.draft);
   });
 
+  it("judges, records and moves each edit on its own when two name the same block — never with the other's money context or picture note", () => {
+    const mscope = moneyScope();
+    const draft = fixtureDraft(mscope);
+    const FOUR_YEARS = `${PROEFMAN} That was about four years' pay for a skilled craftsman.`;
+    // The first edit cites nothing: it may not borrow the second's citation, and the rejected second leaves nothing behind.
+    const borrowed = narrate(mscope, draft, [
+      { ref: '2.1', text: FOUR_YEARS, visualNote: 'Candlelight on the table.' },
+      { ref: '2.1', text: `${FOUR_YEARS} Nine of them, or 9.`, moneyContext: ['M1'], visualNote: 'A hand on the unsigned contract.' },
+    ]);
+    expect(borrowed.outcome.changes.map((c) => `${c.id} ${c.ref} ${c.status}`)).toEqual(['N1 2.1 REJECTED', 'N2 2.1 REJECTED']);
+    expect(borrowed.outcome.changes[0]!.rulesImpacted).toEqual(['NARRATION_FIGURE_CHANGED', 'NARRATION_MONEY_UNSOURCED']);
+    expect(blockAt(borrowed.outcome.draft, '2.1')).toMatchObject({ text: PROEFMAN, claimKeys: ['C008'] });
+    expect(moneyUsed(borrowed.out, borrowed.outcome.changes, borrowed.plan)).toEqual([]);
+    expect(moveToVisual(borrowed.outcome.draft, borrowed.out, borrowed.outcome.changes, mscope).moved).toEqual([]);
+    // The first kept, the second rejected: the money context used and the picture note are the kept edit's.
+    const { plan, out, outcome } = narrate(mscope, draft, [
+      { ref: '2.1', text: FOUR_YEARS, moneyContext: ['M1'], visualNote: 'A hand on the unsigned contract.' },
+      { ref: '2.1', text: `${FOUR_YEARS} Nine of them.`, moneyContext: ['M2'], visualNote: 'Candlelight on the table.' },
+    ]);
+    expect(outcome.changes.map((c) => `${c.id} ${c.ref} ${c.status}`)).toEqual(['N1 2.1 ACCEPTED', 'N2 2.1 REJECTED']);
+    expect(blockAt(outcome.draft, '2.1')).toMatchObject({ text: FOUR_YEARS, claimKeys: ['C008', 'C018'] });
+    expect(moneyUsed(out, outcome.changes, plan)).toEqual([{ contextId: 'M1', ref: '2.1' }]);
+    expect(moveToVisual(outcome.draft, out, outcome.changes, mscope).moved).toEqual([{ ref: '2.1', note: 'A hand on the unsigned contract.' }]);
+  });
+
   it("records what became of each of the pass's edits — the settled ones counted apart — and only the pass's", () => {
     const { plan, out, outcome } = narrate(scope, flagged(), [
       { ref: '1.3', text: 'Buyers sign contracts for bulbs still in the ground.' },
@@ -576,7 +712,9 @@ describe('a narration pass on its own', () => {
     // The section's plan comes along, as a copy.
     expect(c.plan).toEqual(s.plan);
     expect(c.plan).not.toBe(s.plan);
-    expect(c.blocks[0]).toMatchObject({ rowId: undefined, text: s.blocks[0]!.text, generatedText: s.blocks[0]!.text, editedBy: null, editedAt: null, claimKeys: ['C008'], beatIds: ['2.1'], infoClass: 'UNCERTAIN' });
+    // A person's line stays theirs — but the edit's time would mark this run's fact issues on it as fixed.
+    expect(c.blocks[0]).toMatchObject({ rowId: undefined, text: s.blocks[0]!.text, generatedText: 'An earlier wording (test).', editedBy: 'editor', editedAt: null, claimKeys: ['C008'], beatIds: ['2.1'], infoClass: 'UNCERTAIN' });
+    expect(c.blocks[1]).toMatchObject({ generatedText: s.blocks[1]!.text, editedBy: null, editedAt: null });
     expect(c.blocks[0]!.delivery).toEqual(s.blocks[0]!.delivery);
     expect(c.blocks[0]!.visual).toEqual(s.blocks[0]!.visual);
     expect(allBlocks(copy).map((b) => `${b.key} ${b.text}`)).toEqual(allBlocks(draft).map((b) => `${b.key} ${b.text}`));
@@ -593,6 +731,20 @@ describe('a narration pass on its own', () => {
     copy.pronunciations[0]!.respelling = 'changed';
     copy.sections[0]!.blocks.pop();
     expect(draft).toEqual(snapshot);
+  });
+
+  it('gives each performance mark to the block it names, in a section the editor reordered (its blocks keep their keys)', () => {
+    const draft = fixtureDraft(scope);
+    const s = draft.sections[1]!;
+    s.blocks = [s.blocks[1]!, s.blocks[0]!];
+    const copy = narrationBase({ row: { version: 4 } as unknown as LoadedScript['row'], content: null, draft });
+    expect(copy.sections[1]!.blocks.map((b) => `${b.key} ${b.text}`)).toEqual([`2.2 ${COURTS}`, `2.1 ${PROEFMAN}`]);
+    const notes: string[] = [];
+    const delivery = { pace: 'SLOW', energy: 'LOW', emotion: 'SOMBER', emphasis: [{ text: 'April', level: 'STRONG' }], pauseBefore: { length: 'SHORT', reason: 'TRANSITION' }, pauseAfter: { length: 'NONE', reason: null } } as const;
+    const performed = applyPerformance(copy, { blocks: [{ ref: '2.2', ...delivery, emphasis: [...delivery.emphasis] }], pronunciations: [], notes: [] }, scope, ALL, notes);
+    expect(blockAt(performed, '2.2')).toMatchObject({ text: COURTS, delivery: { pace: 'SLOW', emotion: 'SOMBER', emphasis: [{ text: 'April', level: 'STRONG' }] } });
+    expect(blockAt(performed, '2.1').delivery).toEqual(blockAt(copy, '2.1').delivery);
+    expect(notes).toEqual([]);
   });
 
   it('follows each block of the base through the reviewers\' renumbering', () => {
@@ -617,11 +769,16 @@ describe('a narration pass on its own', () => {
 
 describe('what counts as a hedge and a date', () => {
   it('tells the uncertainty families apart', () => {
-    expect([...uncertaintyOf('Records suggest he refused.')]).toEqual(['hedge']);
-    expect([...uncertaintyOf('The price is disputed.')]).toEqual(['disputed']);
-    expect([...uncertaintyOf('No surviving record confirms it.')]).toEqual(['unverified']);
-    expect([...uncertaintyOf('The legend says the trade ruined a nation.')]).toEqual(['legend']);
-    expect([...uncertaintyOf('He refused the bulbs.')]).toEqual([]);
+    expect([...uncertaintyOf('Records suggest he refused.').keys()]).toEqual(['hedge']);
+    expect([...uncertaintyOf('The price is disputed.').keys()]).toEqual(['disputed']);
+    expect([...uncertaintyOf('No surviving record confirms it.').keys()]).toEqual(['unverified']);
+    expect([...uncertaintyOf('The legend says the trade ruined a nation.').keys()]).toEqual(['legend']);
+    expect([...uncertaintyOf('He refused the bulbs.').keys()]).toEqual([]);
+  });
+
+  it('counts every hedge, not only its kind: one hedge per claim', () => {
+    expect(uncertaintyOf('Records suggest he probably refused. Perhaps he left.')).toEqual(new Map([['hedge', 3]]));
+    expect(uncertaintyOf('According to a notary, he probably refused; the price is disputed.')).toEqual(new Map([['hedge', 2], ['disputed', 1]]));
   });
 
   it('names months, weekdays and seasons — "May" the month, not "may" the verb', () => {
@@ -629,5 +786,14 @@ describe('what counts as a hedge and a date', () => {
     expect([...calendarWords('They may sell in May.')]).toEqual(['may']);
     expect([...calendarWords('They may sell.')]).toEqual([]);
     expect([...calendarWords('Winter came early; by spring it was over.')]).toEqual(['winter', 'spring']);
+  });
+
+  it('keeps the qualifier that places a date with it — within its clause', () => {
+    expect([...calendarWords('In early April 1637 the courts met.')]).toEqual(['april', 'early april']);
+    expect([...calendarWords('By mid-February it was over.')]).toEqual(['february', 'mid february']);
+    expect([...calendarWords('By the end of 1637, and late in the year, in the late 1630s.')]).toEqual(['end 1637', 'late year', 'late 1630s']);
+    expect([...calendarWords('At the turn of the seventeenth century, and in the early 17th century.')]).toEqual(['turn seventeenth century', 'early 17th century']);
+    // Not a date: the end of a trade; a qualifier past a full stop.
+    expect([...calendarWords('That was the end of the trade. It was too late. In April they met.')]).toEqual(['april']);
   });
 });

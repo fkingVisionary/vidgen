@@ -8,7 +8,7 @@
 export { STYLE_BIBLE, STYLE_BIBLE_VERSION, styleBibleMarkdown, styleBibleText } from './bible.ts';
 export { corpusStats, filterCorpus, loadCorpus, withHouseExamples, type Corpus, type CorpusEntry, type CorpusFilter, type CorpusPolarity } from './corpus.ts';
 export { DEFAULT_LIMITS, asRecord, renderExamples, retrieve, type RetrievalLimits, type RetrievalNeed, type Retrieved } from './retrieval.ts';
-export { STOCK_PHRASES, actionable, aiSignals, blockPatterns, describesPicture, overThreshold, summarise } from './fingerprints.ts';
+export { STOCK_PHRASES, actionable, aiSignals, blockPatterns, describesPicture, overThreshold, stockPhrases, summarise } from './fingerprints.ts';
 export { rhythmProfile, tongueTwister } from './rhythm.ts';
 export { RUBRIC_QUESTIONS, RUBRIC_VERSION, rubric, type RubricInput } from './rubric.ts';
 export { blockNeeds, diagnose, retrievalNeeds, type BlockNeed, type DiagnoseInput, type Diagnosis } from './diagnostics.ts';

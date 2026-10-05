@@ -14,7 +14,7 @@ import {
   unknownProperNouns,
   wordTokens,
 } from '@docengine/story/shared';
-import { STOCK_PHRASES } from '@docengine/writing';
+import { stockPhrases } from '@docengine/writing';
 import { editorialFindings } from './editorial.ts';
 import { evidenceInvariants } from './evidence.ts';
 import { craftFindings, humanIn, inEscalation, partOfRefrain, protectedBlocks, renderTrimPlan, trimPlan, type Refrain, type TrimPlan } from './craft.ts';
@@ -174,9 +174,6 @@ const ACTION_VERBS = new Set([
 const MONTHS = 'January|February|March|April|May|June|July|August|September|October|November|December';
 /** A year or a calendar date ("1637", "14 January", "January 14th"): a fictional act with one becomes a dated historical claim. */
 const DATE_PATTERN = new RegExp(`\\b(?:1[0-9]{3}|20[0-9]{2})\\b|\\b(?:${MONTHS})\\s+\\d{1,2}(?:st|nd|rd|th)?\\b|\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?(?:${MONTHS})\\b`, 'i');
-
-/** Stock phrases that make narration sound machine-written (the writing engine's lexicon, shared with the prompts). */
-const AI_PHRASES: readonly string[] = STOCK_PHRASES;
 
 const CONNECTORS = new Set(['but', 'so', 'meanwhile', 'now', 'then', 'and', 'yet', 'still', 'today', 'soon', 'later']);
 const SYMBOLS = /[&%#@*_~\\/[\]{}<>|^=+]|\b(?:c|ca|fl|approx|etc|vs)\.(?=\s|$)|\b(?:e\.g|i\.e)\.|\d\s*[–-]\s*\d/i;
@@ -503,8 +500,8 @@ function spokenLanguage(draft: ScriptDraft, totalSec: number, refrains: readonly
   // A refrain or callback repeats on purpose: not a repeated phrase.
   const repeated = [...grams.entries()].filter(([g, n]) => n >= 3 && !partOfRefrain(g, refrains)).sort((a, b) => b[1] - a[1]);
   if (repeated.length) out.push({ kind: 'REPEATED_PHRASES', ref: null, detail: repeated.slice(0, 3).map(([g, n]) => `"${g}" ×${n}`).join(', ') });
-  // Stock phrases.
-  const stock = narration.flatMap((b) => AI_PHRASES.filter((p) => b.text.toLowerCase().includes(p)).map((p) => `"${p}" (${b.key})`));
+  // Stock phrases, in the narrator's own words (the writing engine's lexicon, shared with the prompts): not in a name or a quotation.
+  const stock = narration.flatMap((b) => stockPhrases(b.text).map((p) => `"${p}" (${b.key})`));
   if (stock.length) out.push({ kind: 'AI_PHRASES', ref: null, detail: `Stock phrases: ${stock.slice(0, 6).join(', ')}${stock.length > 6 ? ` (+${stock.length - 6} more)` : ''}` });
   // Questions.
   const questions = all.filter((x) => x.s.trim().endsWith('?'));

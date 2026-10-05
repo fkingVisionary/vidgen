@@ -2,6 +2,7 @@ import { SCRIPT_SCORES, SCRIPT_TIMING, fmtClock, fmtVariance, type CoherenceIssu
 import { rhythmProfile, summarise as fingerprint } from '@docengine/writing';
 import { allBlocks, type ScriptDraft } from './draft.ts';
 import { narrationBlocks } from './editorial.ts';
+import { NARRATION_CHECKLIST, REFINEMENT_CHECKLIST } from './prompts.ts';
 import { SCRIPT_BLOCKING, type ScriptFinding, type ScriptFindingKind } from './rules.ts';
 
 /**
@@ -161,6 +162,9 @@ function measure(args: Parameters<typeof computeScriptReport>[0]): QualityMeasur
   return out;
 }
 
+/** Questions only the narration checklist asks: they say which checklist an answer sheet is, also on a restored copy (which keeps the answers, not the run that asked them). */
+const NARRATION_ONLY = new Set<string>(NARRATION_CHECKLIST.filter((q) => !(REFINEMENT_CHECKLIST as readonly string[]).includes(q)));
+
 /** What the models judged: recorded as opinions. */
 function judgments(args: Parameters<typeof computeScriptReport>[0]): QualityJudgment[] {
   const { content } = args;
@@ -170,7 +174,7 @@ function judgments(args: Parameters<typeof computeScriptReport>[0]): QualityJudg
     const scores = SCRIPT_SCORES.flatMap((k) => (content.editor!.scores[k] ? [`${k.replace('_SCORE', '').toLowerCase().replace('_', ' ')} ${content.editor!.scores[k]!.score}`] : [])).join(', ');
     out.push(j('script_editor', "Script editor's verdict and scores", 'script editor (model)', scores || '—', content.editor.verdict));
     const a = content.editor.assessment ?? [];
-    if (a.length) out.push(j('checklist', content.narration && content.provenance?.origin === 'NARRATION' ? 'Narration checklist (first: would a listener assume a competent human writer?)' : 'Refinement checklist', 'script editor (model)', `${a.filter((x) => x.answer === 'YES').length} yes, ${a.filter((x) => x.answer === 'PARTLY').length} partly, ${a.filter((x) => x.answer === 'NO').length} no`, `${a.filter((x) => x.comparedToPrevious === 'WORSE').length} judged worse than the version before`));
+    if (a.length) out.push(j('checklist', content.provenance?.origin === 'NARRATION' || a.some((x) => NARRATION_ONLY.has(x.question)) ? 'Narration checklist (first: would a listener assume a competent human writer?)' : 'Refinement checklist', 'script editor (model)', `${a.filter((x) => x.answer === 'YES').length} yes, ${a.filter((x) => x.answer === 'PARTLY').length} partly, ${a.filter((x) => x.answer === 'NO').length} no`, `${a.filter((x) => x.comparedToPrevious === 'WORSE').length} judged worse than the version before`));
   } else out.push(j('script_editor', "Script editor's verdict and scores", 'script editor (model)', 'not reviewed', args.reviewers?.editor ?? 'The script editor did not review this version'));
   if (content.narration) out.push(j('narration_pass', 'Narration pass verdict', 'narration editor (model)', content.narration.unavailable ? 'not run' : `${content.narration.counts.kept} edit(s) kept of ${content.narration.counts.proposed}`, content.narration.unavailable ?? content.narration.verdict));
   if (content.factCheck) out.push(j('fact_checker', "Fact checker's verdict", 'fact checker (model)', `${content.factCheck.issues.length} issue(s)`, content.factCheck.verdict));

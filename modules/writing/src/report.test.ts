@@ -67,15 +67,16 @@ const nameEntry = (displayName: string, candidate: boolean, o: Partial<NameEntry
 });
 
 /**
- * Uncertainty families, as the script rules read them (the script stage
- * passes its own `uncertaintyOf`; the report only needs a callback).
+ * Uncertainty families, with how often each is said, as the script rules
+ * read them (the script stage passes its own `uncertaintyOf`; the report
+ * only needs a callback).
  */
 const FAMILIES: [string, RegExp][] = [
-  ['hedge', /\b(?:reportedly|probably|apparently|records suggest)\b/i],
-  ['disputed', /\b(?:disputed|accounts differ|not everyone agrees)\b/i],
-  ['legend', /\b(?:the story goes|legend)\b/i],
+  ['hedge', /\b(?:reportedly|probably|apparently|records suggest)\b/gi],
+  ['disputed', /\b(?:disputed|accounts differ|not everyone agrees)\b/gi],
+  ['legend', /\b(?:the story goes|legend)\b/gi],
 ];
-const uncertainty = (text: string): ReadonlySet<string> => new Set(FAMILIES.filter(([, re]) => re.test(text)).map(([f]) => f));
+const uncertainty = (text: string): ReadonlyMap<string, number> => new Map(FAMILIES.map(([f, re]) => [f, text.match(re)?.length ?? 0] as const).filter(([, n]) => n > 0));
 
 /** The money context the tulip evidence supports for 1,200 guilders (C008 over C018's wage). */
 const [M1] = moneyContexts(new EvidenceBase(fakeEvidenceInput()), new Set(['C008', 'C018']));
@@ -597,6 +598,16 @@ describe('uncertainty between the versions', () => {
     expect(r.provenance.flags).toEqual(['1.1 → 1.1: a hedge of the original is gone']);
   });
 
+  it('one hedge of two dropped is a hedge lost, though the family is still there', () => {
+    const two = [block('1.1', 'One bulb was reportedly offered for 5,500 guilders, and probably never paid for.', { infoClass: 'UNCERTAIN', claimKeys: ['C009'] })];
+    const r = report(two, [same(two[0]!, { text: 'One bulb was reportedly offered for 5,500 guilders, and never paid for.' })], { lineage: identity(two) });
+    expect(at(r, '1.1')).toMatchObject({ status: 'REWRITTEN', uncertaintyPreserved: false });
+    expect(r.totals.uncertaintyPreserved).toEqual({ kept: 0, of: 1 });
+    expect(r.provenance.flags).toEqual(['1.1 → 1.1: a hedge of the original is gone']);
+    // Both hedges said again, in other words: kept.
+    expect(at(report(two, [same(two[0]!, { text: 'One bulb was apparently offered for 5,500 guilders, and probably never paid for.' })], { lineage: identity(two) }), '1.1').uncertaintyPreserved).toBe(true);
+  });
+
   it('a hedge added to a plain line takes nothing away', () => {
     const r = report(base, [same(base[0]!), same(base[1]!, { text: 'In February 1637 an auction at Alkmaar apparently raised 90,000 guilders.' })], { lineage: identity(base) });
     expect(at(r, '1.2')).toMatchObject({ status: 'REWRITTEN', uncertaintyPreserved: true });
@@ -610,7 +621,7 @@ describe('uncertainty between the versions', () => {
       lineage: identity(base),
       uncertainty: (t) => {
         seen.push(t);
-        return new Set(t.includes('Alkmaar') ? ['place-is-a-hedge'] : []);
+        return new Map(t.includes('Alkmaar') ? [['place-is-a-hedge', 1]] : []);
       },
     });
     expect(seen).toContain(base[1]!.text);

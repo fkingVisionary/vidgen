@@ -120,6 +120,33 @@ describe('moneyMentions: the sums a text says', () => {
     ]);
   });
 
+  it('reads a scale written straight after a symbol, and never reads a sum in pounds, shillings and pence short', () => {
+    const read = (text: string) => moneyMentions(text, keys('pound', 'shilling', 'penny', 'dollar', 'euro')).map((m) => [m.amountText, m.amount, m.currency]);
+    expect(read('In 1720 the company was valued at £3m.')).toEqual([['3m', 3_000_000, 'pound']]);
+    expect(read('The fund held $1.5bn and the shop €40k.')).toEqual([['1.5bn', 1_500_000_000, 'dollar'], ['40k', 40_000, 'euro']]);
+    // One sum, left out whole rather than read as its pounds (or shillings) alone.
+    expect(read('A good coat cost £2 10s in 1750.')).toEqual([]);
+    expect(read('A coat cost 2 pounds 10 shillings and 6 pence.')).toEqual([]);
+    expect(read('A weaver earned 5 shillings and 6 pence a week.')).toEqual([]);
+  });
+
+  it('does not take a weight, or a year before a verb, for a sum', () => {
+    const read = (text: string) => moneyMentions(text, keys('pound', 'mark')).map((m) => [m.amountText, m.amount, m.currency]);
+    expect(read('In 1700 a merchant sold 500 pounds of nutmeg.')).toEqual([]);
+    expect(read('The sale of 1637 marks the peak of the mania.')).toEqual([]);
+    // …while a sum "of" money, and a sum that only looks like a year, are sums.
+    expect(read('The company owed 500 pounds of debt.')).toEqual([['500', 500, 'pound']]);
+    expect(read('He paid 1637 marks.')).toEqual([['1637', 1637, 'mark']]);
+  });
+
+  it('reads a sum that looks like a year as a sum when the sentence pays it, whatever word follows', () => {
+    const read = (text: string) => moneyMentions(text, keys('pound', 'mark', 'crown')).map((m) => [m.amountText, m.amount, m.currency]);
+    expect(read('A craftsman earned 1500 marks a year.')).toEqual([['1500', 1500, 'mark']]);
+    expect(read('In 1720 he paid 1200 crowns a year in rent.')).toEqual([['1200', 1200, 'crown']]);
+    expect(read('He sold the house for 1500 pounds the following spring.')).toEqual([['1500', 1500, 'pound']]);
+    expect(read('The year 1720 marks a turning point.')).toEqual([]);
+  });
+
   it('reads a metal named between the sum and its currency', () => {
     expect(moneyMentions('He paid a thousand gold florins.', currencies).map((m) => [m.amountText, m.amount, m.currency])).toEqual([['a thousand', 1000, 'florin']]);
   });
@@ -189,6 +216,58 @@ describe('moneyFacts: every sum the cited claims state, and what it is', () => {
     expect(of('C008')).toMatchObject({ amount: 1200, kind: 'PRICE', total: false, verdict: 'PROBABLE', confidence: 'MEDIUM' });
     expect(of('C003')).toMatchObject({ amount: 90_000, kind: 'PRICE', total: true, year: 1637, item: 'Alkmaar auction (total)' });
     expect(of('C018')).toMatchObject({ amount: 300, kind: 'CONTEMPORARY_WAGE', period: 'year', who: 'a skilled craftsman' });
+  });
+
+  it('reads the period said with each sum, never the first one in the sentence', () => {
+    const evidence = dossier([
+      { key: 'S1', statement: 'In 1750 a weaver earned 5 shillings a week, or 13 pounds a year.' },
+      { key: 'S2', statement: 'A labourer who worked six days a week earned about 15 pounds a year in 1750.' },
+    ]);
+    expect(moneyFacts(evidence, keys('S1', 'S2')).map((f) => [f.amount, f.currency, f.kind, f.period, f.who])).toEqual([
+      [5, 'shilling', 'CONTEMPORARY_WAGE', 'week', 'a weaver'],
+      [13, 'pound', 'CONTEMPORARY_WAGE', 'year', 'a weaver'],
+      [15, 'pound', 'CONTEMPORARY_WAGE', 'year', 'a labourer'],
+    ]);
+  });
+
+  it('takes a rate beside a person for a wage only with a word for pay, and for the person named nearest it', () => {
+    const read = (statement: string) => moneyFacts(dossier([{ key: 'S1', statement }]), keys('S1')).map((f) => [f.amount, f.kind, f.who]);
+    // A cost: not a wage, whoever it is for.
+    expect(read('Feeding a soldier cost the crown about 10 pounds a year in 1700.')).toEqual([[10, null, 'a soldier']]);
+    expect(read("In 1720 rent for a craftsman's house was 6 pounds a year.")).toEqual([[6, 'HOUSEHOLD_EXPENSE', 'a craftsman']]);
+    expect(read('A labourer paid a rent of 3 pounds a year.')).toEqual([[3, 'HOUSEHOLD_EXPENSE', 'a labourer']]);
+    // Two wages in one sentence: each is its own person's.
+    expect(read('In 1720 a labourer earned about 20 pounds a year and a master carpenter 40 pounds a year.')).toEqual([
+      [20, 'CONTEMPORARY_WAGE', 'a labourer'],
+      [40, 'CONTEMPORARY_WAGE', 'a master carpenter'],
+    ]);
+    expect(read('A craftsman was paid about 300 pounds a year.')).toEqual([[300, 'CONTEMPORARY_WAGE', 'a craftsman']]);
+  });
+
+  it('reads a wage said as a range or a bound with the words for pay before it', () => {
+    const read = (statement: string) => moneyFacts(dossier([{ key: 'S1', statement }]), keys('S1')).map((f) => [f.amount, f.kind, f.period, f.who]);
+    expect(read('A labourer earned more than 20 pounds a year.')).toEqual([[20, 'CONTEMPORARY_WAGE', 'year', 'a labourer']]);
+    expect(read('A labourer earned between 20 and 25 pounds a year.')).toEqual([[25, 'CONTEMPORARY_WAGE', 'year', 'a labourer']]);
+    expect(read('A labourer earned between 1,500 and 2,000 pence a year.')).toEqual([[2000, 'CONTEMPORARY_WAGE', 'year', 'a labourer']]);
+    // A year before "and" is no range: the clause after it borrows the verb before it.
+    expect(read('A labourer earned 20 pounds a year in 1720 and 25 pounds a year in 1721.')).toEqual([
+      [20, 'CONTEMPORARY_WAGE', 'year', 'a labourer'],
+      [25, 'CONTEMPORARY_WAGE', 'year', 'a labourer'],
+    ]);
+    expect(read('A labourer earned less than 20 pounds a year, and a carpenter more than 40 pounds a year.')).toEqual([
+      [20, 'CONTEMPORARY_WAGE', 'year', 'a labourer'],
+      [40, 'CONTEMPORARY_WAGE', 'year', 'a carpenter'],
+    ]);
+  });
+
+  it('takes pay for no one’s when two people are named where it is said and whose it is cannot be told', () => {
+    const read = (statement: string) => moneyFacts(dossier([{ key: 'S1', statement }]), keys('S1')).map((f) => [f.amount, f.kind, f.who]);
+    expect(read('A carpenter who trained a labourer earned 40 pounds a year.')).toEqual([[40, null, null]]);
+    expect(read('A carpenter, who trained a labourer, earned 40 pounds a year.')).toEqual([[40, null, null]]);
+    // The one named in the sum's own clause is the one whose it is.
+    expect(read('In a town where a labourer was poor, a carpenter earned 40 pounds a year.')).toEqual([[40, 'CONTEMPORARY_WAGE', 'a carpenter']]);
+    // A rate beside a person with no word for pay in its clause is not a price either.
+    expect(read('Wages for a skilled craftsman, by the guild records, were roughly 300 pounds a year.')).toEqual([[300, null, 'a skilled craftsman']]);
   });
 });
 
@@ -332,6 +411,86 @@ describe('moneyContexts: what a sum meant, from the evidence only', () => {
       expect(contexts.every((c) => c.approximate)).toBe(true);
     });
 
+    it('says a sum near a period’s pay by one rule, never a third out: “nearly” only a little below, else “more than”', () => {
+      const evidence = dossier([
+        { key: 'W', statement: 'In 1720 a labourer earned about 30 pounds a year.' },
+        ...[22.5, 43.5, 45, 75, 80].map((x, i) => ({ key: `P${i}`, statement: `In 1720 a fine coat sold for ${x} pounds.` })),
+      ]);
+      expect(moneyContexts(evidence, keys('W', 'P0', 'P1', 'P2', 'P3', 'P4')).map((c) => [c.amount, c.ratio, c.explanation])).toEqual([
+        [22.5, 0.75, "most of a year's pay for a labourer"],
+        [43.5, 1.45, "more than a year's pay for a labourer"],
+        [45, 1.5, "more than a year's pay for a labourer"],
+        [75, 2.5, "more than two years' pay for a labourer"],
+        [80, 2.67, "more than two years' pay for a labourer"],
+      ]);
+    });
+
+    it('sets a price beside the wage for the period said with it, and for the person whose wage it is', () => {
+      const of = (...statements: string[]) => {
+        const claims = statements.map((statement, i) => ({ key: `S${i + 1}`, statement }));
+        return moneyContexts(dossier(claims), keys(...claims.map((c) => c.key))).map((c) => [c.amount, c.comparisonType, c.explanation]);
+      };
+      expect(of('In 1750 a weaver earned 5 shillings a week, or 13 pounds a year.', 'In 1750 a share in the company sold for 130 pounds.')).toEqual([[130, 'CONTEMPORARY_WAGE', "about ten years' pay for a weaver"]]);
+      expect(of('A labourer who worked six days a week earned about 15 pounds a year in 1750.', 'In 1750 a share in the company sold for 150 pounds.')).toEqual([[150, 'CONTEMPORARY_WAGE', "about ten years' pay for a labourer"]]);
+      expect(of('In 1720 a labourer earned about 20 pounds a year and a master carpenter 40 pounds a year.', 'In 1720 a share cost 1,000 pounds.')).toEqual([
+        [1000, 'CONTEMPORARY_WAGE', "about fifty years' pay for a labourer"],
+        [1000, 'CONTEMPORARY_WAGE', "about twenty-five years' pay for a master carpenter"],
+      ]);
+      // A cost is no one's pay.
+      expect(of('Feeding a soldier cost the crown about 10 pounds a year in 1700.', 'In 1700 a cannon cost 300 pounds.')).toEqual([]);
+      expect(of("In 1720 rent for a craftsman's house was 6 pounds a year.", 'In 1720 a share cost 1,000 pounds.').map(([, type]) => type)).toEqual(['HOUSEHOLD_EXPENSE']);
+    });
+
+    it('never sets one wage beside another as a price, nor pay whose it is cannot be told beside a price', () => {
+      const of = (...statements: string[]) => {
+        const claims = statements.map((statement, i) => ({ key: `S${i + 1}`, statement }));
+        return moneyContexts(dossier(claims), keys(...claims.map((c) => c.key))).map((c) => [c.amount, c.explanation]);
+      };
+      expect(of('A labourer earned less than 20 pounds a year.', 'A weaver earned 25 pounds a year.')).toEqual([]);
+      expect(of('A labourer earned between 20 and 25 pounds a year.', 'A weaver earned 25 pounds a year.')).toEqual([]);
+      expect(of('A carpenter who trained a labourer earned 40 pounds a year.', 'In 1720 a share cost 1,000 pounds.')).toEqual([]);
+      expect(of('A labourer earned more than 20 pounds a year.', 'In 1720 a share cost 1,000 pounds.')).toEqual([[1000, "about fifty years' pay for a labourer"]]);
+    });
+
+    it('gives a wage the evidence states with no period in its own words, as a wage', () => {
+      const evidence = dossier([{ key: 'S1', statement: 'A weaver earned 13 pounds in a year.' }, { key: 'S2', statement: 'A share sold for 130 pounds.' }]);
+      const [c, ...more] = moneyContexts(evidence, keys('S1', 'S2'));
+      expect(more).toEqual([]);
+      expect(c).toMatchObject({ comparisonType: 'CONTEMPORARY_WAGE', ratio: null, explanation: 'for comparison, the evidence gives: "A weaver earned 13 pounds in a year."' });
+      expect(c!.methodology).toBe('S2 gives 130 pounds; S1 gives 13 pounds for a wage — set side by side, no arithmetic beyond what the evidence says.');
+    });
+
+    it('never reads a sum short, or a weight as money, before setting it beside a wage', () => {
+      const of = (statement: string, wage: string) => moneyContexts(dossier([{ key: 'S1', statement }, { key: 'S2', statement: wage }]), keys('S1', 'S2')).map((c) => [c.amount, c.explanation]);
+      expect(of('In 1720 the company was valued at £3m.', 'In 1720 a labourer earned 25 pounds a year.')).toEqual([[3_000_000, "about 120000 years' pay for a labourer"]]);
+      expect(of('A good coat cost £2 10s in 1750.', 'A skilled weaver earned 1 pound a week in 1750.')).toEqual([]);
+      expect(of('In 1700 a merchant sold 500 pounds of nutmeg.', 'In 1700 a sailor earned about 10 pounds a year.')).toEqual([]);
+    });
+
+    it('never sets a total beside a wage, however the evidence says it is one', () => {
+      for (const statement of ['In 1720 the 99 lots at the auction fetched 90,000 pounds.', 'In 1720 the sale of 99 lots brought in 90,000 pounds.', 'In 1720 the company owed debts of 90,000 pounds.']) {
+        const evidence = dossier([{ key: 'S1', statement }, { key: 'S2', statement: WAGE }]);
+        expect(moneyFacts(evidence, keys('S1'))[0], statement).toMatchObject({ kind: 'PRICE', total: true });
+        expect(moneyContexts(evidence, keys('S1', 'S2')), statement).toEqual([]);
+      }
+      // One of many things, or a thing that comes with others, is not a total; nor is a number of times, or a word that only ends in "s".
+      for (const statement of [
+        'In 1720 one of the lots fetched 300 pounds.',
+        'In 1720 a house with four rooms sold for 300 pounds.',
+        'A share sold for 1,000 pounds, ten times its price in January.',
+        'In 1720 a share, three times as dear as in spring, sold for 1,000 pounds.',
+      ]) {
+        expect(moneyFacts(dossier([{ key: 'S1', statement }]), keys('S1'))[0], statement).toMatchObject({ kind: 'PRICE', total: false });
+      }
+    });
+
+    it('never works out a period’s pay from the wages of many: a total wage is given in the evidence’s own words', () => {
+      const PAYROLL = 'In 1720 the 40 workers of the yard earned 400 pounds a year in all.';
+      const evidence = dossier([{ key: 'S1', statement: PAYROLL }, { key: 'S2', statement: 'In 1720 a share cost 1,000 pounds.' }]);
+      expect(moneyFacts(evidence, keys('S1'))).toMatchObject([{ kind: 'CONTEMPORARY_WAGE', period: 'year', total: true }]);
+      expect(moneyContexts(evidence, keys('S1', 'S2')).map((c) => [c.amount, c.ratio, c.explanation])).toEqual([[1000, null, `for comparison, the evidence gives: "${PAYROLL}"`]]);
+    });
+
     it('never converts between currencies: a wage in another currency gives no context', () => {
       const evidence = dossier([
         { key: 'S1', statement: SHARE },
@@ -358,6 +517,38 @@ describe('moneyContexts: what a sum meant, from the evidence only', () => {
       const contexts = moneyContexts(evidence, keys('S8', 'S9'));
       expect(contexts.map((c) => [c.amount, c.comparisonType, c.sourceClaimKeys])).toEqual([[1000, 'MODERN_ESTIMATE', ['S8']]]);
       expect(JSON.stringify(contexts)).not.toContain('30,000');
+    });
+
+    it('knows the common wordings of a modern estimate, and gives the estimate to the sum it is said of', () => {
+      for (const statement of [
+        'In 1720 a share sold for 1,000 pounds, roughly 150,000 pounds adjusted for inflation.',
+        'In 1720 a share sold for 1,000 pounds, roughly 150,000 pounds at today’s prices.',
+        'A share sold for 1,000 pounds, about 150,000 pounds in today’s money.',
+      ]) {
+        const contexts = moneyContexts(dossier([{ key: 'S1', statement }, { key: 'S2', statement: WAGE }]), keys('S1', 'S2'));
+        expect(contexts.map((c) => [c.amount, c.comparisonType, c.ratio, c.confidence]), statement).toEqual([
+          [1000, 'CONTEMPORARY_WAGE', 40, 'HIGH'],
+          [1000, 'MODERN_ESTIMATE', null, 'LOW'],
+        ]);
+      }
+    });
+
+    it('sets no sum beside a wage when the sentence gives a modern figure without saying which sum it is', () => {
+      const evidence = dossier([
+        { key: 'S1', statement: 'In today’s money, the 1,000 pounds a share fetched in 1720 is about 150,000 pounds.' },
+        { key: 'S2', statement: WAGE },
+      ]);
+      expect(moneyFacts(evidence, keys('S1')).map((f) => f.kind)).toEqual([null, null]);
+      expect(moneyContexts(evidence, keys('S1', 'S2'))).toEqual([]);
+    });
+
+    it('takes "today" straight after a sum for a modern figure, but not a "now" the sentence goes on from', () => {
+      const kinds = (statement: string) => moneyFacts(dossier([{ key: 'S1', statement }]), keys('S1')).map((f) => [f.amount, f.kind]);
+      expect(kinds('A share sold for 1,000 pounds in 1720, or 150,000 pounds today.')).toEqual([[1000, 'PRICE'], [150_000, 'MODERN_ESTIMATE']]);
+      expect(kinds('A share sold for 1,000 pounds in 1720, or 150,000 pounds now.')).toEqual([[1000, 'PRICE'], [150_000, 'MODERN_ESTIMATE']]);
+      const SOLD = 'In 1720 he had paid 1,000 pounds for shares worth 500 pounds now that the bubble had burst.';
+      expect(kinds(SOLD)).toEqual([[1000, 'PRICE'], [500, 'PRICE']]);
+      expect(moneyContexts(dossier([{ key: 'S1', statement: SOLD }]), keys('S1'))).toEqual([]);
     });
 
     it('gives no context at all when the evidence has no comparison', () => {
@@ -397,6 +588,14 @@ describe('spokenRatio: a ratio as a narrator says it', () => {
     expect(spokenRatio(40)).toEqual({ phrase: 'about forty', value: 40 });
     expect(spokenRatio(22)).toEqual({ phrase: 'more than twenty', value: 20 });
     expect(spokenRatio(24)).toEqual({ phrase: 'nearly twenty-five', value: 25 });
+  });
+
+  it('says "nearly" only a little below the number, and otherwise "more than" the number below it', () => {
+    expect(spokenRatio(1.45)).toEqual({ phrase: 'more than one', value: 1 });
+    expect(spokenRatio(1.5)).toEqual({ phrase: 'more than one', value: 1 });
+    expect(spokenRatio(2.5)).toEqual({ phrase: 'more than two', value: 2 });
+    expect(spokenRatio(2.67)).toEqual({ phrase: 'more than two', value: 2 });
+    expect(spokenRatio(0.76)).toEqual({ phrase: 'less than one', value: 1 });
   });
 });
 
@@ -438,6 +637,7 @@ describe('moneyInNarration and moneyGaps: the sums the narrator says', () => {
     expect(plain('He paid 1,200 guilders for a single bulb.')).toBe(false);
     expect(plain('He bought bulbs worth more than 1,200 guilders.')).toBe(false);
     expect(plain('The bulbs came at a cost of 1,200 guilders.')).toBe(false);
+    expect(plain('He paid £3m for the company.')).toBe(false);
     // A sum said as a rate is a wage or an income: that is what it meant.
     expect(plain('A craftsman was paid about 300 guilders a year.')).toBe(true);
     // The same words around something other than the sum still give it meaning.
@@ -464,6 +664,10 @@ describe('moneyInNarration and moneyGaps: the sums the narrator says', () => {
     expect(gaps[0]!.note.startsWith(NO_EQUIVALENT)).toBe(true);
     expect(gaps[0]!.note).toContain('No claim the architecture cites sets 90,000 guilders beside a wage');
     expect(NO_EQUIVALENT).toBe("The surviving records don't give us a reliable equivalent.");
+  });
+
+  it('names no gap for a number that is not a sum', () => {
+    expect(moneyInNarration([block('1.1', 'The sale of 1637 marks the peak of the mania.'), block('1.2', 'He shipped 500 pounds of nutmeg.')], contexts, currencies)).toEqual([]);
   });
 
   it('still names the gap when the narration only says who paid the sum', () => {

@@ -6,7 +6,7 @@ import { api } from '../api.ts';
 import { StatusBadge } from '../components/badges.tsx';
 import { QualityReportView, Section } from '../components/evidence.tsx';
 import { ProjectNav } from '../components/ProjectNav.tsx';
-import { AssessmentList, JudgmentsSection, MeasurementsSection, ReviewChangesSection, SectionCard, TimingSummary, VersionsTab, VoiceTab, button, useScriptRequest } from '../components/script.tsx';
+import { AssessmentList, JudgmentsSection, MeasurementsSection, ReviewChangesSection, SectionCard, TimingSummary, VersionsTab, VoiceTab, answeredBy, button, useScriptRequest } from '../components/script.tsx';
 import { EditorialTab } from '../components/editorial.tsx';
 import { formatDate, formatUsd } from '../format.ts';
 
@@ -271,7 +271,7 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
           <summary className="cursor-pointer font-medium text-emerald-900">Human Narration Pass on v{s.version} (Writing Engine 2)…</summary>
           <p className="mt-2 text-stone-700">
             The writing engine measures every block — machine habits, rhythm, sums of money without context, narration describing the picture — and a narration editor edits only the blocks that need it, guided by the house style bible and a handful of examples from the corpus. Each edit is kept only if every figure, name, hedge,
-            claim and strong line survives; picture description moves to the visual layer; money context comes from the evidence only. Then the script editor, the fact checker and the performance pass run as usual (five model calls). v{s.version} is kept; the
+            claim and strong line survives; picture description moves to the visual layer; money context comes from the evidence only. Then the script editor, the fact checker and the performance pass run as usual (four model calls, the narration pass among them). v{s.version} is kept; the
             Editorial tab shows original → revised → why for every block.
           </p>
           <label className="mt-2 block text-xs font-medium text-stone-600" htmlFor="narration-instructions">
@@ -389,7 +389,7 @@ function QualityTab({ view: v }: { view: ScriptView }) {
       {report ? <QualityReportView report={report} claims={s.evidence.claims} reviewTitle="Reviewers' issues (model judgments)" /> : <p className="text-sm text-stone-500">No quality report.</p>}
       {changes.length > 0 && <ReviewChangesSection changes={changes} />}
       {report?.judgments && report.judgments.length > 0 && <JudgmentsSection items={report.judgments} />}
-      {editor?.assessment && editor.assessment.length > 0 && <AssessmentList items={editor.assessment} against={s.revisionOfVersion} title={s.origin === 'NARRATION' ? 'Narration checklist' : 'Refinement checklist'} />}
+      {editor?.assessment && editor.assessment.length > 0 && <AssessmentList items={editor.assessment} run={answeredBy(v.scripts, s)} />}
       {editor && (
         <Section title="Script editor's scores (model judgment — recorded, never blocking)">
           <p className="text-sm">{editor.verdict}</p>
