@@ -113,7 +113,10 @@ describe('script prompts', () => {
       'put that description in visualNote',
       // How each edit is judged: the guard's invariants, a polish not a rewrite.
       'every figure kept, every name kept, every hedge kept, every line to keep kept, no new machine habit, money context only from the list, and a polish rather than a rewrite',
+      'a block grows by a third at most, unless it gains money context; cutting is always allowed',
       'The lines listed to keep are untouchable.',
+      // Code keeps what the pass may not change.
+      "does not change a block's claims, beats or class: code keeps them",
     ])
       expect([rule, n.includes(rule)]).toEqual([rule, true]);
     // The same evidence rules as every other writer.
@@ -123,6 +126,7 @@ describe('script prompts', () => {
 
   it('give the script editor a narration checklist that starts with the human-writer question', () => {
     expect(NARRATION_CHECKLIST[0]).toBe('If you heard this as narration in a high-quality historical documentary, would you naturally assume a competent human documentary writer wrote it?');
+    expect(NARRATION_CHECKLIST).toHaveLength(10);
     expect(NARRATION_CHECKLIST.every((q) => q.endsWith('?'))).toBe(true);
     expect(new Set(NARRATION_CHECKLIST).size).toBe(NARRATION_CHECKLIST.length);
     expect(NARRATION_CHECKLIST).toContain('Is every figure, name and hedge of the previous version still there, unchanged?');

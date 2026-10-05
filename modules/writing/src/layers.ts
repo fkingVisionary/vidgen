@@ -10,7 +10,8 @@ import type { DeliveryMark, ScriptDelivery } from '@docengine/core';
  */
 
 const LEAKS: { re: RegExp; what: string }[] = [
-  { re: /\[[^\]]{1,40}\]/, what: 'a bracketed direction' },
+  // Any length: a long bracketed direction is still a tag to a voice model (the excerpt is clipped below).
+  { re: /\[[^[\]]+\]/, what: 'a bracketed direction' },
   { re: /<\s*\/?\s*[a-z][^>]{0,40}>/i, what: 'a markup tag' },
   { re: /\b(?:VISUAL|SFX|MUSIC|ON[- ]SCREEN|CAPTION|NARRATOR|V\.O\.|VO|NOTE|EDITOR|DELIVERY|PAUSE|BEAT)\s*:/, what: 'a production label' },
   { re: /\((?:[^)]*\b(?:pause|beat|music|sfx|visual|cut to|fade|on screen|whisper(?:ed|s)?|softly|dramatic(?:ally)?|slowly|quietly|curious|reflective|urgent|measured)\b[^)]*)\)/i, what: 'a stage direction in parentheses' },

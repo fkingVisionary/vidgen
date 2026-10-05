@@ -173,9 +173,11 @@ describe('what makes a line a candidate', () => {
 
   it('proposes a wording only once, even when the film says it twice', () => {
     const refrain = 'The bulbs were still in the ground, and the debts were still on paper.';
-    const film = [block('1.1', words(12, 'Opening')), block('2.1', refrain), block('2.2', words(10, 'Every')), block('2.3', refrain.toUpperCase()), block('3.1', words(12, 'Closing'))];
+    const film = clean([block('1.1', words(12, 'Opening')), block('2.1', refrain), block('2.2', words(10, 'Every')), block('2.3', refrain.toUpperCase()), block('3.1', words(12, 'Closing'))]);
     const proposals = candidateLines(film);
     expect(proposals.filter((p) => p.text.toLowerCase() === refrain.toLowerCase()).map((p) => p.blockKey)).toEqual(['2.1']);
+    // 2.3 is left out as a repeat, not because its category was full: without 2.1 it is proposed.
+    expect(categoryOf(candidateLines(film.filter((b) => b.key !== '2.1')), '2.3')).toBe('explanation');
   });
 
   it('stops at twelve proposals by default, and at `max` when given', () => {
@@ -228,6 +230,27 @@ describe('the place of a line decides its category', () => {
     const proposals = candidateLines(film);
     expect(categoryOf(proposals, '1.2')).toBe('explanation');
     expect(categoryOf(proposals, '2.2')).toBe('ending');
+  });
+
+  it('no hook is proposed when the film’s first narrator line is not a model (it is not replaced by a later line)', () => {
+    const habit = [block('1.1', 'Little did they know, everything was about to change.'), block('1.2', words(10, 'Every')), block('2.1', words(12, 'Closing'))];
+    expect(aiSignals(habit).map((s) => s.ref)).toContain('1.1');
+    expect(candidateLines(habit).map((p) => [p.blockKey, p.category])).toEqual([
+      ['1.2', 'explanation'],
+      ['2.1', 'ending'],
+    ]);
+    const short = [block('1.1', 'Nobody paid.'), block('1.2', words(10, 'Every')), block('2.1', words(12, 'Closing'))];
+    expect(candidateLines(short).some((p) => p.category === 'hook')).toBe(false);
+  });
+
+  it('a last section of one line gives the ending (not a transition), and a film of one line gives only a hook', () => {
+    const film = clean([block('1.1', words(12, 'Opening')), block('1.2', words(10, 'Every')), block('2.1', words(12, 'Closing'))]);
+    expect(candidateLines(film).map((p) => [p.blockKey, p.category])).toEqual([
+      ['1.1', 'hook'],
+      ['1.2', 'explanation'],
+      ['2.1', 'ending'],
+    ]);
+    expect(candidateLines(clean([block('1.1', words(12, 'Opening'))])).map((p) => [p.blockKey, p.category])).toEqual([['1.1', 'hook']]);
   });
 
   it('no ending is proposed when the film’s last narrator line is not a model (it is not replaced by an earlier line)', () => {

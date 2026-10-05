@@ -149,7 +149,7 @@ const SEASONS = /\b(?:spring|summer|autumn|winter)\b/gi;
 export const calendarWords = (text: string) => new Set([...text.matchAll(CALENDAR), ...text.matchAll(SEASONS)].map((m) => m[0].toLowerCase()));
 
 /** Words that give a sum of money its meaning: added only from the evidence's money context. (A plural possessive ends in an apostrophe, where "\b" cannot follow.) */
-const COMPARISON = /\b(?:earn(?:ed|s|t)?|wages?|salary|income|a year'?s|as much as|enough to buy|the price of a|in today'?s money|modern money|equivalent)\b|\b(?:years|months|weeks|days)'(?!\w)/;
+const COMPARISON = /\b(?:earn(?:ed|s|t)?|wages?|salary|income|a (?:year|month|week|day)'?s|as much as|enough to buy|the price of a|in today'?s money|modern money|equivalent)\b|\b(?:years|months|weeks|days)'(?!\w)/;
 
 /**
  * The narration pass's own invariants for one edit, on top of the evidence
@@ -174,9 +174,12 @@ export function narrationGuard(plan: NarrationPlan, out: NarrationOutput, scope:
     for (const q of quotedPassages(before.text)) if (!after.text.includes(q)) found.push(f('NARRATION_QUOTE_TOUCHED', `the quotation "${q.slice(0, 60)}" is no longer word for word`));
     const lost = quantitiesLost(before.text, after.text);
     if (lost.length) found.push(f('NARRATION_FIGURE_CHANGED', `the figure(s) ${lost.join(', ')} are no longer said as before`));
+    const dated = calendarWords(before.text);
     const days = calendarWords(after.text);
-    const changedDates = [...calendarWords(before.text)].filter((w) => !days.has(w));
+    const changedDates = [...dated].filter((w) => !days.has(w));
     if (changedDates.length) found.push(f('NARRATION_FIGURE_CHANGED', `the date word(s) ${changedDates.join(', ')} are no longer said`));
+    const newDates = [...days].filter((w) => !dated.has(w));
+    if (newDates.length) found.push(f('NARRATION_FIGURE_CHANGED', `adds the date word(s) ${newDates.join(', ')}, which the block did not say`));
     const cited = (edits.get(change.ref)?.moneyContext ?? []).map((id) => contexts.get(id.trim())).filter((c): c is HistoricalMoneyContext => !!c);
     const unknownIds = (edits.get(change.ref)?.moneyContext ?? []).filter((id) => !contexts.has(id.trim()));
     if (unknownIds.length) found.push(f('NARRATION_MONEY_UNSOURCED', `cites money context ${unknownIds.join(', ')}, which the evidence does not support`));

@@ -4,10 +4,10 @@ import { fakeEvidenceInput } from '@docengine/story/testing';
 import type { BlockNeed, Corpus } from '@docengine/writing';
 import { describe, expect, it } from 'vitest';
 import { allBlocks, derive, type DraftBlock, type ScriptDraft } from './draft.ts';
-import { calendarWords, composeLineage, moneyUsed, moveToVisual, narrationBase, narrationGuard, planNarration, renderNarrationContext, toNarrationPatch, uncertaintyOf, type NarrationPlan } from './narration.ts';
+import { calendarWords, composeLineage, moneyUsed, moveToVisual, narrationBase, narrationGuard, narrationRecord, planNarration, renderNarrationContext, toNarrationPatch, uncertaintyOf, type NarrationPlan } from './narration.ts';
 import { renderScript } from './render.ts';
-import { reviewPatch } from './review.ts';
-import { checkScript } from './rules.ts';
+import { INVARIANT, reviewPatch, type ProposedChange } from './review.ts';
+import { SCRIPT_FINDING_KINDS, checkScript } from './rules.ts';
 import type { NarrationOutput } from './schemas.ts';
 import { buildScope, type ScriptScope } from './scope.ts';
 import type { LoadedScript } from './store.ts';
@@ -102,6 +102,15 @@ const judge = (ref: string, text: string, opts: { kept?: string[]; moneyContext?
   return { ...r, change: r.outcome.changes[0]! };
 };
 
+/** The guard alone (no evidence rules) on one block reworded: what it finds. */
+const guardOn = (s: ScriptScope, plan: NarrationPlan, draft: ScriptDraft, ref: string, text: string, moneyContext: string[] = []) => {
+  const before = blockAt(draft, ref);
+  const change: ProposedChange = { id: 'N1', reviewer: 'NARRATION', type: 'EDIT', ref, reason: 'Plainer (test).' };
+  const found = narrationGuard(plan, output([{ ref, text, moneyContext }]), s)(before, derive({ ...before, text }, s), change);
+  if (typeof found === 'string') throw new Error(`Block ${ref} is settled: ${found}`);
+  return found;
+};
+
 describe('the narration plan', () => {
   it('flags only the blocks with a machine habit; the clean fixture needs nothing', () => {
     expect(planFor(scope, fixtureDraft(scope)).needs.size).toBe(0);
@@ -134,6 +143,19 @@ describe('the narration plan', () => {
     expect([...planFor(scope, draft, { handled: new Set(['2.2', '3.1']) }).needs.keys()]).toEqual(['1.3', '3.1']);
     // A line kept on purpose settles the density pattern of its block.
     expect([...planFor(scope, draft, { kept: ['It was not a trade, but a promise.'] }).needs.keys()]).toEqual(['1.3', '3.1']);
+  });
+
+  it('treats a refrain the rules recognise like a line to keep: it settles a judgment call in its block, and the pass is told to keep its words', () => {
+    const contrast = { '1.3': 'The buyers sign contracts, not for flowers, but for bulbs that are still in the ground.' };
+    const without = planFor(scope, reword(scope, fixtureDraft(scope), { ...contrast, '2.2': `${COURTS} It was not a trade, but a promise.` }));
+    expect(without.refrains).toEqual([]);
+    expect([...without.needs.keys()]).toEqual(['1.3', '2.2']);
+    // The archives line said again in 2.2, a section later than 3.1's: a refrain. (A one-word callback, "contracts", is no line to keep.)
+    const plan = planFor(scope, reword(scope, fixtureDraft(scope), { ...contrast, '2.2': `${COURTS} It was not a trade, but a promise. The archives tell another story.` }));
+    expect(plan.refrains).toEqual(['the archives tell another story']);
+    expect([...plan.needs.keys()]).toEqual(['1.3']);
+    expect(renderNarrationContext(plan)).toContain('# Deliberate repetition — refrains and callbacks the rules recognise (keep their words)\n- the archives tell another story\n');
+    expect(renderNarrationContext(without)).not.toContain('# Deliberate repetition');
   });
 
   it('shows the pass what needs work, the lines to keep, the money context and the names as the evidence spells them', () => {
@@ -196,13 +218,23 @@ describe('the narration guard (each edit judged on its own)', () => {
 
   it('rejects an edit that adds a figure the block did not say, or drops a date word', () => {
     const added = judge('2.1', 'Records suggest that Cornelis Proefman refused the bulbs he had bought, for 1,200 guilders, within two weeks.').change;
-    expect(added.status).toBe('REJECTED');
-    expect(added.rulesImpacted).toContain('NARRATION_FIGURE_CHANGED');
-    expect(added.rejectionReason).toContain('adds the figure(s) 2, which the block did not say');
+    expect(added).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_FIGURE_CHANGED'] });
+    expect(added.rejectionReason).toBe('Violates factual meaning (every figure kept) — Block 2.1: adds the figure(s) 2, which the block did not say [NARRATION_FIGURE_CHANGED]');
 
     const undated = judge('2.2', 'In 1637 the courts sent the unsettled contracts back to the towns.').change;
     expect(undated).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_FIGURE_CHANGED'] });
-    expect(undated.rejectionReason).toContain('the date word(s) april are no longer said');
+    expect(undated.rejectionReason).toBe('Violates factual meaning (every figure kept) — Block 2.2: the date word(s) april are no longer said [NARRATION_FIGURE_CHANGED]');
+  });
+
+  it('rejects an edit that adds a date word: a month or a weekday the block did not name is a new fact the evidence rules do not see', () => {
+    const month = judge('2.2', 'In March and April 1637 the courts sent the unsettled contracts back to the towns.').change;
+    expect(month).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_FIGURE_CHANGED'] });
+    expect(month.rejectionReason).toBe('Violates factual meaning (every figure kept) — Block 2.2: adds the date word(s) march, which the block did not say [NARRATION_FIGURE_CHANGED]');
+    const weekday = judge('2.2', 'On a Monday in April 1637 the courts sent the unsettled contracts back to the towns.').change;
+    expect(weekday).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_FIGURE_CHANGED'] });
+    expect(weekday.rejectionReason).toContain('adds the date word(s) monday');
+    // The same date said again, in another place in the sentence, is the same fact.
+    expect(judge('2.2', 'The courts sent the unsettled contracts back to the towns in April 1637.').change.status).toBe('ACCEPTED');
   });
 
   it('rejects a money comparison the evidence does not give — uncited, or citing an id it does not know', () => {
@@ -211,9 +243,11 @@ describe('the narration guard (each edit judged on its own)', () => {
     expect(wage.rejectionReason).toContain("adds a money comparison without citing the evidence's money context");
     expect(wage.rejectionReason).toContain("The surviving records don't give us a reliable equivalent.");
 
-    // A comparison with no figure in it ("years' pay") is a comparison all the same.
-    const years = judge('2.1', `${PROEFMAN} That was years' pay.`).change;
-    expect(years).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_MONEY_UNSOURCED'] });
+    // A comparison with no figure in it ("years' pay", "a week's pay") is a comparison all the same.
+    for (const line of ["That was years' pay.", "That was a year's pay.", "That was a week's pay.", "That was a month's rent.", "That was a day's wages."]) {
+      const c = judge('2.1', `${PROEFMAN} ${line}`).change;
+      expect([line, c.status, c.rulesImpacted]).toEqual([line, 'REJECTED', ['NARRATION_MONEY_UNSOURCED']]);
+    }
 
     const unknown = judge('2.1', PROEFMAN, { moneyContext: ['M9'] }).change;
     expect(unknown).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_MONEY_UNSOURCED'] });
@@ -222,16 +256,16 @@ describe('the narration guard (each edit judged on its own)', () => {
 
   it('rejects a respelt or westernised name', () => {
     const c = judge('2.1', 'Records suggest that Cornelius Proefman refused the bulbs he had bought, for 1,200 guilders.').change;
-    expect(c.status).toBe('REJECTED');
-    expect(c.rulesImpacted).toContain('NARRATION_NAME_CHANGED');
-    expect(c.rejectionReason).toContain('"cornelis" became "cornelius" — a historical name keeps its spelling');
+    // The evidence rules would let the respelling through: only the guard stops it.
+    expect(c).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_NAME_CHANGED'] });
+    expect(c.rejectionReason).toBe('Violates historical identities — Block 2.1: "cornelis" became "cornelius" — a historical name keeps its spelling [NARRATION_NAME_CHANGED]');
   });
 
   it('rejects an edit that drops a hedge — also one the evidence rules alone would let through', () => {
     // The PROBABLE claim's hedge: the evidence rules and the guard both object.
     const unhedged = judge('2.1', 'Cornelis Proefman refused the bulbs he had bought, for 1,200 guilders.').change;
     expect(unhedged.status).toBe('REJECTED');
-    expect(unhedged.rulesImpacted).toEqual(expect.arrayContaining(['PROBABLE_UNHEDGED', 'NARRATION_HEDGE_DROPPED']));
+    expect(unhedged.rulesImpacted).toEqual(['PROBABLE_UNHEDGED', 'NARRATION_HEDGE_DROPPED']);
 
     // A disputed figure that also said "it appears": still disputed for the rules, but a hedge of the original is gone.
     const draft = reword(scope, fixtureDraft(scope), { '3.2': 'Even the most famous price is disputed. It appears a single bulb was offered for 5,500 guilders. And then, everything changed.' });
@@ -248,6 +282,16 @@ describe('the narration guard (each edit judged on its own)', () => {
     expect(lost).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_KEPT_LINE_LOST'] });
     expect(lost.rejectionReason).toContain('the line to keep "the archives tell another story." is gone');
     expect(judge('3.1', LEGEND, { kept }).change.status).toBe('ACCEPTED');
+    // Without the line listed to keep, the same cut is the pass's call.
+    expect(judge('3.1', 'The legend says the trade ruined a nation. The records disagree.').change.status).toBe('ACCEPTED');
+  });
+
+  it('rejects an edit that loses a refrain the rules recognise, even with no line listed to keep', () => {
+    const draft = reword(scope, fixtureDraft(scope), { '2.2': `${COURTS} The archives tell another story.`, '3.1': `${LEGEND} But then the stage was set.` });
+    const lost = judge('3.1', 'The legend says the trade ruined a nation.', { draft }).change;
+    expect(lost).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_KEPT_LINE_LOST'] });
+    expect(lost.rejectionReason).toBe('Violates the strongest lines — Block 3.1: the deliberate repetition "the archives tell another story" is gone [NARRATION_KEPT_LINE_LOST]');
+    expect(judge('3.1', LEGEND, { draft }).change.status).toBe('ACCEPTED');
   });
 
   it('rejects an edit that trades one machine habit for another', () => {
@@ -260,8 +304,12 @@ describe('the narration guard (each edit judged on its own)', () => {
     const grown = judge('2.1', `${PROEFMAN} He would not take them, he would not pay for them, and he would not hear another word about them from anyone, then or later, however often they asked.`).change;
     expect(grown).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_LENGTH_DRIFT'] });
     expect(grown.rejectionReason).toContain('grows from 19 to 44 words: a polish, not a rewrite');
-    // A few words more is a polish.
-    expect(judge('2.1', `${PROEFMAN} He would not pay.`).change.status).toBe('ACCEPTED');
+    // A third more, and a few words besides, is still a polish: 19 words may become 30, not 31.
+    const thirty = judge('2.1', `${PROEFMAN} He refused to take them, he refused to pay for them, whatever the sellers said.`).change;
+    expect(thirty).toMatchObject({ status: 'ACCEPTED', rejectionReason: null });
+    const thirtyOne = judge('2.1', `${PROEFMAN} He refused to take them, and he refused to pay for them, whatever the sellers said.`).change;
+    expect(thirtyOne).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_LENGTH_DRIFT'] });
+    expect(thirtyOne.rejectionReason).toContain('grows from 19 to 31 words');
   });
 
   it("never touches a speaker's line: settled for the pass, and refused by the guard should a plan ever list it", () => {
@@ -278,6 +326,12 @@ describe('the narration guard (each edit judged on its own)', () => {
     expect(outcome.changes[0]!.rulesImpacted).toContain('NARRATION_QUOTE_TOUCHED');
     expect(outcome.changes[0]!.rejectionReason).toContain("a speaker's line is the record's words, not the narrator's");
     expect(blockAt(outcome.draft, '1.5').text).toBe('"Everyone here is buying paper, not flowers."');
+    // The guard on its own: the speaker's line is refused for being one, whether or not quotation marks would also catch the change.
+    expect(guardOn(scope, forced, draft, '1.5', '"Everyone here is buying paper."')).toEqual([
+      { kind: 'NARRATION_QUOTE_TOUCHED', ref: '1.5', detail: "Block 1.5: a speaker's line is the record's words, not the narrator's" },
+      { kind: 'NARRATION_QUOTE_TOUCHED', ref: '1.5', detail: 'Block 1.5: the quotation "Everyone here is buying paper, not flowers." is no longer word for word' },
+    ]);
+    expect(guardOn(scope, forced, draft, '1.5', 'Everyone here is buying paper, not flowers.')).toEqual([{ kind: 'NARRATION_QUOTE_TOUCHED', ref: '1.5', detail: "Block 1.5: a speaker's line is the record's words, not the narrator's" }]);
   });
 
   it('keeps a quotation in the narration word for word', () => {
@@ -304,7 +358,23 @@ describe('the narration guard (each edit judged on its own)', () => {
       { ref: '3.3', text: 'An 1841 book spread the story.' },
     ]);
     expect(outcome.changes.map((c) => `${c.ref} ${c.status}`)).toEqual(['2.1 REJECTED', '2.2 ACCEPTED', '3.1 ACCEPTED', '3.3 SKIPPED']);
+    expect(outcome.changes[0]!.rulesImpacted).toEqual(['NARRATION_NAME_CHANGED']);
+    expect(outcome.changes[3]!.rejectionReason).toMatch(/^Settled/);
     expect(allBlocks(outcome.draft).map((b) => b.text).slice(5, 8)).toEqual([`${PROEFMAN} And then, everything changed.`, COURTS, LEGEND]);
+  });
+
+  it('gives every invariant of its own the reason a rejection is told in', () => {
+    const own = SCRIPT_FINDING_KINDS.filter((k) => k.startsWith('NARRATION_'));
+    expect(Object.fromEntries(own.map((k) => [k, INVARIANT[k]]))).toEqual({
+      NARRATION_FIGURE_CHANGED: 'factual meaning (every figure kept)',
+      NARRATION_NAME_CHANGED: 'historical identities',
+      NARRATION_KEPT_LINE_LOST: 'the strongest lines',
+      NARRATION_QUOTE_TOUCHED: 'recorded-quote integrity',
+      NARRATION_HEDGE_DROPPED: 'uncertainty presentation',
+      NARRATION_PATTERN_ADDED: 'the house style (no new machine habits)',
+      NARRATION_MONEY_UNSOURCED: 'money context from the evidence only',
+      NARRATION_LENGTH_DRIFT: 'a polish, not a rewrite',
+    });
   });
 });
 
@@ -365,13 +435,32 @@ describe('money context from the evidence', () => {
   it('rejects a comparison the cited context does not give, and a comparison with no context cited', () => {
     const draft = fixtureDraft(mscope);
     const five = narrate(mscope, draft, [{ ref: '2.1', text: `${PROEFMAN} That was about five years' pay for a skilled craftsman.`, moneyContext: ['M1'] }]).outcome.changes[0]!;
-    expect(five.status).toBe('REJECTED');
-    expect(five.rulesImpacted).toContain('NARRATION_MONEY_UNSOURCED');
-    expect(five.rejectionReason).toContain('adds the figure(s) 5, which the money context it cites does not give');
+    expect(five).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_MONEY_UNSOURCED'] });
+    expect(five.rejectionReason).toBe('Violates money context from the evidence only — Block 2.1: adds the figure(s) 5, which the money context it cites does not give [NARRATION_MONEY_UNSOURCED]');
 
+    // Uncited, the context's own words are a new figure and a comparison of the pass's own.
     const uncited = narrate(mscope, draft, [{ ref: '2.1', text: FOUR_YEARS }]).outcome.changes[0]!;
-    expect(uncited.status).toBe('REJECTED');
-    expect(uncited.rulesImpacted).toContain('NARRATION_MONEY_UNSOURCED');
+    expect(uncited).toMatchObject({ status: 'REJECTED', rulesImpacted: ['NARRATION_FIGURE_CHANGED', 'NARRATION_MONEY_UNSOURCED'] });
+    expect(uncited.rejectionReason).toBe('Violates factual meaning (every figure kept); money context from the evidence only — Block 2.1: adds the figure(s) 4, which the block did not say [NARRATION_FIGURE_CHANGED] (and 1 more: NARRATION_MONEY_UNSOURCED)');
+    expect(blockAt(narrate(mscope, draft, [{ ref: '2.1', text: FOUR_YEARS }]).outcome.draft, '2.1').claimKeys).toEqual(['C008']);
+  });
+
+  it('lets a block that gains money context grow further than a polish — and no further', () => {
+    const draft = fixtureDraft(mscope);
+    const plan = planFor(mscope, draft);
+    // 15 words: a polish may reach 25; with the context cited, 39.
+    const SAVE = `${PROEFMAN} That was about four years' pay for a skilled craftsman, more than most buyers in the room could hope to save in a lifetime.`;
+    const SAVE_EVER = SAVE.replace('could hope', 'could ever hope');
+    expect(guardOn(mscope, plan, draft, '2.1', SAVE, ['M1'])).toEqual([]);
+    expect(narrate(mscope, draft, [{ ref: '2.1', text: SAVE, moneyContext: ['M1'] }]).outcome.changes[0]!.status).toBe('ACCEPTED');
+    expect(guardOn(mscope, plan, draft, '2.1', SAVE_EVER, ['M1'])).toEqual([{ kind: 'NARRATION_LENGTH_DRIFT', ref: '2.1', detail: 'Block 2.1: grows from 15 to 40 words: a polish, not a rewrite' }]);
+    // Without the context cited, the same lines grow too far as well.
+    expect(guardOn(mscope, plan, draft, '2.1', SAVE).map((f) => f.kind)).toEqual(['NARRATION_FIGURE_CHANGED', 'NARRATION_MONEY_UNSOURCED', 'NARRATION_LENGTH_DRIFT']);
+  });
+
+  it('raises a sum without its context again, however often a pass handled the block: it is no judgment call', () => {
+    const draft = fixtureDraft(mscope);
+    expect([...planFor(mscope, draft, { handled: new Set(['2.1', '3.2']), kept: [PROEFMAN] }).needs.keys()]).toEqual(['2.1', '3.2']);
   });
 });
 
@@ -419,6 +508,53 @@ describe('the pass converges', () => {
   });
 });
 
+// ── What the pass leaves behind: the picture notes moved, the record ────────
+
+describe('what a pass leaves behind', () => {
+  it('moves the picture description of a kept edit to the visual note — after the note already there, once, and never for a rejected edit', () => {
+    const draft = flagged();
+    const { out, outcome } = narrate(scope, draft, [
+      { ref: '2.1', text: PROEFMAN, visualNote: 'His hand rests on the unsigned contract.' },
+      { ref: '2.2', text: 'In 1637 the courts sent the unsettled contracts back to the towns.', visualNote: 'A seal pressed into wax.' },
+      { ref: '3.1', text: LEGEND },
+    ]);
+    expect(outcome.changes.map((c) => `${c.ref} ${c.status}`)).toEqual(['2.1 ACCEPTED', '2.2 REJECTED', '3.1 ACCEPTED']);
+    const { draft: moved, moved: notes } = moveToVisual(outcome.draft, out, outcome.changes, scope);
+    expect(notes).toEqual([{ ref: '2.1', note: 'His hand rests on the unsigned contract.' }]);
+    expect(blockAt(moved, '2.1').visual).toEqual({ ...blockAt(draft, '2.1').visual, note: 'A ledger page, close. His hand rests on the unsigned contract.' });
+    expect(blockAt(moved, '2.1').text).toBe(PROEFMAN);
+    expect(blockAt(moved, '2.2').visual).toEqual(blockAt(draft, '2.2').visual);
+    expect(allBlocks(moved).filter((b) => b.key !== '2.1')).toEqual(allBlocks(outcome.draft).filter((b) => b.key !== '2.1'));
+    // Moved once: the same notes again change nothing.
+    const again = moveToVisual(moved, out, outcome.changes, scope);
+    expect(again.moved).toEqual([]);
+    expect(again.draft).toEqual(moved);
+    // Nothing to move: the draft comes back as it was.
+    const none = narrate(scope, draft, [{ ref: '3.1', text: LEGEND }]);
+    expect(moveToVisual(none.outcome.draft, none.out, none.outcome.changes, scope)).toEqual({ draft: none.outcome.draft, moved: [] });
+    expect(moveToVisual(none.outcome.draft, none.out, none.outcome.changes, scope).draft).toBe(none.outcome.draft);
+  });
+
+  it("records what became of each of the pass's edits — the settled ones counted apart — and only the pass's", () => {
+    const { plan, out, outcome } = narrate(scope, flagged(), [
+      { ref: '1.3', text: 'Buyers sign contracts for bulbs still in the ground.' },
+      { ref: '2.1', text: PROEFMAN },
+      { ref: '2.2', text: 'In 1637 the courts sent the unsettled contracts back to the towns.' },
+      { ref: '9.9', text: 'A block that is not there (test).' },
+    ]);
+    expect(outcome.changes.map((c) => `${c.ref} ${c.status}`)).toEqual(['1.3 SKIPPED', '2.1 ACCEPTED', '2.2 REJECTED', '9.9 SKIPPED']);
+    const editor = { ...outcome.changes[1]!, id: 'E1', reviewer: 'SCRIPT_EDITOR' as const };
+    const record = narrationRecord({ plan, out, unavailable: null, changes: [...outcome.changes, editor], after: plan.diagnosis, afterUses: plan.money.uses, names: plan.names, used: moneyUsed(out, outcome.changes, plan), moved: [], lineage: null, corpusVersion: plan.corpusVersion });
+    expect(record.counts).toEqual({ flagged: 3, settled: 1, proposed: 4, kept: 1, rejected: 1, skipped: 2 });
+    expect(record).toMatchObject({ engine: 'writing-engine-2', corpusVersion: 'test', unavailable: null, verdict: 'Plain where it was theatrical (test).', retrieved: [], visualMoved: [], lineage: null, money: { contexts: [], used: [] } });
+    expect(record.diagnostics.before).toEqual(plan.diagnosis.diagnostics);
+
+    const unavailable = narrationRecord({ plan: null, out: null, unavailable: 'The narration editor did not answer (test).', changes: [], after: plan.diagnosis, afterUses: [], names: [], used: [], moved: [], lineage: null, corpusVersion: 'test' });
+    expect(unavailable.counts).toEqual({ flagged: 0, settled: 0, proposed: 0, kept: 0, rejected: 0, skipped: 0 });
+    expect(unavailable).toMatchObject({ unavailable: 'The narration editor did not answer (test).', verdict: null, retrieved: [], diagnostics: { before: null } });
+  });
+});
+
 // ── A narration pass on its own: the base copied, the blocks followed ───────
 
 describe('a narration pass on its own', () => {
@@ -426,6 +562,7 @@ describe('a narration pass on its own', () => {
     const draft = fixtureDraft(scope);
     const s = draft.sections[1]!;
     Object.assign(s, { rowId: 'scene-2', reviewStatus: 'APPROVED', editorNotes: 'Tighter (test).', reviewedBy: 'editor', reviewedAt: '2026-10-01T00:00:00.000Z', written: false });
+    s.plan = { purpose: 'The case (test).', approach: 'Plain (test).', showNotSay: ['the court record'], exposition: ['the sum'], tension: 'Will he pay (test)?', reveal: 'He will not (test).', sparse: false, targetSec: 40 };
     Object.assign(s.blocks[0]!, { rowId: 'block-1', generatedText: 'An earlier wording (test).', editedBy: 'editor', editedAt: '2026-10-01T00:00:00.000Z' });
     s.blocks[0]!.delivery.emphasis.push({ text: '1,200 guilders', level: 'STRONG' });
     s.blocks[0]!.visual.mustShow.push({ detail: 'the court record of the case', claimKeys: ['C008'] });
@@ -436,6 +573,9 @@ describe('a narration pass on its own', () => {
     const copy = narrationBase(base);
     const c = copy.sections[1]!;
     expect(c).toMatchObject({ rowId: undefined, reviewStatus: 'PENDING', editorNotes: null, reviewedBy: null, reviewedAt: null, written: true, sequence: 2, title: 'The court' });
+    // The section's plan comes along, as a copy.
+    expect(c.plan).toEqual(s.plan);
+    expect(c.plan).not.toBe(s.plan);
     expect(c.blocks[0]).toMatchObject({ rowId: undefined, text: s.blocks[0]!.text, generatedText: s.blocks[0]!.text, editedBy: null, editedAt: null, claimKeys: ['C008'], beatIds: ['2.1'], infoClass: 'UNCERTAIN' });
     expect(c.blocks[0]!.delivery).toEqual(s.blocks[0]!.delivery);
     expect(c.blocks[0]!.visual).toEqual(s.blocks[0]!.visual);

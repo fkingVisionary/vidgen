@@ -105,8 +105,9 @@ const identity = (blocks: readonly NarrationBlock[]) => blocks.map((b) => ({ bas
 const at = (r: ScriptChangeReport, ref: string): BlockChange => (r.blocks.find((b) => b.ref === ref) ?? r.blocks.find((b) => !b.ref && b.baseRef === ref))!;
 const pairsOf = (r: ScriptChangeReport) => r.blocks.map((b) => `${b.baseRef ?? '—'} → ${b.ref ?? '—'} ${b.status}`);
 
+/** Every report is checked against the shared contract (and carries nothing the contract does not know). */
 function report(base: readonly NarrationBlock[], revised: readonly NarrationBlock[], o: Partial<ReportArgs> = {}): ScriptChangeReport {
-  return changeReport({
+  const r = changeReport({
     base: { id: 'script-a', version: 4, blocks: base },
     revised: { id: 'script-b', version: 5, blocks: revised },
     lineage: null,
@@ -115,6 +116,8 @@ function report(base: readonly NarrationBlock[], revised: readonly NarrationBloc
     uncertainty,
     ...o,
   });
+  expect(ScriptChangeReport.parse(r)).toEqual(r);
+  return r;
 }
 
 // ── The tulip opening: a Human Narration Pass, v4 → v5 ───────────────────────
@@ -200,8 +203,25 @@ describe('changeReport after a narration pass (exact lineage)', () => {
   });
 
   it('never counts the habits of a speaker’s line: the record’s words are not the narrator’s', () => {
+    // Said by the narrator, the same words would be a machine habit.
+    expect(blockPatterns(same(V4[3]!, { speakerId: null }))).not.toEqual([]);
     expect(blockPatterns(V4[3]!)).toEqual([]);
     expect(at(r, '2.1')).toMatchObject({ aiPatternsRemoved: [], aiPatternsAdded: [] });
+    // Even when the speaker’s line is rewritten, with the habit taken out or put in.
+    const plain = 'We will know by the spring what they are worth.';
+    const out = report(V4, [...V4.slice(0, 3), same(V4[3]!, { text: plain }), same(V4[4]!)], { lineage: identity(V4) });
+    expect(at(out, '2.1')).toMatchObject({ status: 'REWRITTEN', aiPatternsRemoved: [], aiPatternsAdded: [] });
+    const back = report([...V4.slice(0, 3), same(V4[3]!, { text: plain }), same(V4[4]!)], V4, { lineage: identity(V4) });
+    expect(at(back, '2.1')).toMatchObject({ status: 'REWRITTEN', aiPatternsRemoved: [], aiPatternsAdded: [] });
+  });
+
+  it('records a machine habit a rewrite put in, and those of a block added with one', () => {
+    const worse = [...V5.slice(0, 2), same(V5[2]!, { text: 'One bulb was reportedly offered for 5,500 guilders. And then everything changed.' }), ...V5.slice(3)];
+    const r2 = report(V4, worse, { lineage: identity(V4) });
+    expect(at(r2, '1.3')).toMatchObject({ status: 'REWRITTEN', aiPatternsRemoved: [], aiPatternsAdded: ['dramatic_transition'], visualDuplicationRemoved: false });
+    const added = report(V4, [...V5, block('2.3', 'The market was shrouded in mystery.')], { lineage: identity(V4) });
+    expect(at(added, '2.3')).toMatchObject({ status: 'ADDED', aiPatternsRemoved: [], aiPatternsAdded: ['mystery_language'] });
+    expect(added.totals).toMatchObject({ added: 1, aiSignalsAfter: 1 });
   });
 
   it('keeps the evidence of every block: the money claim was added, none was dropped', () => {
@@ -246,7 +266,10 @@ describe('changeReport after a narration pass (exact lineage)', () => {
   });
 
   it('is read-only: the versions, the ledger and the record are left as they were', () => {
-    const snapshot = JSON.stringify([V4, V5, LEDGER, RECORD]);
+    const snapshot = structuredClone([V4, V5, LEDGER, RECORD]);
+    passReport();
+    expect([V4, V5, LEDGER, RECORD]).toEqual(snapshot);
+    // Deeply frozen inputs: any write (a sort in place, a push) would throw.
     const frozen = <T>(x: T): T => {
       if (x && typeof x === 'object') {
         for (const v of Object.values(x)) frozen(v);
@@ -255,8 +278,7 @@ describe('changeReport after a narration pass (exact lineage)', () => {
       return x;
     };
     const args = frozen(structuredClone({ v4: V4, v5: V5, ledger: LEDGER, record: RECORD }));
-    expect(() => report(args.v4, args.v5, { lineage: args.record.lineage, ledger: args.ledger, narration: args.record })).not.toThrow();
-    expect(JSON.stringify([V4, V5, LEDGER, RECORD])).toBe(snapshot);
+    expect(report(args.v4, args.v5, { lineage: args.record.lineage, ledger: args.ledger, narration: args.record })).toEqual(r);
   });
 
   it('gives the same report however often it is asked for', () => {
@@ -368,6 +390,23 @@ describe('changeReport when reviewers removed and inserted blocks (renumbered, e
     const r = report(S3_BASE, revised, { lineage: S3_BASE.map((b, i) => ({ base: b.key, saved: `3.${i + 2}` })) });
     expect(pairsOf(r)).toEqual(['— → 3.1 ADDED', '3.1 → 3.2 UNCHANGED', '3.2 → 3.3 UNCHANGED', '3.3 → 3.4 UNCHANGED']);
   });
+
+  it('keeps the sections in order: a block removed at the end of one section comes before a block added at the start of the next', () => {
+    const base = [
+      block('1.1', 'In February 1637 an auction at Alkmaar raised 90,000 guilders.', { claimKeys: ['C003'] }),
+      block('1.2', 'Nobody knew what a contract was worth any more.', { claimKeys: ['C011'] }),
+      block('2.1', 'The courts of Holland refused to enforce the contracts.', { claimKeys: ['C012'] }),
+    ];
+    const revised = [same(base[0]!), block('2.1', 'The States of Holland left buyers and sellers to settle among themselves.', { claimKeys: ['C012'] }), same(base[2]!, { key: '2.2' })];
+    const r = report(base, revised, { lineage: [{ base: '1.1', saved: '1.1' }, { base: '1.2', saved: null }, { base: '2.1', saved: '2.2' }] });
+    expect(pairsOf(r)).toEqual(['1.1 → 1.1 UNCHANGED', '1.2 → — REMOVED', '— → 2.1 ADDED', '2.1 → 2.2 UNCHANGED']);
+    expect(r.blocks.map((b) => b.section)).toEqual([1, 1, 2, 2]);
+    // The order a matched pairing gives the same two versions.
+    expect(pairsOf(report(base, revised))).toEqual(pairsOf(r));
+    // A whole first section removed, and the next opened with a new block.
+    const later = report(base.slice(1), [revised[1]!, revised[2]!], { lineage: [{ base: '1.2', saved: null }, { base: '2.1', saved: '2.2' }] });
+    expect(pairsOf(later)).toEqual(['1.2 → — REMOVED', '— → 2.1 ADDED', '2.1 → 2.2 UNCHANGED']);
+  });
 });
 
 // ── Without a lineage: blocks matched by evidence and wording ────────────────
@@ -386,6 +425,25 @@ describe('changeReport without a lineage (matched pairing)', () => {
     expect(r.pairing).toBe('MATCHED');
     expect(pairsOf(r)).toEqual(pairsOf(passReport()));
     expect(at(r, '1.2')).toMatchObject({ status: 'REWRITTEN', reasons: ['N1: The picture already shows the bench; say what the price meant instead (M1).'] });
+  });
+
+  it('finds a reason where the change was saved, never by a key of a draft in between (a pass on a writer’s new draft)', () => {
+    // A refinement: the writer opened with a new block, so its draft numbered the old 1.1 as 1.2; the narration pass then reworded that 1.2.
+    const base = [
+      block('1.1', 'Cornelis Proefman agreed to pay 1,200 guilders for a single bulb.', { claimKeys: ['C008'] }),
+      block('1.2', 'One bulb was reportedly offered for 5,500 guilders.', { infoClass: 'UNCERTAIN', claimKeys: ['C009'] }),
+    ];
+    const revised = [
+      block('1.1', 'In February 1637 an auction at Alkmaar raised 90,000 guilders.', { claimKeys: ['C003'] }),
+      block('1.2', 'Cornelis Proefman agreed to pay 1,200 guilders for a single bulb, about four years of a skilled craftsman’s wages.', { claimKeys: ['C008', 'C018'] }),
+      block('1.3', 'One bulb was reportedly offered for 5,500 guilders, but no signed contract survives.', { infoClass: 'UNCERTAIN', claimKeys: ['C009'] }),
+    ];
+    const ledger = [change('N1', { section: 1, ref: '1.2', savedRef: '1.2', originalText: base[0]!.text, proposedText: revised[1]!.text, reason: 'Say what the price meant (M1).' })];
+    const r = report(base, revised, { ledger });
+    expect(pairsOf(r)).toEqual(['— → 1.1 ADDED', '1.1 → 1.2 REWRITTEN', '1.2 → 1.3 REWRITTEN']);
+    expect(at(r, '1.2')).toMatchObject({ reasons: ['N1: Say what the price meant (M1).'], changedBy: ['NARRATION'] });
+    // The base’s 1.2 is another block: the pass’s “1.2” is not its reason.
+    expect(at(r, '1.3')).toMatchObject({ reasons: [], changedBy: [] });
   });
 
   it('reports a block replaced by one with other evidence and other words as one removed and one added', () => {
@@ -474,17 +532,27 @@ describe('claim coverage between the versions', () => {
   });
 
   it('a removed block’s claims are flagged unless another block still cites them', () => {
+    const lineage = [...identity(base.slice(0, 2)), { base: '1.3', saved: null }];
     const revised = [same(base[0]!), same(base[1]!, { claimKeys: ['C018', 'C009'] })];
-    const r = report(base, revised, { lineage: [...identity(base.slice(0, 2)), { base: '1.3', saved: null }] });
+    const r = report(base, revised, { lineage });
     expect(at(r, '1.3')).toMatchObject({ status: 'REMOVED', claimsRemoved: ['C009'] });
     expect(r.provenance.claimsRemoved).toEqual([]);
     expect(r.provenance.figuresRemoved).toEqual(['5500']);
+    expect(r.provenance.flags).toEqual(['The figure 5500 is no longer said in v5']);
+    // Cited nowhere else: the claim is flagged as lost.
+    const lost = report(base, [same(base[0]!), same(base[1]!)], { lineage });
+    expect(at(lost, '1.3')).toMatchObject({ status: 'REMOVED', claimsRemoved: ['C009'], evidencePreserved: null });
+    expect(lost.provenance).toMatchObject({ claimsRemoved: ['C009'], figuresRemoved: ['5500'] });
+    expect(lost.provenance.flags).toEqual(['Claim C009 is no longer cited anywhere in v5', 'The figure 5500 is no longer said in v5']);
+    // Only paired blocks count towards evidence kept.
+    expect(lost.totals.evidencePreserved).toEqual({ kept: 2, of: 2 });
   });
 
   it('lists new claims and figures, sorted', () => {
-    const revised = [same(base[0]!), same(base[1]!), same(base[2]!), block('1.4', 'The whole sale at Alkmaar raised 90,000 guilders in 1637.', { claimKeys: ['C003', 'C010'] })];
+    const revised = [same(base[0]!), same(base[1]!), same(base[2]!), block('1.4', 'The whole sale at Alkmaar raised 90,000 guilders in 1637, for 99 lots.', { claimKeys: ['C010', 'C003'] })];
     const r = report(base, revised, { lineage: identity(base) });
-    expect(r.provenance).toMatchObject({ claimsAdded: ['C003', 'C010'], figuresAdded: ['1637', '90000'], claimsRemoved: [], figuresRemoved: [], flags: [] });
+    // Figures in numeric order (99 before 1637), not as strings.
+    expect(r.provenance).toEqual({ claimsAdded: ['C003', 'C010'], figuresAdded: ['99', '1637', '90000'], claimsRemoved: [], figuresRemoved: [], flags: [] });
   });
 
   it('never calls a change of a figure unchanged, even when only a decimal point moved', () => {
@@ -525,6 +593,8 @@ describe('uncertainty between the versions', () => {
   it('a hedge swapped for another kind of uncertainty is not kept', () => {
     const r = run('The story goes that one bulb was offered for 5,500 guilders.');
     expect(at(r, '1.1').uncertaintyPreserved).toBe(false);
+    expect(r.totals.uncertaintyPreserved).toEqual({ kept: 0, of: 1 });
+    expect(r.provenance.flags).toEqual(['1.1 → 1.1: a hedge of the original is gone']);
   });
 
   it('a hedge added to a plain line takes nothing away', () => {

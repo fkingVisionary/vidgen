@@ -29,6 +29,12 @@ describe('directionLeaks: production metadata inside the narration', () => {
     expect(directionLeaks('[whispers] Nobody paid.')).toEqual(['a bracketed direction ("[whispers]")']);
   });
 
+  it('catches a long bracketed direction too, clipped in the report', () => {
+    const long = '[pauses, then goes on more quietly, almost to himself]';
+    expect(long.length).toBeGreaterThan(42);
+    expect(directionLeaks(`The price doubled. ${long} Nobody paid.`)).toEqual([`a bracketed direction ("${long.slice(0, 40)}")`]);
+  });
+
   it('catches markup such as an SSML <break/> tag', () => {
     expect(directionLeaks('The price doubled. <break time="1.5s"/> Then it doubled again.')).toEqual(['a markup tag ("<break time="1.5s"/>")']);
     expect(directionLeaks('It was <emphasis>never</emphasis> paid.')).toEqual(['a markup tag ("<emphasis>")']);
@@ -41,6 +47,12 @@ describe('directionLeaks: production metadata inside the narration', () => {
     expect(directionLeaks('The bidding opened at noon. NOTE: check the date.')).toEqual(['a production label ("NOTE:")']);
   });
 
+  it('catches every production label, with or without a space before the colon', () => {
+    for (const label of ['MUSIC:', 'ON SCREEN:', 'ON-SCREEN:', 'CAPTION:', 'V.O.:', 'VO:', 'EDITOR:', 'DELIVERY:', 'PAUSE:', 'BEAT:', 'VISUAL :']) {
+      expect(directionLeaks(`${label} The bidding opened at noon.`), label).toEqual([`a production label ("${label}")`]);
+    }
+  });
+
   it('catches a stage direction in parentheses such as (pause) or (softly)', () => {
     expect(directionLeaks('The price doubled. (pause) Then it doubled again.')).toEqual(['a stage direction in parentheses ("(pause)")']);
     expect(directionLeaks('(softly) Nobody paid.')).toEqual(['a stage direction in parentheses ("(softly)")']);
@@ -50,6 +62,8 @@ describe('directionLeaks: production metadata inside the narration', () => {
   it('catches an edit instruction such as CUT TO or FADE OUT', () => {
     expect(directionLeaks('CUT TO the auction room in Alkmaar.')).toEqual(['an edit instruction ("CUT TO")']);
     expect(directionLeaks('The last bulb was sold. FADE OUT.')).toEqual(['an edit instruction ("FADE OUT")']);
+    expect(directionLeaks('FADE IN on the harbour at Enkhuizen.')).toEqual(['an edit instruction ("FADE IN")']);
+    expect(directionLeaks('The last bulb was sold. FADE TO black.')).toEqual(['an edit instruction ("FADE TO")']);
   });
 
   it('catches a claim key, which belongs in the evidence layer', () => {
@@ -65,6 +79,8 @@ describe('directionLeaks: production metadata inside the narration', () => {
 
   it('leaves ordinary words alone: a lower-case "cut to", a sentence that starts "Note", a year, a colon', () => {
     expect(directionLeaks('The council cut to the bone what it paid the clerks.')).toEqual([]);
+    expect(directionLeaks('Within a year the fashion began to fade out of the taverns.')).toEqual([]);
+    expect(directionLeaks('Few visual records survive: no painter drew the auction, and no music was written for it.')).toEqual([]);
     expect(directionLeaks('Note the date on the contract: the third of February.')).toEqual([]);
     expect(directionLeaks('By 1637 the visual arts of Haarlem were famous: painters bought bulbs too.')).toEqual([]);
     expect(directionLeaks('The C-major chord in bar 12 was copied by hand.')).toEqual([]);
@@ -112,6 +128,9 @@ describe('deliveryMark: the mark an editor writes beside a block', () => {
   it('marks a low-energy delivery [quiet]', () => {
     expect(read({ energy: 'LOW' })).toBe('quiet');
     expect(read({ energy: 'LOW', pace: 'SLOW' })).toBe('quiet');
+    // Fast but low, and neither high-energy nor tense: still quiet, not urgent.
+    expect(read({ energy: 'LOW', pace: 'FAST' })).toBe('quiet');
+    expect(read({ energy: 'LOW', emotion: 'EXCITED' })).toBe('quiet');
   });
 
   it('marks a slow delivery [measured]', () => {
@@ -138,13 +157,22 @@ describe('deliveryMark: the mark an editor writes beside a block', () => {
     expect(read({ emotion: 'TENSE', pace: 'FAST', energy: 'LOW' })).toBe('urgent');
   });
 
-  it('gives every possible delivery one of the five marks or none', () => {
-    for (const pace of DELIVERY_PACES)
-      for (const energy of DELIVERY_ENERGIES)
-        for (const emotion of DELIVERY_EMOTIONS) {
-          const mark = deliveryMark({ pace, energy, emotion });
-          expect(mark === null || DELIVERY_MARKS.includes(mark)).toBe(true);
-        }
+  it('gives every possible delivery one of the five marks or none — and exactly these', () => {
+    const all = DELIVERY_PACES.flatMap((pace) => DELIVERY_ENERGIES.flatMap((energy) => DELIVERY_EMOTIONS.map((emotion) => ({ pace, energy, emotion }))));
+    expect(all).toHaveLength(54);
+    const tally: Record<string, string[]> = {};
+    for (const d of all) {
+      const mark = deliveryMark(d);
+      expect(mark === null || DELIVERY_MARKS.includes(mark)).toBe(true);
+      (tally[mark ?? 'none'] ??= []).push(`${d.pace} ${d.energy} ${d.emotion}`);
+    }
+    // Every curious, reflective or sombre delivery is marked by its emotion, whatever its pace and energy.
+    expect(tally.curious).toHaveLength(9);
+    expect(tally.reflective).toHaveLength(18);
+    expect(tally.urgent).toEqual(['FAST LOW TENSE', 'FAST MEDIUM TENSE', 'FAST HIGH NEUTRAL', 'FAST HIGH TENSE', 'FAST HIGH EXCITED']);
+    expect(tally.quiet).toEqual(['SLOW LOW NEUTRAL', 'SLOW LOW TENSE', 'SLOW LOW EXCITED', 'NORMAL LOW NEUTRAL', 'NORMAL LOW TENSE', 'NORMAL LOW EXCITED', 'FAST LOW NEUTRAL', 'FAST LOW EXCITED']);
+    expect(tally.measured).toEqual(['SLOW MEDIUM NEUTRAL', 'SLOW MEDIUM TENSE', 'SLOW MEDIUM EXCITED', 'SLOW HIGH NEUTRAL', 'SLOW HIGH TENSE', 'SLOW HIGH EXCITED']);
+    expect(tally.none).toEqual(['NORMAL MEDIUM NEUTRAL', 'NORMAL MEDIUM TENSE', 'NORMAL MEDIUM EXCITED', 'NORMAL HIGH NEUTRAL', 'NORMAL HIGH TENSE', 'NORMAL HIGH EXCITED', 'FAST MEDIUM NEUTRAL', 'FAST MEDIUM EXCITED']);
   });
 
   it('reads only pace, energy and emotion: emphasis and pauses do not change the mark', () => {

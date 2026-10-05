@@ -80,7 +80,10 @@ function pairs(args: ReportArgs): { pairs: [NarrationBlock | null, NarrationBloc
     revised.forEach((r, j) => {
       if (used.has(r.key)) return;
       const prev = revised[j - 1]?.key;
-      out.splice(prev === undefined ? 0 : out.findIndex(([, x]) => x?.key === prev) + 1, 0, [null, r]);
+      let at = prev === undefined ? 0 : out.findIndex(([, x]) => x?.key === prev) + 1;
+      // …but after the blocks removed from an earlier section: sections stay in order.
+      while (at < out.length && !out[at]![1] && out[at]![0]!.section < r.section) at++;
+      out.splice(at, 0, [null, r]);
     });
     return { pairs: out, exact: true };
   }
@@ -88,6 +91,7 @@ function pairs(args: ReportArgs): { pairs: [NarrationBlock | null, NarrationBloc
   return { pairs: sections.flatMap((s) => align(base.filter((b) => b.section === s), revised.filter((b) => b.section === s))), exact: false };
 }
 
+/** `baseRef` only with an exact pairing: a narration change's ref is a base key only when the pass ran on the base itself; otherwise it numbers a draft in between. */
 function reasonsFor(ledger: readonly ScriptReviewChange[], baseRef: string | null, ref: string | null, original: string | null): { reasons: string[]; by: ScriptReviewer[] } {
   const mine = ledger.filter((c) => c.status === 'ACCEPTED' && ((ref && c.savedRef === ref) || (baseRef && c.reviewer === 'NARRATION' && c.ref === baseRef) || (original && c.originalText === original)));
   return { reasons: [...new Set(mine.map((c) => `${c.id}: ${c.reason || 'no reason given'}`))], by: [...new Set(mine.map((c) => c.reviewer))] };
@@ -105,7 +109,7 @@ export function changeReport(args: ReportArgs): ScriptChangeReport {
     const original = a?.text ?? null;
     const revised = b?.text ?? null;
     const status: BlockChange['status'] = !a ? 'ADDED' : !b ? 'REMOVED' : norm(a.text) === norm(b.text) && sameList(a.claimKeys, b.claimKeys) && a.infoClass === b.infoClass ? 'UNCHANGED' : 'REWRITTEN';
-    const why = status === 'UNCHANGED' ? { reasons: [], by: [] } : reasonsFor(args.ledger, a?.key ?? null, b?.key ?? null, original);
+    const why = status === 'UNCHANGED' ? { reasons: [], by: [] } : reasonsFor(args.ledger, exact ? (a?.key ?? null) : null, b?.key ?? null, original);
     const before: AiPattern[] = a && !a.speakerId ? blockPatterns(a) : [];
     const after: AiPattern[] = b && !b.speakerId ? blockPatterns(b) : [];
     const claimsRemoved = a ? a.claimKeys.filter((k) => !(b?.claimKeys ?? []).includes(k)) : [];
