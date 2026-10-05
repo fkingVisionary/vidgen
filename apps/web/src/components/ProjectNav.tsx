@@ -27,6 +27,28 @@ function storyNote(p: ProjectDetailView): string | null {
   }
 }
 
+const SCRIPT_STATUSES: readonly ProjectStatus[] = ['STORY_APPROVED', 'SCRIPT_DRAFT', 'SCRIPT_REVIEW', 'SCRIPT_APPROVED'];
+
+/** True when the project has a script, or one can be written (an approved architecture). */
+export function hasScriptPage(p: ProjectDetailView): boolean {
+  if (p.script) return true;
+  const status = p.status === 'FAILED' ? p.failedFromStatus : p.status;
+  return status !== null && SCRIPT_STATUSES.includes(status);
+}
+
+function scriptNote(p: ProjectDetailView): string | null {
+  switch (p.status) {
+    case 'STORY_APPROVED':
+      return p.script ? `v${p.script.version}` : 'ready to write';
+    case 'SCRIPT_DRAFT':
+      return 'writing…';
+    case 'SCRIPT_REVIEW':
+      return 'approval needed';
+    default:
+      return p.script ? `v${p.script.version}` : null;
+  }
+}
+
 interface NavItem {
   to: string;
   label: string;
@@ -36,7 +58,7 @@ interface NavItem {
   end?: boolean;
 }
 
-/** Links between a project's pages (overview, research dossier, story), shown under each page's title. */
+/** Links between a project's pages (overview, research dossier, story, script), shown under each page's title. */
 export function ProjectNav({ project: p }: { project: ProjectDetailView }) {
   const base = `/projects/${p.slug}`;
   const items: NavItem[] = [{ to: base, label: 'Overview', note: null, attention: false, end: true }];
@@ -46,6 +68,9 @@ export function ProjectNav({ project: p }: { project: ProjectDetailView }) {
   }
   if (hasStoryPage(p)) {
     items.push({ to: `${base}/story`, label: 'Story', note: storyNote(p), attention: p.status === 'STORY_SELECTION' || p.status === 'STORY_REVIEW' || p.status === 'RESEARCH_COMPLETE' });
+  }
+  if (hasScriptPage(p)) {
+    items.push({ to: `${base}/script`, label: 'Script', note: scriptNote(p), attention: p.status === 'SCRIPT_REVIEW' || (p.status === 'STORY_APPROVED' && !p.script) });
   }
   return (
     <nav aria-label="Project pages" className="mt-3 flex flex-wrap gap-2">

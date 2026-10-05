@@ -1,5 +1,9 @@
 import type {
   ApprovalDecision,
+  CastKind,
+  ScriptBlockClass,
+  ScriptOrigin,
+  SectionReviewStatus,
   ApprovalGate,
   ArchitectureOrigin,
   ArtifactStatus,
@@ -41,7 +45,9 @@ import type {
   StoryExplorationContent,
   StoryPackContent,
 } from './contracts/story.ts';
+import type { ScriptBlockContent, ScriptContent, ScriptSectionPlan } from './contracts/script.ts';
 import type { AvailableActions } from './pipeline.ts';
+import type { ScriptTiming } from './script.ts';
 import type { StageView } from './stages.ts';
 
 /**
@@ -139,6 +145,8 @@ export interface ProjectDetailView extends ProjectSummaryView {
   research: DossierSummaryView | null;
   /** Latest story pack and architecture, if any. */
   story: StorySummaryView;
+  /** Latest script version, if any. */
+  script: ScriptSummaryView | null;
 }
 
 export interface DossierSummaryView {
@@ -475,4 +483,100 @@ export interface HealthView {
   providers: ProviderStatusView[];
   /** Pipeline stages backed by real implementations; the rest are MOCK placeholders. */
   realStages: JobType[];
+}
+
+// ---------------------------------------------------------------------------
+// Script Engine
+// ---------------------------------------------------------------------------
+
+export interface ScriptSummaryView {
+  id: string;
+  version: number;
+  status: ArtifactStatus;
+  origin: ScriptOrigin;
+  revisionOfVersion: number | null;
+  /** Sections written for this version (the rest copied unchanged from the base). */
+  sectionsWritten: number[];
+  architectureVersion: number | null;
+  qualityPassed: boolean;
+  wordCount: number;
+  estimatedDurationSec: number;
+  targetDurationSec: number | null;
+  createdAt: string;
+}
+
+export interface ScriptBlockView extends ScriptBlockContent {
+  id: string;
+  /** The text as generated for this version (kept when the editor changes it). */
+  generatedText: string;
+  editedBy: string | null;
+  editedAt: string | null;
+}
+
+export interface ScriptSectionView {
+  id: string;
+  key: string;
+  sequenceNumber: number | null;
+  title: string;
+  plan: ScriptSectionPlan | null;
+  reviewStatus: SectionReviewStatus;
+  editorNotes: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  /** The architecture's estimate for the sequence. */
+  targetDurationSec: number | null;
+  estimatedDurationSec: number;
+  wordCount: number;
+  blocks: ScriptBlockView[];
+}
+
+export interface ScriptVersionView extends ScriptSummaryView {
+  content: ScriptContent | null;
+  sections: ScriptSectionView[];
+  timing: ScriptTiming;
+  qualityReport: QualityReport | null;
+  /** Blocking findings that stop approval (FAIL checks), as the gate last computed them. */
+  blocking: string[];
+  stats: Record<string, unknown>;
+  notes: string | null;
+  cost: ArtifactCostView;
+  approvals: ApprovalView[];
+  evidence: StoryEvidenceView;
+  /** Cast of the architecture (names and kinds), for speakers and fiction labels. */
+  cast: { id: string; name: string; kind: CastKind }[];
+  voice: { provider: string; characters: number; segments: number; pendingPronunciations: number };
+}
+
+/** What the editor can do with the script now, and why not. */
+export interface ScriptEditorialActions {
+  generate: { allowed: boolean; reason: string | null };
+  revise: { allowed: boolean; reason: string | null };
+  /** Edit blocks and review sections of the shown version. */
+  edit: { allowed: boolean; reason: string | null };
+  approve: { allowed: boolean; reason: string | null };
+  restore: { allowed: boolean; reason: string | null };
+}
+
+export interface ScriptView {
+  scripts: ScriptSummaryView[];
+  script: ScriptVersionView | null;
+  /** The approved architecture a new draft would tell. */
+  architecture: { id: string; version: number; status: ArtifactStatus; engineVersion: StoryEngineVersion; logline: string | null; centralQuestion: string | null; estimatedDurationSec: number | null } | null;
+  editorial: ScriptEditorialActions;
+  /** False when SCRIPT is a MOCK stage here (no AI configured). */
+  realStage: boolean;
+}
+
+export interface ScriptCompareView {
+  a: ScriptSummaryView;
+  b: ScriptSummaryView;
+  sections: {
+    sequenceNumber: number | null;
+    title: string;
+    changed: boolean;
+    durationSec: { a: number; b: number };
+    /** Block texts compared in order: unchanged, removed (only in a) or added (only in b). */
+    diff: { op: 'same' | 'removed' | 'added'; text: string; infoClass: ScriptBlockClass }[];
+  }[];
+  totals: { wordsA: number; wordsB: number; durationA: number; durationB: number; sectionsChanged: number };
 }

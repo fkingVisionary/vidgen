@@ -65,6 +65,9 @@ importers:
       '@docengine/research':
         specifier: workspace:*
         version: link:../../modules/research
+      '@docengine/script':
+        specifier: workspace:*
+        version: link:../../modules/script
       '@docengine/story':
         specifier: workspace:*
         version: link:../../modules/story
@@ -145,6 +148,27 @@ importers:
       '@docengine/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+
+  modules/script:
+    dependencies:
+      '@docengine/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@docengine/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@docengine/pipeline':
+        specifier: workspace:*
+        version: link:../../packages/pipeline
+      '@docengine/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      '@docengine/story':
+        specifier: workspace:*
+        version: link:../story
       zod:
         specifier: 'catalog:'
         version: 4.6.5

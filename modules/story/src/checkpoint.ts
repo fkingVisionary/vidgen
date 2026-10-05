@@ -33,12 +33,14 @@ export class StepCheckpoint<S extends string> {
   constructor(
     private readonly ctx: StageContext,
     private readonly order: readonly S[],
+    /** Saved progress from another prompt version is not reused (the story prompts by default). */
+    private readonly promptVersion: string = PROMPT_VERSION,
   ) {
     this.saved = this.fresh();
   }
 
   private fresh(): Saved {
-    return { version: CHECKPOINT_VERSION, promptVersion: PROMPT_VERSION, job: this.ctx.job.type, steps: {} };
+    return { version: CHECKPOINT_VERSION, promptVersion: this.promptVersion, job: this.ctx.job.type, steps: {} };
   }
 
   /** Load the job's saved progress. Returns false if it existed but was written by another version. */
@@ -46,7 +48,7 @@ export class StepCheckpoint<S extends string> {
     const row = await this.ctx.db.job.findUnique({ where: { id: this.ctx.job.id }, select: { checkpoint: true } });
     const raw = row?.checkpoint as Partial<Saved> | null | undefined;
     if (!raw || typeof raw !== 'object') return true;
-    if (raw.version !== CHECKPOINT_VERSION || raw.promptVersion !== PROMPT_VERSION || raw.job !== this.ctx.job.type || typeof raw.steps !== 'object' || !raw.steps) {
+    if (raw.version !== CHECKPOINT_VERSION || raw.promptVersion !== this.promptVersion || raw.job !== this.ctx.job.type || typeof raw.steps !== 'object' || !raw.steps) {
       return false;
     }
     this.saved = raw as Saved;

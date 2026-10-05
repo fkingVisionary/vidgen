@@ -3,6 +3,7 @@ import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers, t
 import type { JobType } from '@docengine/core';
 import { createProviders, describeProviders, type ProviderSet } from '@docengine/providers';
 import { createResearchStage, type ResearchConfig } from '@docengine/research';
+import { ScriptEditing, createScriptStage, parseScriptModels, type ScriptConfig } from '@docengine/script';
 import { createStoryAnglesStage, createStoryArchitectureStage, createStoryMiningStage, type StoryConfig } from '@docengine/story';
 import type { Logger } from 'pino';
 import { providerSelection, providerSettings, type Env } from './env.ts';
@@ -19,6 +20,8 @@ export interface AppContainer {
   queue: JobQueue;
   projects: ProjectService;
   runner: JobRunner;
+  /** The editor's changes to the script under review. */
+  scripts: ScriptEditing;
   /** Stages backed by real implementations (all others are MOCK placeholders). */
   realStages: JobType[];
   close(): Promise<void>;
@@ -27,7 +30,7 @@ export interface AppContainer {
 export function createContainer(
   env: Env,
   logger: Logger,
-  overrides: { db?: Database; providers?: ProviderSet; researchConfig?: Partial<ResearchConfig>; storyConfig?: Partial<StoryConfig> } = {},
+  overrides: { db?: Database; providers?: ProviderSet; researchConfig?: Partial<ResearchConfig>; storyConfig?: Partial<StoryConfig>; scriptConfig?: Partial<ScriptConfig> } = {},
 ): AppContainer {
   const db = overrides.db ?? createDatabase({ connectionString: env.DATABASE_URL, maxConnections: env.DATABASE_POOL_SIZE });
   // Fails fast with a clear message if a provider is configured that is not implemented.
@@ -49,6 +52,7 @@ export function createContainer(
     handlers.STORY_MINING = createStoryMiningStage(story);
     handlers.STORY_ARCHITECTURE = createStoryArchitectureStage(story);
     handlers.STORY_ANGLES = createStoryAnglesStage(story);
+    handlers.SCRIPT = createScriptStage({ maxCostUsd: env.SCRIPT_MAX_COST_USD, models: parseScriptModels(env.SCRIPT_MODELS), ...overrides.scriptConfig });
   }
   const realStages = Object.values(handlers).filter((h) => !h.mock).map((h) => h.type);
   const runner = new JobRunner({
@@ -75,6 +79,7 @@ export function createContainer(
     queue,
     projects,
     runner,
+    scripts: new ScriptEditing(db),
     realStages,
     async close() {
       await runner.stop();

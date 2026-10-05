@@ -56,6 +56,12 @@ export const EnvSchema = z
     /** Hard ceiling on one story-mining or story-architecture job's estimated provider spend (USD). */
     STORY_MAX_COST_USD: opt(z.coerce.number().min(0.5).max(200).default(15)),
 
+    // Script stage
+    /** Hard ceiling on one script job's estimated provider spend (USD): a draft, a revision or a section rewrite. */
+    SCRIPT_MAX_COST_USD: opt(z.coerce.number().min(0.5).max(200).default(15)),
+    /** Optional per-step model overrides, e.g. "perform=<model id>" (steps: plan, write, edit, factCheck, perform). Unset steps use AI_MODEL. */
+    SCRIPT_MODELS: opt(z.string().max(500).optional()),
+
     /** Directory of the built dashboard. Defaults to apps/web/dist. */
     WEB_DIST_DIR: opt(z.string().optional()),
     /** Set by Railway on deploys; shown on /api/health. */

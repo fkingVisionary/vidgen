@@ -6,7 +6,8 @@
   "description": "Story stage: mines an approved research dossier for evidence-backed story units, ranks them, and turns the editor's selection into a documentary architecture.",
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./shared": "./src/shared.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

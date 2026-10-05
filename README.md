@@ -5,9 +5,9 @@ AI-assisted production system for premium historical & economic documentaries
 visuals & infographics → edit → QA → render → publish, with a human approving
 every important step.
 
-**Current state: V1, milestone 3 + Story Engine 2.0 (deployed; first
-acceptance run done) + the editorial revision loop and alternative angles
-(built and tested locally).** The
+**Current state: V1, milestone 3 + Story Engine 2.0 + the editorial revision
+loop and alternative angles (deployed) + Script Engine 1.0 (built and tested;
+acceptance run pending).** The
 pipeline, database, job system, provider abstractions and dashboard are real
 and tested (milestone 1). The **Research** stage is real when Anthropic
 (Claude) and Tavily are configured: it builds a versioned dossier of claims
@@ -25,8 +25,14 @@ one; nothing is generated from them yet. The editor can **reconsider** an
 architecture — say what is not working and the architect revises it into a new
 version, every earlier version kept — and **explore alternative angles** (2–3
 materially different approaches to the same units) before committing to one,
-always from the same story pack and approved evidence. Every later stage (script,
-voice, visuals, edit, publish) is still a clearly labelled **MOCK**. First test
+always from the same story pack and approved evidence. The **Script Engine**
+turns the approved architecture into a structured spoken script — sections of
+narration blocks, each with its information class, the claims behind it,
+delivery, semantic pauses, emphasis, pronunciation notes and visual intent —
+reviewed by a script editor and a fact checker and checked by deterministic
+rules; the editor edits, approves or rejects sections, regenerates single
+sections and approves the whole script. Every later stage (voice, visuals,
+edit, publish) is still a clearly labelled **MOCK**. First test
 episode: *Tulip Mania — The Bubble That Became a Legend*.
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design, data model, providers, jobs, decisions
@@ -52,6 +58,7 @@ packages/pipeline  Project state service, job queue & runner, stage handler cont
 modules/research   The RESEARCH stage: plan → search → retrieve → read → synthesise → quality gate
 modules/story      STORY_MINING (mine → evidence rules → critic → rank → proposed selection → gate)
                    and STORY_ARCHITECTURE (architect → evidence rules → reviewer → gate)
+modules/script     SCRIPT (planner → writer → rules → script editor → fact checker → performance → gate)
 docs/  scripts/  test/
 ```
 
@@ -188,6 +195,41 @@ With `AI_PROVIDER=anthropic`, once a research dossier is approved:
 
 `STORY_MAX_COST_USD=15` stops a mining, architecture, revision or angles job
 whose recorded spend passes it. Like research, retries reuse completed model calls.
+
+## Script
+
+Once the story architecture is approved (Story Engine 2.0), the project's
+**Script** page:
+
+1. **Generate Script Draft** (optional instructions for the writer). Five
+   model calls — planner, writer, script editor, fact checker, performance —
+   then the deterministic quality gate, and the project stops in *Script
+   review*. The script never reinterprets the research: every fact traces to
+   a claim the approved architecture cites.
+2. Read it as it will be heard: sections of narration blocks coloured by
+   information class (documented, reconstruction, uncertain, fiction,
+   framing), with the claims behind each block, pauses (‖), emphasis
+   (underlined), pace / energy / emotion where they matter, duration and
+   visual intent. The header shows the version, the architecture version,
+   the runtime against the target with its variance, the word count, the
+   gate and the cost.
+3. **Edit** a block (text, class, delivery, pauses, emphasis, visual
+   intent), reorder blocks (▲▼), **Approve section**, **Reject**, **Add
+   note**. Each change re-runs the rules at once; the generated text is kept.
+4. **Regenerate section…** with a brief: a new version where only that
+   section is rewritten (and reviewed); the others are copied unchanged, with
+   no model calls. **Generate Revision** rewrites the whole script from a
+   brief. **Versions** tab: every version, **compare** two section by
+   section, or make an earlier one current again.
+5. **Approve Entire Script** — refused while the gate has blocking findings
+   (fiction presented as documented fact, invented words for a real person,
+   an unsupported figure, a myth told as fact, a missing sequence…) or a
+   section is rejected. Nothing is voiced: the **Pronunciation & voice** tab
+   shows the pronunciation notes (every model pronunciation is flagged for a
+   person to check) and what the ElevenLabs adapter would be sent.
+
+`SCRIPT_MAX_COST_USD=15` stops a script job whose recorded spend passes it;
+`SCRIPT_MODELS` (optional) sets a model per step.
 
 `GET /api/health` lists the stages that are real (`realStages`). Progress
 appears in the project's Activity panel. (A full run with real Claude has not

@@ -1,9 +1,10 @@
 # Status — what exists, honestly
 
-Last updated: the editorial revision loop and alternative angles — built and
-tested locally with a scripted fake AI, **not yet run with the real model**
-(2026-10-05). Story Engine 2.0 is deployed to Railway (`a9f584f`) and the
-editor reports a successful first acceptance run with the real model.
+Last updated: Script Engine 1.0 — built and tested locally with a scripted
+fake AI; the Tulip Mania acceptance script with the real model is the next
+step (2026-10-05). The editorial revision loop and alternative angles are
+deployed (`f2373d0`). Story Engine 2.0 is deployed and the editor reports a
+successful first acceptance run with the real model.
 
 ## IMPLEMENTED (real, tested)
 
@@ -13,7 +14,7 @@ editor reports a successful first acceptance run with the real model.
 | Domain model | Status machine (24 statuses, 7 transition kinds), pipeline table, stage derivation, progress, available actions | `packages/core/src/*.test.ts` |
 | Contracts | zod schemas: API inputs, story candidates and architecture (StoryCharacter, MythThread, StoryScores, StoryPackContent, StoryArchitectureContent), VoiceSettings, ShotDirection, QaFindings, InfographicSpec (mandatory source, finite numbers, approximate flags, reference checks) | `contracts.test.ts` |
 | Cost math | Usage × rate card in micro-dollars, unpriced-usage reporting, exact sums | `cost.test.ts` |
-| Database | Prisma 7 schema (28 tables, 33 enums), six migrations (initial; research engine; job checkpoint; story mining; story engine 2; story revisions — the last three additive only), timestamptz, UUIDv7, cascade rules, enum parity test vs core | `enum-parity.test.ts`, integration tests; the story migration was applied by the production image to a database in the current production shape |
+| Database | Prisma 7 schema (30 tables, 35 enums), seven migrations (initial; research engine; job checkpoint; story mining; story engine 2; story revisions; script engine — the last four additive only), timestamptz, UUIDv7, cascade rules, enum parity test vs core | `enum-parity.test.ts`, integration tests; the story migration was applied by the production image to a database in the current production shape |
 | Project service | Create (with master language version), enqueue, retry, approve/reject/flag (artifact version linked: dossier, story architecture), rewind, restart a phase (rewind + enqueue), editor changes to story candidates, revise an architecture, explore angles (a side job that never moves the project); row-locked transactions; audit events; stale-job protection | `project-service.int.test.ts`, `runner.int.test.ts` |
 | Job system | Postgres queue (`SKIP LOCKED`), runner with concurrency, heartbeat, exponential backoff, non-retryable errors, abandoned-job recovery, shutdown release, provider-call ledger | `runner.int.test.ts` |
 | API | Fastify: health, projects (list/create/detail by id or slug), jobs (enqueue/get/retry), approvals, rewind; zod validation; error mapping; Basic auth; security headers; static dashboard + SPA fallback; graceful shutdown | `app.int.test.ts`, `env.test.ts`, manual SIGTERM test |
@@ -37,9 +38,15 @@ editor reports a successful first acceptance run with the real model.
 | **Alternative angles** (REV) | `POST …/story/angles` (2 or 3, optional brief, optionally as alternatives to a version): a STORY_ANGLES side job, one model call; rules keep only the pack's units, label the opening's information class, derive claims, historical status and confidence, remove angles with outside figures, years, people, unknown names or unverified quotations, flag HIGH-priority units left out, and remove an angle that is not materially different from another (or from the base architecture). Stored as versioned explorations; fewer than two surviving angles fail only the side job. *Develop this angle* builds on it (selection) or revises toward it (review/approved); the architecture records the angle | `angles.test.ts` (5), `story.int.test.ts` (4), `app.int.test.ts` |
 | **Revision & angles dashboard** (REV) | Story page: the Reconsider / Revise panel (checklist, brief, preferences, toward an explored angle), the revision record (brief, the architect's change log, the measured changes, the reviewers' re-run), the version history (every version, its origin and angle), an Angles tab (explore, compare, removed angles with reasons, gate report, develop), the approval box names the version under review | Playwright at 412 px and 1280 px on fake-AI data: explore → develop → v1; revise v2 → v3 with v1/v2 kept; failed revision; no horizontal overflow, no console errors |
 | **Research boundary** (SE2) | Story code never writes research tables (static guard over the story stages and story API) and does not use the research module; a full mining → architecture → approval → opportunity decision run leaves the research tables byte-for-byte equal; `modules/research` unchanged | `boundaries.test.ts`, `story.int.test.ts` |
+| **Script Engine 1.0** (SCR) | Turns the approved Story Engine 2.0 architecture into a structured spoken script (ARCHITECTURE.md §15): planner (narrator, a plan and runtime share per sequence) → writer (sections of narration blocks: beats realised, information class incl. FRAMING, claim keys, speaker, visual intent) → rules → script editor (craft scores, issues, a targeted patch) → rules → fact checker (last word on facts, a patch) → rules → performance (pace, energy, emotion, semantic pauses with reasons, emphasis on words in the text, pronunciations — all flagged for review) → gate → a new version IN_REVIEW. A patch is kept only if it adds no blocking findings; issues follow blocks as they move. Timing from spoken words (150 wpm), pace and pauses against the project's target, with the variance. Checkpointed steps (a retry resumes), cost ceiling, per-step models from configuration | `script.int.test.ts` (8 tests: draft traced/timed/performed, research and story tables unchanged, five calls in the ledger; resume after a transient failure; an unavailable reviewer; a reviewer patch kept only when it helps; blocking findings reach review but stop approval), `draft.test.ts` (5), `script.test.ts` (4) |
+| **Script rules and gate** (SCR) | ≈ 50 deterministic finding kinds: evidence (claims and beats outside the architecture, unsupported figures and years, people and names), classes (mismatch, DOCUMENTED on non-established claims, framing with facts, unplanned fiction), uncertainty wording (MYTH / DISPUTED / UNVERIFIED / PROBABLE), the fiction boundary (fiction in documented narration, interacting with real people, performing documented or dated acts, carrying facts), speech (real people only in verified recorded quotations, fabricated quotes), structure (missing sequences, the central question posed and answered, runtime), open critical fact issues; warnings for story shape, reconstruction budget, interiority, writing for the ear, pause/emphasis overuse, section balance, pronunciation, visual evidence. Blocking findings stop approval, not review | `rules.test.ts` (17, incl. the brief's safety cases: a fictional companion's fictional action passes; a fictional companion in a documented event fails; invented dialogue for a real person fails; an unsupported number fails; a myth stated as fact fails; a disputed claim worded as disputed passes) |
+| **Script editing and versions** (SCR) | In SCRIPT_REVIEW, on the version under review only: edit a block (text, class, delivery, pauses, emphasis, visual intent; the generated text kept), reorder a section, approve / reject a section with notes — each change re-runs the rules (no model calls) and is logged with the before state. Regenerate chosen sections (others copied unchanged, no model calls for them), revise the whole script from a brief, restore an earlier version as a new one (no model calls); every version kept with its origin, base, brief, requester, change log, architecture version, models, cost; compare versions section by section. Approval at the SCRIPT gate refused while blocking findings or rejected sections remain; approving supersedes the earlier approved version | `script.int.test.ts`, `app.int.test.ts` (2: the full editor flow through the HTTP API; MOCK and no-architecture refusals) |
+| **Voice rendering adapter** (SCR) | Provider-neutral `VoiceScriptAdapter`; ElevenLabs first: requests per run of the same pace, speed per pace, break tags for semantic pauses (capped at 3 s), neighbouring text, a dictionary of confirmed pronunciations only, unsupported markup listed. `GET …/script/voice-plan` shows it; **no audio is generated** | `voice-render.test.ts` (2), `app.int.test.ts` |
+| **Script API + dashboard** (SCR) | `GET/POST /api/projects/:id/script`, `…/script/revise`, `…/script/restore`, `…/script/compare`, `…/script/voice-plan`, `PATCH /api/script-blocks/:id`, `PUT /api/script-sections/:id/order`, `PATCH /api/script-sections/:id`; approval through the SCRIPT gate. Script page: header (version, architecture version, runtime vs target with variance, words, status, gate, cost), sections with blocks coloured by class, claims, pause marks, emphasis, delivery chips, duration, visual intent, edit/reorder/approve/reject/note/regenerate controls; Quality gate, Pronunciation & voice, Versions (compare, restore) and Runs & cost tabs; linked from the overview, the Story page and the nav bar | `app.int.test.ts`; Playwright at 412 px and 1280 px on fake-AI data (see below) |
+| **Script boundary** (SCR) | Script code never writes research or story tables (static guard over the stage, the API and the read models) and does not use the research module; a draft leaves the research and story records unchanged | `boundaries.test.ts` (script), `script.int.test.ts` |
 | **Story API + dashboard** (M3) | `GET /api/projects/:id/story`, `PATCH /api/story-candidates/:id`, `POST …/story/mine`, `POST …/story/architecture` (selection checked first); Story page: ranked candidates with scores and the ranking formula, arcs, myth threads, evidence (claims, quotes, sources), editor controls (approve/reject/flag, in-the-documentary, priority, notes), selection vs AI proposal, architecture with sequences and per-sequence evidence, both gate reports, cost; approval panel (Approve / Reject → Rework / Flag). Project pages are linked by an Overview · Research dossier · Story bar; the Research and Story stage boxes open their pages; new pages open at the top; pages fit a phone screen | `app.int.test.ts`; Playwright run on fake-AI data (editor actions, selection limits, rejection) with no console errors; Playwright at a 412 px phone viewport: every route into the Story page, no horizontal overflow |
 
-Test counts at time of writing: **324 unit** (21 files) + **69 integration** (5 files), all passing.
+Test counts at time of writing: **358 unit** (26 files) + **79 integration** (6 files), all passing.
 
 ## FIRST LIVE RUN (Railway, 2026-10-04)
 
@@ -103,6 +110,9 @@ a retry two minutes later succeeded.
 
 ## NOT YET VERIFIED LIVE
 
+- **Script Engine 1.0**: no run with the real model yet (the Tulip Mania
+  acceptance script is the next step). Its real cost, timing and gate results
+  are not measured.
 - **The editorial revision loop and alternative angles**: no run with the real
   model yet. Everything above was tested with a scripted fake AI and synthetic
   data; how well the real model restructures from a brief, and how different
@@ -121,20 +131,20 @@ a retry two minutes later succeeded.
 | Area | Mock behaviour |
 |---|---|
 | Voice, video, storage, render, publishing providers (and AI/research when set to `mock`) | See ARCHITECTURE.md §6. $0 cost, realistic usage, `MOCK` labels, `MOCK_FAIL` failure trigger |
-| All stage handlers except RESEARCH, STORY_MINING and STORY_ARCHITECTURE (and those when their providers are `mock`) | Call their provider interface once through the ledger and return a `{ mock: true, … }` result. They create **no** story candidates or architectures (in mock mode), scripts, scenes, storyboards, shots, infographics, timelines, renders or QA reports. The dashboard says which stages are real and which are MOCK placeholders |
+| All stage handlers except RESEARCH, STORY_MINING, STORY_ARCHITECTURE, STORY_ANGLES and SCRIPT (and those when their providers are `mock`) | Call their provider interface once through the ledger and return a `{ mock: true, … }` result. They create **no** story candidates, architectures or scripts (in mock mode; the script routes refuse to write one), storyboards, shots, infographics, timelines, renders or QA reports. The dashboard says which stages are real and which are MOCK placeholders |
 | Storage | In-memory; contents vanish on restart |
 
 ## PLANNED (designed — interface/schema exists — not implemented)
 
 - Real providers: ElevenLabs, Higgsfield, S3/R2 storage, FFmpeg + Remotion rendering, YouTube publishing; alternative research providers (Exa, Claude web search)
-- Writing creative artifacts: tables for script/scenes/narration, storyboard/shots, infographics, timelines, renders, QA reports exist but nothing writes them
+- Writing creative artifacts: tables for storyboard/shots, infographics, timelines, renders, QA reports exist but nothing writes them (the script tables are written by Script Engine 1.0)
 - Standalone worker deployment (entry point exists, not deployed); BullMQ queue (interface designed)
 - Per-shot child jobs for visual generation fan-out
 - Language versions beyond the master (schema ready; no translation stage, no UI to add a language)
 
 ## NOT YET BUILT (no code, no schema beyond notes)
 
-- Script engine, script QA scores (milestone 4 onward)
+- Voice production: ElevenLabs calls, audio, word timestamps (the voice plan is built, nothing is sent); confirming pronunciations in the dashboard
 - Anything generated from content opportunities: short scripts, voice, video, captions, renders, platform exports (the content package endpoint only resolves what would be used)
 - Narration generation, subtitles (SRT/VTT), audio mixing, sound design, music/SFX selection
 - Visual director, continuity bibles (character/location/object/style), image/video generation

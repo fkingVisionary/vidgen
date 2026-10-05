@@ -77,7 +77,7 @@ packages/
   database/   Prisma 7 schema, migrations, client factory, test helpers
   providers/  Provider interfaces, MOCK implementations, registry, reusable contract test suites
   pipeline/   ProjectService (state changes), JobQueue, JobRunner, StageContext, stage handler contract, MOCK stage handlers
-modules/      Real stage implementations: research (M2), story (M3: mining + architecture); later script, voice, visual-director, infographics, editor, qa
+modules/      Real stage implementations: research (M2), story (M3: mining + architecture, revisions, angles), script (Script Engine 1.0); later voice, visual-director, infographics, editor, qa
 docs/         Architecture, deployment, status
 scripts/      release.sh (migrations + seed), test DB init
 test/         Shared integration-test setup
@@ -104,7 +104,7 @@ Creating eight empty packages today would be ceremony without content.
 ## 4. Pipeline and state machine
 
 The project `status` is the master pipeline phase (linear, as in the brief,
-plus two added review statuses — see §15, D5–D6). Dashboard stages are derived.
+plus two added review statuses — see §16, D5–D6). Dashboard stages are derived.
 
 | Status | Dashboard stage | Jobs that run here | Leaves by |
 |---|---|---|---|
@@ -154,7 +154,7 @@ failed) are not thrown away.
 
 ## 5. Data model
 
-25 tables. Fields that are filtered/joined/queried are typed columns; creative
+30 tables. Fields that are filtered/joined/queried are typed columns; creative
 payloads still evolving (story sequences, shot direction, infographic specs,
 timeline tracks, QA findings) are JSONB validated by zod contracts in
 `packages/core/src/contracts`. Primary keys are UUIDv7. Timestamps are
@@ -186,6 +186,10 @@ erDiagram
   scripts ||--o{ scenes : "language-neutral structure"
   scenes ||--o{ scene_narrations : "one per language"
   language_versions ||--o{ scene_narrations : ""
+  scene_narrations ||--o{ script_blocks : "narration blocks"
+  script_blocks ||--o{ script_block_claims : "cites"
+  research_claims ||--o{ script_block_claims : ""
+  story_architectures ||--o{ scripts : "told by"
   projects ||--o{ storyboards : versions
   storyboards ||--o{ shots : plans
   scenes ||--o{ shots : ""
@@ -219,11 +223,20 @@ erDiagram
 | `content_opportunity_claims` | Opportunity ↔ dossier claim (FK), like the candidates' links. |
 | `story_architectures` | Versioned blueprint (gate STORY): `content` = premise, central question, narrative spine, resolution, sequences (candidate ids/keys, hook, question, key events with claim keys, characters, conflict, escalation, reveal, ending beat, claim keys, derived source ids, caveats, historical status/confidence, duration), unused units with reasons; `pack_id`, `dossier_id`, target and estimated duration, `quality_report`, `stats`, `notes` (the editor's instructions), `job_id`. Approvals link the exact version (`approvals.story_id`). |
 
+### The script (Script Engine 1.0, §15)
+
+| Table | Notes |
+|---|---|
+| `scripts` | Versioned (`unique(project_id, version)`, gate SCRIPT): `story_id` (the approved architecture it tells), `engine_version` (1 = Script Engine 1.0), `content` (`ScriptContent`: narrator, central question with the blocks that pose and answer it, pronunciations, the script editor's and fact checker's reviews, provenance — origin, base version, sections written, brief, who asked, the writer's change log), `quality_report`, `quality_passed`, `stats` (models, prompt version, timing, classes, findings, resumed steps), `target_duration_sec`, `estimated_duration_sec`, `word_count`, `notes` (the brief), `revision_of_id`, `job_id`. Approvals link the exact version (`approvals.script_id`). |
+| `scenes` | **The script is language-neutral structure; the words are per language.** One per architecture sequence: `scene_key` ("SC01"), `sequence_number`, title, `content` (the planner's section plan), the editor's `review_status` (PENDING / APPROVED / REJECTED), `editor_notes`, `reviewed_by` / `reviewed_at`. |
+| `scene_narrations` | One per scene and language: the section's full text, word count and estimated duration (audio asset and word timestamps later, from the voice stage). |
+| `script_blocks` | The narration blocks of a section, in `sort_order`: `block_key` ("3.4"), `text`, `generated_text` (what the model wrote; kept when the editor changes `text`), `info_class` (DOCUMENTED / RECONSTRUCTION / UNCERTAIN / FICTION / FRAMING), `beat_ids` (the architecture beats it tells), `speaker_id` + `speech_kind` (RECORDED_QUOTE / INVENTED), `fictional_device`, `delivery` (pace, energy, emotion, emphasis, pauses before and after with a reason), `visual` (intent, must show with claim keys, must avoid, priority, note), `presentation` (how uncertain claims must be worded), word count, estimated duration, `edited_by` / `edited_at`. |
+| `script_block_claims` | Block ↔ dossier claim (FK), like the candidates' and opportunities' links. |
+
 ### Creative artifacts (schema only — no code writes them yet)
 
 | Table | Notes |
 |---|---|
-| `scripts`, `scenes`, `scene_narrations` | **The script is language-neutral structure; the words are per language.** A scene has a stable `scene_key` ("S01"), tone, visual intent, infographic & sound opportunities. `scene_narrations` holds text, word count, audio asset, duration and word timestamps for one language. |
 | `storyboards`, `shots` | Shot type, camera motion, visual type, duration, `direction` JSON (lens, composition, period, characters, props, lighting, colour, action, continuity), provider-neutral `generation_prompt` / `negative_prompt`, selected asset. Generation attempts are `provider_calls` rows with `shot_id`, so a failed shot is retried on its own. |
 | `infographics` | Chart type + `spec` (the `InfographicSpec` contract: data, labels, annotations, mandatory source, animation, duration). Rendered deterministically. |
 | `timelines`, `renders`, `qa_reports` | Per language. Timeline track contract is defined in the editing milestone. |
@@ -844,7 +857,175 @@ so (or leave it), and new evidence means a new research pass. After a failed
 revision the project is FAILED; the way back is to retry, revise again, or go
 back to the selection — there is no "return to reviewing vN" action yet.
 
-## 15. Decisions
+## 15. Script Engine 1.0
+
+`modules/script` turns the **approved** Story Engine 2.0 architecture into a
+structured spoken script. It tells the architecture; it does not reinterpret
+the research. Its evidence is exactly the architecture's: the claims its
+sequences and beats cite (including labelled background claims), read from
+the dossier the architecture was built on. It never writes to research or
+story tables (a static test scans the stage, the API and the read models; the
+integration tests compare those tables before and after) and calls no
+research provider.
+
+```
+POST /api/projects/:id/script { notes? }            (STORY_APPROVED → SCRIPT_DRAFT, START;
+                                                     or a fresh draft from SCRIPT_REVIEW / SCRIPT_APPROVED)
+  → SCRIPT job:  planner → writer → rules → script editor (+ patch) → rules
+                 → fact checker (+ patch) → rules → performance → gate
+  → script vN (IN_REVIEW) → SCRIPT_REVIEW → the editor → gate SCRIPT → SCRIPT_APPROVED
+
+POST /api/projects/:id/script/revise { baseVersion, sections: [3], brief }   one section (or several)
+POST /api/projects/:id/script/revise { baseVersion, brief }                  the whole script
+POST /api/projects/:id/script/restore { version }                            an earlier version, as a new one
+PATCH /api/script-blocks/:id · PUT /api/script-sections/:id/order · PATCH /api/script-sections/:id
+GET  /api/projects/:id/script[?version=N] · …/script/compare?a=&b= · …/script/voice-plan[?version=N]
+```
+
+The generic `POST /api/projects/:id/jobs` refuses a SCRIPT revision and, where
+the stage is real, routes a SCRIPT job through the same service call (which
+checks for an approved architecture first). Where the AI provider is a MOCK,
+the script routes refuse to write (409): a script is never faked.
+
+**The five steps** (each a structured-output call through the `AIProvider`
+interface; tasks `script.plan`, `script.write` / `script.rewrite`,
+`script.edit`, `script.factCheck`, `script.perform`):
+
+1. **Planner** — the narrator (persona, tone, approach) and a plan per
+   sequence: purpose, approach, what to show rather than say, the exposition
+   it needs, tension, reveal, whether narration should be sparse, and a share
+   of the target runtime.
+2. **Writer** — the narration as blocks, each realising named beats, with its
+   information class, the claim keys behind it, a speaker for quoted or
+   invented lines, and visual intent. Code then derives the rest: block keys
+   ("3.4"), word counts and durations, presentation instructions for
+   uncertain claims (from the architecture), the fictional-device flag, and
+   which blocks pose and answer the central question. Claim keys outside the
+   architecture and beat ids it does not have are dropped with a note.
+3. **Script editor** (craft) and 4. **fact checker** (the last word on
+   facts) — each returns a verdict, issues (severity, kind, block, note) and a
+   targeted patch: edits, removals and insertions by block reference. A patch
+   is applied, the blocks renumbered, and the patch **kept only if the rules
+   find no more blocking problems after it than before**; where blocks moved
+   is tracked so every issue still points at the right block, and each issue
+   records whether it was fixed. The editor's scores (narrative, audio flow,
+   clarity, emotion, ending) are recorded and never block. A reviewer that
+   cannot run (a permanent provider error) is reported on the gate, not fatal.
+5. **Performance** — delivery only where it matters (pace SLOW / NORMAL /
+   FAST, energy LOW / MEDIUM / HIGH, emotion NEUTRAL / TENSE / CURIOUS /
+   SOMBER / EXCITED / REFLECTIVE), semantic pauses (MICRO / SHORT / MEDIUM /
+   LONG, each with a reason: REVEAL, NUMBER, EMOTIONAL_TURN, TRANSITION,
+   IMPACT, QUESTION, RHYTHM), emphasis on words that are in the block's text (others are
+   dropped), and pronunciation notes (respelling, IPA when known, language,
+   confidence). **Every model pronunciation is flagged for human review**;
+   one an editor confirmed is never replaced by a model's.
+
+**Information classes.** A block keeps the class of the beats it tells:
+DOCUMENTED, RECONSTRUCTION, UNCERTAIN, FICTION — plus FRAMING for the
+narrator's connective lines, which may carry no claim, figure or date. The
+class is stored per block and shown in colour; fictional devices are flagged
+and dashed.
+
+**The rules** (`checkScript`, deterministic) run after every model step,
+after every human edit and on the final version. *Blocking* findings:
+
+| Area | Findings |
+|---|---|
+| Evidence | a claim the architecture does not cite; narration that realises no beat; documented / uncertain / reconstructed narration citing no claim; a figure or year in none of the block's claims (or the architecture's, which are then linked); a dossier person the architecture does not cite; a name nobody knows |
+| Classes | a class that does not match the beats; DOCUMENTED resting on claims that are not ESTABLISHED; framing with facts; fiction where none was planned |
+| Uncertainty | MYTH told as fact or outside uncertain narration; DISPUTED / UNVERIFIED without words saying so; PROBABLE without a hedge |
+| Fiction | a fictional device in documented narration; fiction speaking to, touching or trading with a real person; fiction performing a documented or dated act (a year or calendar date in the same sentence); fiction carrying figures or dates |
+| Speech | a speaker outside the cast; words given to a real person that are not a verified recorded quotation; a fictional character given a "recorded" quote; a recorded quote that is not verbatim in its claims' verified quotations; any quoted words that are not a verified quotation |
+| Structure | a sequence with no narration; the central question never posed or not answered at the end; runtime more than 20% outside the target range; an open CRITICAL fact-checker issue on a block nobody has changed since |
+
+*Warnings* (the editor decides): a beat told in another sequence; the question
+posed late; runs of facts with nobody in them; exposition-heavy sections; low
+human presence; the reconstruction budget (40% reconstruction + fiction, 25%
+fiction); real people apparently given thoughts or feelings; written-for-the-
+ear checks (long sentences or blocks, over 75 s without a pause or scene
+change, repetitive openings, repeated phrases, stock AI phrases, rhetorical
+questions, formulaic transitions, symbols a narrator cannot read); pause and
+emphasis overuse; runtime near the edge; sections far from their planned
+length; pronunciations to confirm or missing for a name; a visual detail to
+show without its claims. The wording, subject–verb and speech patterns are
+heuristics and are documented as such: they catch the common cases, the two
+reviewers and the editor the rest.
+
+**The gate blocks approval, not review.** A script job that produces a script
+always saves it IN_REVIEW and moves the project to SCRIPT_REVIEW, so the editor
+can see and fix what failed. Approval at the SCRIPT gate is refused (409) while
+the version has blocking findings or a REJECTED section. Approving supersedes
+the earlier approved version (kept, `SCRIPT_SUPERSEDED`).
+
+**Timing.** 150 spoken words a minute (years read as two words, "1,200" as
+two, punctuation silent), divided by a pace factor (SLOW 0.88, NORMAL 1, FAST
+1.12), plus pauses (MICRO 0.25 s, SHORT 0.6 s, MEDIUM 1.2 s, LONG 2 s). The
+target is the project's runtime (`runtimeTarget`: the range and its
+midpoint); the variance is shown, and the fit is WITHIN, NEAR (a warning) or
+OFF (more than 20% outside the range: blocking). The prompts say not to pad to hit a number.
+
+**Editing.** Only the version under review is changed, and only in
+SCRIPT_REVIEW: a block's text, class, delivery (pace, energy, emotion,
+pauses, emphasis) and visual intent; the order of a section's blocks; a
+section's decision (approve / reject) and note. Each change re-runs the rules
+at once (no model calls), keeps the generated text, and is logged with what it
+was before (`SCRIPT_EDITED`, `SCRIPT_SECTION_REVIEWED`). A figure the editor
+types that another claim of the architecture supports links that claim.
+
+**Regeneration and versions.** "Regenerate section" makes a new version from
+the base: only the chosen sections go to the writer (`script.rewrite`, with
+the whole script for the joins, the editor's notes and brief, and the base
+plan — no planner call); every other section is **copied unchanged** (text,
+edits, order, decisions) with no model calls; the reviewers and the
+performance pass see and may change only the rewritten sections. "Generate
+revision" rewrites the whole script from a brief (planned again). "Restore"
+copies an earlier version as a new one (rules re-run, no model calls). A new
+version supersedes the DRAFT / IN_REVIEW ones; nothing is ever deleted or
+changed after the fact. Each version records what changed and why (the
+writer's change log), who asked, the brief, the architecture version, the
+models that served each step, its cost (the job's ledger rows) and when;
+`compare` shows two versions section by section (blocks same / removed /
+added, words and durations). A revision must tell the currently approved
+architecture: a script of an earlier architecture can be read and restored
+only if that architecture is still the approved one, otherwise a new draft
+is needed.
+
+**Voice handoff (no audio).** The script is provider-neutral. A
+`VoiceScriptAdapter` turns it into requests; `ElevenLabsScriptAdapter` is the
+first: one request per run of blocks with the same pace in a section, speed
+SLOW 0.92 / NORMAL 1 / FAST 1.08, pauses as `<break time="x.xs" />` (capped
+at the provider's 3 s), the neighbouring text as `previousText` /
+`nextText`, and a pronunciation dictionary of **confirmed** entries only (the
+rest listed as pending). What the provider cannot express per block (emphasis,
+energy, emotion) is listed, not dropped silently. `GET …/script/voice-plan`
+shows the plan; no voice call is made — automated voice production is a
+later milestone.
+
+**Visual handoff.** Each block carries visual intent (CINEMATIC_RECONSTRUCTION,
+DOCUMENT, MAP, DATA, TIMELINE, ARCHIVAL, PORTRAIT, ENVIRONMENT,
+ABSTRACT_METAPHOR, ON_SCREEN_TEXT, NONE), must-show details with the claim
+keys behind them, must-avoid notes and a priority. Fiction's visuals are
+marked fictional.
+
+**Models, cost, checkpoints.** The model is the AI provider's default
+(`AI_MODEL`) unless `SCRIPT_MODELS` names one per step
+(`perform=…,edit=…`); per-step effort and token limits are in
+`DEFAULT_SCRIPT_CONFIG`. Every call is a `provider_calls` row with its
+estimated cost; `SCRIPT_MAX_COST_USD` (default 15) stops a job (FAILED, not
+retried) once its recorded spend passes it. Each step is checkpointed
+(`PROMPT_VERSION` = `script-1.0-2026-10-05.1`): a retry resumes after the last
+completed call. A section rewrite makes 4 calls (rewrite, editor, fact
+checker, performance) over the chosen sections; a draft or whole revision 5.
+
+**Limits (stated honestly).** The rules see words, not meaning: a fictional
+act phrased without one of the listed verbs, interiority without a listed
+mental verb, or a hedge that is technically present but misleading will pass
+them — the reviewers and the editor are the check. Pronunciations come from
+the model and are never trusted until a person confirms them; confirming them
+in the dashboard is not built yet (the voice plan lists them as pending).
+Timing is an estimate from word counts, not a measurement of a voice.
+
+## 16. Decisions
 
 | # | Decision | Why | Alternative |
 |---|---|---|---|
@@ -899,3 +1080,13 @@ back to the selection — there is no "return to reviewing vN" action yet.
 | D49 | Alternative angles are a side job with its own table (`story_explorations`), not a phase | Exploring must not move the project or invalidate the version under review; angles are treatments to compare, not architectures | A phase between selection and architecture |
 | D50 | "Materially different" is a deterministic rule over mode, POV, opening, human anchor, question and structure | A model asked for three angles can return one film three times; a rule makes "different" checkable and the reasons visible | Trust the model |
 | D51 | Opportunity decisions follow the latest architecture that passed its gate | A failed revision's draft must not lock the opportunities of the version still under review | The latest version, whatever its status |
+| D52 | The script reuses the milestone-1 `scripts` / `scenes` / `scene_narrations` tables and adds `script_blocks` (+ claim links) | The language-neutral design (D10) already fits: a section is a scene, its words a narration; blocks give the structure (class, delivery, visual, evidence) as rows, so claim links cannot dangle | A JSON script blob |
+| D53 | The SCRIPT gate blocks approval, not review | The editor must see and fix what failed (edit a block, rewrite a section); hiding a failed draft behind FAILED would cost a whole regeneration | FAILED on a blocking finding, as research does (D17) |
+| D54 | A fifth information class, FRAMING, for connective narration | Transitions and questions are neither documented nor fiction; letting them carry no facts keeps the four classes honest | Force every line into one of the four |
+| D55 | Section regeneration copies every other section unchanged into the new version, with no model calls | "Regenerate the relevant section, not the entire documentary": cheaper, and the editor's edits and decisions elsewhere survive | Regenerate the whole script with the section emphasised |
+| D56 | Editor changes are in place on the version under review, with the generated text kept and every change logged | Making a version per keystroke would bury the real versions; the log and `generated_text` keep what changed and from what | A new version per edit |
+| D57 | Reviewers return targeted patches (edit / remove / insert by block), kept only if they do not add blocking findings | Re-emitting a 2,000-word script to change three sentences costs tokens and risks silent drift; the rules decide whether a patch helped | Full rewrites by each reviewer |
+| D58 | A provider-neutral voice adapter interface; ElevenLabs first, no audio | "Do not hard-code the Script Engine around one provider"; the plan can be inspected before any voice spend | Generate ElevenLabs markup in the script |
+| D59 | Timing from words, pace and pauses (150 wpm) | Deterministic, explainable and good enough to steer; a real voice measurement replaces it at the voice stage | Per-voice calibration now |
+| D60 | An open CRITICAL fact-checker issue blocks approval until its block is changed | The fact checker has the last word on facts; an issue its own patch could not fix must not slip through unread | Record it only |
+| D61 | Model per step is configuration (`SCRIPT_MODELS`), never code | "Keep model configuration external"; a cheaper model for the performance pass is a decision to make with real runs | Hard-coded models |

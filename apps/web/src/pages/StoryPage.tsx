@@ -332,7 +332,11 @@ function StoryActions({
 
       {p.status === 'STORY_APPROVED' && (
         <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-900">
-          Story architecture approved. Nothing proceeds automatically: the script stage starts only when it is started from the project page.
+          Story architecture approved. Nothing proceeds automatically: the script is written when you start it on the{' '}
+          <Link className="font-medium underline" to={`/projects/${p.slug}/script`}>
+            Script page
+          </Link>
+          .
         </p>
       )}
 

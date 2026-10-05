@@ -248,6 +248,22 @@ enum OpportunityStatus {
   REJECTED
 }
 
+/// Information class of a narration block: the architecture's four, plus FRAMING (the narrator's connective lines, no facts).
+enum ScriptBlockClass {
+  DOCUMENTED
+  RECONSTRUCTION
+  UNCERTAIN
+  FICTION
+  FRAMING
+}
+
+/// The editor's decision on one section of a script version.
+enum SectionReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum VisualType {
   CINEMATIC_RECONSTRUCTION
   ARCHIVAL_STYLE
@@ -478,6 +494,7 @@ model Job {
   storyPacks        StoryPack[]
   stories           StoryArchitecture[]
   storyExplorations StoryExploration[]
+  scripts           Script[]
 
   @@index([status, runAfter])
   @@index([projectId, type, status])
@@ -737,6 +754,7 @@ model ResearchClaim {
   citations            ClaimCitation[]
   storyCandidates      StoryCandidateClaim[]
   contentOpportunities ContentOpportunityClaim[]
+  scriptBlocks         ScriptBlockClaim[]
 
   @@unique([dossierId, claimKey])
   @@index([dossierId])
@@ -1043,27 +1061,48 @@ model ContentOpportunityClaim {
 }
 
 /// Language-neutral script structure (scenes). The words live in SceneNarration, per language.
+/// Script Engine 1.0 writes one version per draft, rewrite or restore; versions are never changed
+/// once superseded or approved.
 model Script {
   id                   String         @id @default(uuid(7)) @db.Uuid
   projectId            String         @map("project_id") @db.Uuid
+  /// The approved story architecture the script tells.
   storyId              String?        @map("story_id") @db.Uuid
   version              Int
   status               ArtifactStatus @default(DRAFT)
   title                String?
   estimatedDurationSec Int?           @map("estimated_duration_sec")
-  /// Script QA scores (NARRATIVE_SCORE, AUDIO_FLOW_SCORE, …).
+  /// Script QA scores (NARRATIVE_SCORE, AUDIO_FLOW_SCORE, …): the script editor's, 0–10.
   scores               Json?
+  /// The editor's brief or instructions for this version.
   notes                String?
+  /// 1 = Script Engine 1.0.
+  engineVersion        Int            @default(1) @map("engine_version")
+  /// ScriptContent: narrator, central question, pronunciations, reviewers, provenance.
+  content              Json?
+  qualityReport        Json?          @map("quality_report")
+  qualityPassed        Boolean        @default(false) @map("quality_passed")
+  stats                Json           @default("{}")
+  targetDurationSec    Int?           @map("target_duration_sec")
+  wordCount            Int?           @map("word_count")
+  /// The version this one was made from (it is kept unchanged).
+  revisionOfId         String?        @map("revision_of_id") @db.Uuid
+  jobId                String?        @map("job_id") @db.Uuid
   createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
   story       StoryArchitecture? @relation(fields: [storyId], references: [id], onDelete: SetNull)
+  revisionOf  Script?            @relation("ScriptRevisions", fields: [revisionOfId], references: [id], onDelete: SetNull)
+  revisions   Script[]           @relation("ScriptRevisions")
+  job         Job?               @relation(fields: [jobId], references: [id], onDelete: SetNull)
   scenes      Scene[]
+  blocks      ScriptBlock[]
   storyboards Storyboard[]
   approvals   Approval[]
 
   @@unique([projectId, version])
+  @@index([revisionOfId])
   @@map("scripts")
 }
 
@@ -1079,6 +1118,14 @@ model Scene {
   infographicOpportunity String? @map("infographic_opportunity")
   soundDesignOpportunity String? @map("sound_design_opportunity")
   targetDurationSec      Float?  @map("target_duration_sec")
+  /// The architecture sequence this section tells (Script Engine: one section per sequence).
+  sequenceNumber         Int?                @map("sequence_number")
+  /// The planner's intent for the section (ScriptSectionPlan).
+  content                Json?
+  reviewStatus           SectionReviewStatus @default(PENDING) @map("review_status")
+  editorNotes            String?             @map("editor_notes")
+  reviewedBy             String?             @map("reviewed_by")
+  reviewedAt             DateTime?           @map("reviewed_at") @db.Timestamptz(3)
 
   script       Script           @relation(fields: [scriptId], references: [id], onDelete: Cascade)
   narrations   SceneNarration[]
@@ -1111,9 +1158,68 @@ model SceneNarration {
   scene           Scene           @relation(fields: [sceneId], references: [id], onDelete: Cascade)
   languageVersion LanguageVersion @relation(fields: [languageVersionId], references: [id], onDelete: Cascade)
   audioAsset      MediaAsset?     @relation(fields: [audioAssetId], references: [id], onDelete: SetNull)
+  blocks          ScriptBlock[]
 
   @@unique([sceneId, languageVersionId])
   @@map("scene_narrations")
+}
+
+/// One unit of narration in one language: a few spoken sentences with one information class,
+/// traced to the architecture beats it realises and the approved claims it rests on, with its
+/// delivery (pace, energy, emotion, emphasis, pauses) and the visual intent handed to the storyboard.
+model ScriptBlock {
+  id                   String           @id @default(uuid(7)) @db.Uuid
+  scriptId             String           @map("script_id") @db.Uuid
+  narrationId          String           @map("narration_id") @db.Uuid
+  /// "<sequence>.<n>", stable within a version.
+  blockKey             String           @map("block_key")
+  sortOrder            Int              @map("sort_order")
+  text                 String
+  /// The text as generated for this version (kept when the editor changes it).
+  generatedText        String           @map("generated_text")
+  infoClass            ScriptBlockClass @map("info_class")
+  /// Architecture beats this block realises ("3.2").
+  beatIds              String[]         @map("beat_ids")
+  /// Cast id of the speaker (null = the narrator).
+  speakerId            String?          @map("speaker_id")
+  /// RECORDED_QUOTE or INVENTED for a cast member's words.
+  speechKind           String?          @map("speech_kind")
+  /// A fictional device is in the block: downstream visuals must never present it as history.
+  fictionalDevice      Boolean          @default(false) @map("fictional_device")
+  /// ScriptDelivery: pace, energy, emotion, emphasis, pauses.
+  delivery             Json
+  /// ScriptVisual: intent, must show / avoid, priority.
+  visual               Json
+  /// BlockPresentation[]: how its claims that are not ESTABLISHED must be presented.
+  presentation         Json             @default("[]")
+  wordCount            Int              @map("word_count")
+  estimatedDurationSec Float            @map("estimated_duration_sec")
+  editedBy             String?          @map("edited_by")
+  editedAt             DateTime?        @map("edited_at") @db.Timestamptz(3)
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  script    Script             @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  narration SceneNarration     @relation(fields: [narrationId], references: [id], onDelete: Cascade)
+  claims    ScriptBlockClaim[]
+
+  @@unique([narrationId, blockKey])
+  @@index([narrationId, sortOrder])
+  @@index([scriptId])
+  @@map("script_blocks")
+}
+
+/// The approved claims a narration block rests on (FK: cannot dangle).
+model ScriptBlockClaim {
+  blockId String @map("block_id") @db.Uuid
+  claimId String @map("claim_id") @db.Uuid
+
+  block ScriptBlock   @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  claim ResearchClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@id([blockId, claimId])
+  @@index([claimId])
+  @@map("script_block_claims")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

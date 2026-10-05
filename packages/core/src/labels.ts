@@ -19,6 +19,16 @@ import type {
   ProjectStatus,
   ReconstructionLevel,
   RevisionAspect,
+  DeliveryEmotion,
+  DeliveryEnergy,
+  DeliveryPace,
+  PauseLength,
+  PauseReason,
+  ScriptBlockClass,
+  ScriptOrigin,
+  ScriptScore,
+  SectionReviewStatus,
+  VisualIntent,
   SourceType,
   SpeechKind,
   Stage,
@@ -325,4 +335,70 @@ export const CHANGE_AREA_LABELS: Record<ChangeArea, string> = {
 export const ARCHITECTURE_ORIGIN_LABELS: Record<ArchitectureOrigin, string> = {
   NEW: 'Built from the selection',
   REVISION: 'Revision',
+};
+
+// ---------------------------------------------------------------------------
+// Script Engine
+// ---------------------------------------------------------------------------
+
+export const SCRIPT_BLOCK_CLASS_LABELS: Record<ScriptBlockClass, string> = {
+  ...INFORMATION_CLASS_LABELS,
+  FRAMING: 'Narrator framing',
+};
+
+export const SCRIPT_BLOCK_CLASS_HELP: Record<ScriptBlockClass, string> = {
+  ...INFORMATION_CLASS_HELP,
+  FRAMING: "The narrator's own connective line — a question, a turn, a signpost. Carries no facts, figures or claims.",
+};
+
+export const DELIVERY_PACE_LABELS: Record<DeliveryPace, string> = { SLOW: 'Slow', NORMAL: 'Normal pace', FAST: 'Fast' };
+export const DELIVERY_ENERGY_LABELS: Record<DeliveryEnergy, string> = { LOW: 'Low energy', MEDIUM: 'Medium energy', HIGH: 'High energy' };
+export const DELIVERY_EMOTION_LABELS: Record<DeliveryEmotion, string> = {
+  NEUTRAL: 'Neutral',
+  TENSE: 'Tense',
+  CURIOUS: 'Curious',
+  SOMBER: 'Somber',
+  EXCITED: 'Excited',
+  REFLECTIVE: 'Reflective',
+};
+export const PAUSE_LENGTH_LABELS: Record<PauseLength, string> = { NONE: 'No pause', MICRO: 'Micro', SHORT: 'Short', MEDIUM: 'Medium', LONG: 'Long' };
+export const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
+  REVEAL: 'reveal',
+  NUMBER: 'number',
+  EMOTIONAL_TURN: 'emotional turn',
+  TRANSITION: 'transition',
+  IMPACT: 'impact',
+  QUESTION: 'open question',
+  RHYTHM: 'rhythm',
+};
+
+export const VISUAL_INTENT_LABELS: Record<VisualIntent, string> = {
+  CINEMATIC_RECONSTRUCTION: 'Cinematic reconstruction',
+  DOCUMENT: 'Document',
+  MAP: 'Map',
+  DATA: 'Data',
+  TIMELINE: 'Timeline',
+  ARCHIVAL: 'Archival',
+  PORTRAIT: 'Portrait',
+  ENVIRONMENT: 'Environment',
+  ABSTRACT_METAPHOR: 'Abstract metaphor',
+  ON_SCREEN_TEXT: 'On-screen text',
+  NONE: 'No specific visual',
+};
+
+export const SECTION_REVIEW_STATUS_LABELS: Record<SectionReviewStatus, string> = { PENDING: 'Not reviewed', APPROVED: 'Approved', REJECTED: 'Rejected' };
+
+export const SCRIPT_ORIGIN_LABELS: Record<ScriptOrigin, string> = {
+  DRAFT: 'Draft from the architecture',
+  SECTIONS: 'Sections rewritten',
+  REVISION: 'Revision',
+  RESTORE: 'Restored',
+};
+
+export const SCRIPT_SCORE_LABELS: Record<ScriptScore, string> = {
+  NARRATIVE_SCORE: 'Story and momentum',
+  AUDIO_FLOW_SCORE: 'Spoken flow',
+  CLARITY_SCORE: 'Clarity',
+  EMOTIONAL_SCORE: 'Emotional pull',
+  ENDING_SCORE: 'Ending and payoff',
 };

@@ -23,6 +23,16 @@ export const EVENT = {
   ARCHITECTURE_SUPERSEDED: 'ARCHITECTURE_SUPERSEDED',
   /** The editor asked for alternative narrative angles from the story pack. */
   ANGLES_REQUESTED: 'ANGLES_REQUESTED',
+  /** The editor asked for a script version: rewritten sections or a whole revision, with a brief. */
+  SCRIPT_REVISION_REQUESTED: 'SCRIPT_REVISION_REQUESTED',
+  /** The editor changed a narration block (text, class, delivery, visual) or the order of a section's blocks. */
+  SCRIPT_EDITED: 'SCRIPT_EDITED',
+  /** The editor approved, rejected or annotated a section of the script under review. */
+  SCRIPT_SECTION_REVIEWED: 'SCRIPT_SECTION_REVIEWED',
+  /** An earlier script version was made current again, as a new version. */
+  SCRIPT_RESTORED: 'SCRIPT_RESTORED',
+  /** An earlier approved script was superseded by approving a newer version. */
+  SCRIPT_SUPERSEDED: 'SCRIPT_SUPERSEDED',
   /** A mock job succeeded where the transition requires real providers (e.g. publishing). */
   PHASE_BLOCKED_MOCK: 'PHASE_BLOCKED_MOCK',
 } as const;

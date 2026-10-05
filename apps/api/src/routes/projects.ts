@@ -40,6 +40,12 @@ export async function projectRoutes(app: FastifyInstance, c: AppContainer): Prom
     // Revisions and angle explorations have their own routes: they check the base version, the angle and the pack, and record the brief.
     if (input.type === 'STORY_ANGLES') throw new ConflictError('Use POST /api/projects/:id/story/angles to explore alternative angles');
     if (input.type === 'STORY_ARCHITECTURE' && input.input?.revise !== undefined) throw new ConflictError('Use POST /api/projects/:id/story/architecture/revise to revise an architecture');
+    if (input.type === 'SCRIPT' && input.input?.revise !== undefined) throw new ConflictError('Use POST /api/projects/:id/script/revise to rewrite a script');
+    // The real script stage starts through its own service: it checks for an approved architecture first.
+    if (input.type === 'SCRIPT' && c.realStages.includes('SCRIPT')) {
+      const notes = typeof input.input?.notes === 'string' ? input.input.notes : undefined;
+      return reply.code(202).send(toJobView(await c.projects.generateScript(project.id, notes ? { notes } : {}, actorOf(req))));
+    }
     // The real architecture stage needs a selection of 5–10 units: say so now rather than fail the job.
     if (input.type === 'STORY_ARCHITECTURE' && c.realStages.includes('STORY_ARCHITECTURE')) {
       const problem = await architecturePreflight(c.db, project.id);

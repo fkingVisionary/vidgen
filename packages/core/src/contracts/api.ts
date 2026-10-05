@@ -10,7 +10,12 @@ import {
   POV_STRATEGIES,
   PROJECT_STATUSES,
   REVISION_ASPECTS,
+  SCRIPT_BLOCK_CLASSES,
+  SECTION_REVIEW_STATUSES,
+  VISUAL_INTENTS,
+  VISUAL_PRIORITIES,
 } from '../enums.ts';
+import { ScriptDelivery, ScriptVisual } from './script.ts';
 import { DEFAULT_MASTER_LANGUAGE, LANGUAGE_CODES } from '../languages.ts';
 import { STORY_LIMITS } from '../story.ts';
 
@@ -157,3 +162,72 @@ export const ContentPackageRequest = z.object({
     .default([]),
 });
 export type ContentPackageRequest = z.infer<typeof ContentPackageRequest>;
+
+// ---------------------------------------------------------------------------
+// Script Engine
+// ---------------------------------------------------------------------------
+
+/**
+ * Input of a SCRIPT job. Without `revise`: a draft of the approved
+ * architecture. With `revise`: a new version made from `baseVersion` — the
+ * listed sections rewritten (the rest copied unchanged), or the whole script
+ * when no section is listed; `notes` is the editor's brief.
+ */
+export const ScriptJobInput = z.object({
+  notes: z.string().trim().max(5000).optional(),
+  revise: z
+    .object({
+      baseVersion: z.number().int().min(1),
+      sections: z.array(z.number().int().min(1)).max(60).default([]),
+    })
+    .optional(),
+});
+export type ScriptJobInput = z.infer<typeof ScriptJobInput>;
+
+/** Generate the first draft (or a fresh draft) from the approved architecture. */
+export const GenerateScriptInput = z.object({ notes: z.string().trim().max(5000).optional() });
+export type GenerateScriptInput = z.infer<typeof GenerateScriptInput>;
+
+/**
+ * Rewrite part or all of a script version from the editor's brief: the
+ * listed sections (by sequence number), or the whole script when none is
+ * listed. A new version is created; every earlier version is kept.
+ */
+export const ReviseScriptInput = z.object({
+  baseVersion: z.number().int().min(1),
+  sections: z.array(z.number().int().min(1)).max(60).default([]),
+  brief: z.string().trim().min(10, 'Say what to change (at least a sentence)').max(5000),
+});
+// The request shape (`sections` may be left out); the service parses it.
+export type ReviseScriptInput = z.input<typeof ReviseScriptInput>;
+
+/** The editor's change to one narration block (the version under review only). */
+export const UpdateScriptBlockInput = z
+  .object({
+    text: z.string().trim().min(1).max(4000).optional(),
+    infoClass: z.enum(SCRIPT_BLOCK_CLASSES).optional(),
+    delivery: ScriptDelivery.partial().optional(),
+    visual: ScriptVisual.pick({ mustAvoid: true, note: true })
+      .extend({ intent: z.enum(VISUAL_INTENTS), priority: z.enum(VISUAL_PRIORITIES) })
+      .partial()
+      .optional(),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined), { message: 'Nothing to change' });
+export type UpdateScriptBlockInput = z.infer<typeof UpdateScriptBlockInput>;
+
+/** The editor's order of the blocks of one section (exactly that section's blocks). */
+export const ReorderScriptBlocksInput = z.object({ blockIds: z.array(z.string().uuid()).min(1).max(200) });
+export type ReorderScriptBlocksInput = z.infer<typeof ReorderScriptBlocksInput>;
+
+/** The editor's decision and notes on one section. */
+export const ReviewScriptSectionInput = z
+  .object({
+    reviewStatus: z.enum(SECTION_REVIEW_STATUSES).optional(),
+    editorNotes: z.string().trim().max(5000).nullable().optional(),
+  })
+  .refine((v) => v.reviewStatus !== undefined || v.editorNotes !== undefined, { message: 'Nothing to change' });
+export type ReviewScriptSectionInput = z.infer<typeof ReviewScriptSectionInput>;
+
+/** Make an earlier version current again, as a new version (no model calls). */
+export const RestoreScriptInput = z.object({ version: z.number().int().min(1) });
+export type RestoreScriptInput = z.infer<typeof RestoreScriptInput>;

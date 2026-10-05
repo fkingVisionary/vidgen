@@ -121,8 +121,9 @@ Every push to the connected branch deploys automatically.
    | `TAVILY_USD_PER_CREDIT` | your plan's $/credit (for cost estimates) |
    | `RESEARCH_MAX_COST_USD` | optional, default `40` |
    | `STORY_MAX_COST_USD` | optional, default `15` (per story-mining, architecture, revision or angles job) |
+   | `SCRIPT_MAX_COST_USD` | optional, default `15` (per script job: a draft, a section rewrite or a revision) |
 
-4. **Verify:** `/api/health` → `"realStages":["RESEARCH","STORY_MINING","STORY_ARCHITECTURE"]` and the providers
+4. **Verify:** `/api/health` → `"realStages":["RESEARCH","STORY_MINING","STORY_ARCHITECTURE","STORY_ANGLES","SCRIPT"]` and the providers
    list shows `anthropic` and `tavily` with `"mock":false`. The project page
    says which stages are real and which are MOCK placeholders.
 5. **Run:** project page → *Run Research*, or from a Railway shell on the app
@@ -179,6 +180,25 @@ The story prompt version changed (`story-2.1-2026-10-04.1`), so a Retry of a
 story job started before the deploy starts its model calls again. A revision
 costs the same four calls as an architecture; an angle exploration costs one.
 
+## Deploying Script Engine 1.0
+
+No new services. Two optional variables: `SCRIPT_MAX_COST_USD` (default 15)
+and `SCRIPT_MODELS` (per-step model overrides; unset = `AI_MODEL` for every
+step). The pre-deploy command applies migration
+`20261005010000_script_engine`, which is additive only: two new enums
+(`ScriptBlockClass`, `SectionReviewStatus`), nullable or defaulted columns on
+the milestone-1 tables `scripts` (engine version, content, quality report and
+flag, stats, target duration, word count, `revision_of_id`, `job_id`) and
+`scenes` (sequence number, plan, the editor's review status, notes, reviewer
+and time), and two new tables `script_blocks` and `script_block_claims`.
+No existing row is changed; research and story tables are untouched.
+
+With `AI_PROVIDER=anthropic`, `/api/health` lists `SCRIPT` among the real
+stages. A project whose architecture is approved shows a **Script** page:
+*Generate Script Draft* runs five model calls (planner, writer, script editor,
+fact checker, performance) and stops in *Script review*. Nothing is voiced;
+approving the script does not start anything.
+
 ## Environment variables
 
 `✓` = read by V1 code. Planned variables are documented now so the shape is
@@ -203,13 +223,15 @@ agreed, but they are not read yet.
 | `RESEARCH_PROVIDER` | `mock` | ✓ | `mock` or `tavily` |
 | `VOICE_PROVIDER` … `PUBLISHING_PROVIDER` (5) | `mock` | ✓ | Only `mock` is implemented; other values fail at startup with a clear message |
 | `ANTHROPIC_API_KEY` | — | ✓ | Required when `AI_PROVIDER=anthropic` |
-| `AI_MODEL` | `claude-opus-5-5` | ✓ | Model for every research task; cost is estimated from the served model's published token prices |
+| `AI_MODEL` | `claude-opus-5-5` | ✓ | Default model for every AI task (research, story, script); cost is estimated from the served model's published token prices |
 | `TAVILY_API_KEY` | — | ✓ | Required when `RESEARCH_PROVIDER=tavily`, unless keyless |
 | `TAVILY_ACCESS_MODE` | `api-key` | ✓ | `keyless` = Tavily's free, rate-limited access ($0) |
 | `TAVILY_USD_PER_CREDIT` | `0.008` | ✓ | Your plan's price; Tavily reports credits, so dollar cost is an estimate |
 | `RESEARCH_MAX_COST_USD` | `40` | ✓ | Per-run ceiling; the run stops (FAILED, not retried) once recorded spend passes it |
 | `RESEARCH_MAX_SOURCES` | `45` | ✓ | Sources whose full text is retrieved and read per run |
 | `STORY_MAX_COST_USD` | `15` | ✓ | Per-job ceiling for story mining, story architecture (and revisions) and angle explorations; the job stops (FAILED, not retried) once recorded spend passes it |
+| `SCRIPT_MAX_COST_USD` | `15` | ✓ | Per-job ceiling for a script draft, section rewrite or revision; same behaviour |
+| `SCRIPT_MODELS` | — | ✓ | Optional per-step models for the script, e.g. `perform=<model>,edit=<model>` (steps: plan, write, edit, factCheck, perform); unset steps use `AI_MODEL`. With the real AI provider, a malformed value stops the server at startup |
 | `WEB_DIST_DIR` | `apps/web/dist` | ✓ | Override only for unusual layouts |
 | `RAILWAY_GIT_COMMIT_SHA` | — | ✓ | Set by Railway; shown in `/api/health` |
 | `TEST_DATABASE_URL` | — | tests | Integration tests only; DB name must contain `test` |

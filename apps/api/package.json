@@ -19,6 +19,7 @@
     "@docengine/pipeline": "workspace:*",
     "@docengine/providers": "workspace:*",
     "@docengine/research": "workspace:*",
+    "@docengine/script": "workspace:*",
     "@docengine/story": "workspace:*",
     "@fastify/static": "10.1.5",
     "@prisma/adapter-pg": "catalog:",

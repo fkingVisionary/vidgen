@@ -3,6 +3,7 @@ import {
   JOB_TYPE_LABELS,
   STATUS_LABELS,
   SUPPORTED_LANGUAGES,
+  fmtClock,
   isLanguageCode,
   type ApprovalDecision,
   type JobType,
@@ -14,7 +15,7 @@ import { useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { api } from '../api.ts';
 import { JobStatusBadge, MockBadge, StatusBadge } from '../components/badges.tsx';
-import { ProjectNav, hasStoryPage } from '../components/ProjectNav.tsx';
+import { ProjectNav, hasScriptPage, hasStoryPage } from '../components/ProjectNav.tsx';
 import { ProgressBar, StagePipeline } from '../components/StagePipeline.tsx';
 import { formatDate, formatDuration, formatRuntime, formatUsd } from '../format.ts';
 
@@ -62,6 +63,7 @@ export function ProjectPage() {
         links={{
           RESEARCH: p.research ? `/projects/${p.slug}/research` : undefined,
           STORY: hasStoryPage(p) ? `/projects/${p.slug}/story` : undefined,
+          SCRIPT: hasScriptPage(p) ? `/projects/${p.slug}/script` : undefined,
         }}
       />
 
@@ -72,6 +74,7 @@ export function ProjectPage() {
           <JobsTable project={p} />
         </div>
         <div className="min-w-0 space-y-6">
+          {p.script && <ScriptCard project={p} />}
           {(p.story.pack || p.story.architecture || p.status === 'RESEARCH_COMPLETE') && <StoryCard project={p} />}
           {p.research && (
             <Card title="Research dossier">
@@ -170,6 +173,22 @@ const ACTION_LABELS: Partial<Record<JobType, string>> = {
   STORY_ARCHITECTURE: 'Generate Story Architecture',
 };
 
+function ScriptCard({ project: p }: { project: ProjectDetailView }) {
+  const s = p.script!;
+  return (
+    <Card title="Script">
+      <p className="text-sm">
+        Version {s.version} · {s.status.replace('_', ' ').toLowerCase()} · {s.wordCount.toLocaleString()} words · {fmtClock(s.estimatedDurationSec)}
+        {s.targetDurationSec ? ` (target ${fmtClock(s.targetDurationSec)})` : ''}
+      </p>
+      <p className={`text-xs ${s.qualityPassed ? 'text-emerald-700' : 'text-red-700'}`}>Script gate {s.qualityPassed ? 'passed' : 'has blocking findings'}</p>
+      <Link to={`/projects/${p.slug}/script`} className="mt-2 inline-block rounded-md bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-700">
+        Open script →
+      </Link>
+    </Card>
+  );
+}
+
 function StoryCard({ project: p }: { project: ProjectDetailView }) {
   const { pack, architecture: a } = p.story;
   return (
@@ -224,9 +243,12 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
   const rewind = useProjectMutation(p, () => api.rewind(p.id, { to: rewindTo as ProjectStatus, reason }));
   const active = p.jobs.filter((j) => j.status === 'QUEUED' || j.status === 'RUNNING');
   const error = enqueue.error ?? decide.error ?? rewind.error;
-  // The architecture is generated from the Story page, where the selection it is built from is visible.
-  const runnableJobs = p.status === 'STORY_SELECTION' ? p.actions.runnableJobs.filter((t) => t !== 'STORY_ARCHITECTURE') : p.actions.runnableJobs;
+  // The architecture is generated from the Story page, where the selection it is built from is visible;
+  // the real script is written from the Script page, where the approved architecture and every version are.
+  const scriptOnItsPage = realStages.includes('SCRIPT');
+  const runnableJobs = p.actions.runnableJobs.filter((t) => !(p.status === 'STORY_SELECTION' && t === 'STORY_ARCHITECTURE') && !(scriptOnItsPage && t === 'SCRIPT'));
   const storyPage = `/projects/${p.slug}/story`;
+  const scriptPage = `/projects/${p.slug}/script`;
 
   return (
     <Card title="Next actions">
@@ -257,6 +279,16 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
               Follow it on the Story page →
             </Link>
           </p>
+        )}
+
+        {scriptOnItsPage && (p.status === 'STORY_APPROVED' || p.status === 'SCRIPT_DRAFT') && (
+          <div className="rounded-md border border-sky-200 bg-sky-50 p-3">
+            <p className="text-sm font-medium text-sky-950">{p.status === 'STORY_APPROVED' ? 'Your turn: write the script' : active.some((j) => j.type === 'SCRIPT') ? 'The script is being written' : 'The script is back with you'}</p>
+            <p className="mt-1 text-sm text-sky-900">The Script Engine turns the approved story architecture into narration, section by section, and stops for your review. No voice is generated.</p>
+            <Link to={scriptPage} className={`${button} mt-2 inline-block bg-sky-700 text-white hover:bg-sky-600`}>
+              Open the Script page →
+            </Link>
+          </div>
         )}
 
         {runnableJobs.length > 0 && (
@@ -299,6 +331,14 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
                 <p className="text-xs text-violet-800">Read the story architecture before deciding.</p>
                 <Link to={storyPage} className={`${button} mt-1 inline-block bg-violet-700 text-white hover:bg-violet-600`}>
                   Open story architecture v{p.story.architecture.version} →
+                </Link>
+              </div>
+            )}
+            {p.actions.gate.gate === 'SCRIPT' && p.script && (
+              <div className="mt-1">
+                <p className="text-xs text-violet-800">Read the script before deciding: blocking findings and rejected sections stop approval.</p>
+                <Link to={scriptPage} className={`${button} mt-1 inline-block bg-violet-700 text-white hover:bg-violet-600`}>
+                  Open script v{p.script.version} →
                 </Link>
               </div>
             )}

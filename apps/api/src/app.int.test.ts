@@ -13,13 +13,14 @@ import { parseEnv } from './env.ts';
 import { ALL_MOCK, createProviders } from '@docengine/providers';
 import { FAKE_CORPUS_GATE, FakeResearchAI, FakeResearchProvider } from '@docengine/research/testing';
 import { FakeStoryAI, seedFakeDossier } from '@docengine/story/testing';
-import { StoryArchitectureContent, type ResearchView, type StoryView } from '@docengine/core';
+import { FakeScriptAI } from '@docengine/script/testing';
+import { StoryArchitectureContent, type ResearchView, type ScriptCompareView, type ScriptView, type StoryView, type VoiceRenderPlan } from '@docengine/core';
 import { Prisma } from '@docengine/database';
 
 const db = useTestDatabase();
 let open: { app: FastifyInstance; c: AppContainer }[] = [];
 
-async function start(extraEnv: Record<string, string> = {}, opts: { fakeResearch?: boolean; fakeStory?: boolean } = {}) {
+async function start(extraEnv: Record<string, string> = {}, opts: { fakeResearch?: boolean; fakeStory?: boolean; fakeScript?: boolean } = {}) {
   const env = parseEnv({ DATABASE_URL: process.env.TEST_DATABASE_URL!, NODE_ENV: 'test', LOG_LEVEL: 'silent', WEB_DIST_DIR: '/nonexistent', ...extraEnv });
   const c = createContainer(env, pino({ level: 'silent' }), {
     db,
@@ -30,6 +31,7 @@ async function start(extraEnv: Record<string, string> = {}, opts: { fakeResearch
         }
       : {}),
     ...(opts.fakeStory ? { providers: { ...createProviders(ALL_MOCK), ai: new FakeStoryAI() } } : {}),
+    ...(opts.fakeScript ? { providers: { ...createProviders(ALL_MOCK), ai: new FakeScriptAI() } } : {}),
   });
   const app = await buildApp(c);
   open.push({ app, c });
@@ -146,7 +148,7 @@ describe('HTTP API', () => {
 describe('research dossier API', () => {
   it('serves the dossier with claims, citations, sources, quality report and cost, and links the approval', async () => {
     const { app, c } = await start({}, { fakeResearch: true });
-    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH', 'STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES']);
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH', 'STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES', 'SCRIPT']);
     const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
     expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/research` })).json<ResearchView>()).toEqual({ versions: [], dossier: null });
 
@@ -196,7 +198,7 @@ describe('story API', () => {
 
   it('mines, lets the editor curate, checks the selection, builds and reviews the architecture', async () => {
     const { app, c } = await start({}, { fakeStory: true });
-    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES']);
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES', 'SCRIPT']);
     const p = await researched(app);
     expect(await story(app, p.id)).toMatchObject({ packs: [], pack: null, architecture: null, editable: false, selection: { count: 0, problem: 'No story pack yet' } });
 
@@ -510,6 +512,171 @@ describe('editorial revision loop API', () => {
     expect(angles.json().message).toMatch(/real story engine/);
     expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture/revise`, payload: { baseVersion: 1, brief: BRIEF } })).statusCode).toBe(409);
     expect((await story(app, p.id)).editorial).toMatchObject({ revise: { allowed: false }, angles: { allowed: false } });
+  });
+});
+
+describe('script API', () => {
+  const SIX = ['The Semper Augustus price', 'The ruin that never happened', 'Proefman in court', 'The tavern colleges', 'Striped tulips', 'The courts step back'];
+  const BRIEF = 'Too slow: open on the court date and cut the background (test).';
+  const script = async (app: FastifyInstance, id: string, q = '') => (await app.inject({ method: 'GET', url: `/api/projects/${id}/script${q}` })).json<ScriptView>();
+  const line = (s: ScriptView['scripts'][number]) => `v${s.version} ${s.status} ${s.origin}${s.revisionOfVersion ? ` of v${s.revisionOfVersion}` : ''}`;
+
+  /** A project whose Story Engine 2.0 architecture was approved at the STORY gate (synthetic dossier). */
+  async function approvedArchitecture(app: FastifyInstance, c: AppContainer) {
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: { ...tulipInput, targetMinutesMin: 2, targetMinutesMax: 4 } })).json<ProjectDetailView>();
+    await db.project.update({ where: { id: p.id }, data: { status: 'RESEARCH_COMPLETE', phaseSeq: 2 } });
+    await seedFakeDossier(db, p.id);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/mine`, payload: {} })).statusCode).toBe(202);
+    await c.runner.drain();
+    const pack = await db.storyPack.findFirstOrThrow({ where: { projectId: p.id }, orderBy: { version: 'desc' } });
+    await db.storyCandidate.updateMany({ where: { packId: pack.id }, data: { selected: false } });
+    await db.storyCandidate.updateMany({ where: { packId: pack.id, title: { in: SIX } }, data: { selected: true } });
+    (c.providers.ai as FakeScriptAI).architectOptions = { secondsPerSequence: 30, composite: { name: 'Pieter Graanhout' } };
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/story/architecture`, payload: {} })).statusCode).toBe(202);
+    await c.runner.drain();
+    const approved = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/approvals`, payload: { gate: 'STORY', decision: 'APPROVED' } });
+    expect(approved.json<ProjectDetailView>().status).toBe('STORY_APPROVED');
+    return p.id;
+  }
+
+  it('writes a draft from the approved architecture; the editor edits, reorders, decides and rewrites one section; versions are compared, restored and approved', async () => {
+    const { app, c } = await start({}, { fakeScript: true });
+    const id = await approvedArchitecture(app, c);
+    let view = await script(app, id);
+    expect(view).toMatchObject({ scripts: [], script: null, realStage: true, architecture: { version: 1, status: 'APPROVED', engineVersion: 2 } });
+    expect(view.editorial).toMatchObject({ generate: { allowed: true }, revise: { allowed: false, reason: 'No script yet' }, edit: { allowed: false }, approve: { allowed: false } });
+
+    // Generate Draft: a SCRIPT job; the project stops in SCRIPT_REVIEW for the editor.
+    let res = await app.inject({ method: 'POST', url: `/api/projects/${id}/script`, payload: { notes: 'Keep the opening calm (test).' } });
+    expect(res.statusCode).toBe(202);
+    expect(res.json<JobView>()).toMatchObject({ type: 'SCRIPT', status: 'QUEUED' });
+    await c.runner.drain();
+    view = await script(app, id);
+    const v1 = view.script!;
+    const sequences = (await db.storyArchitecture.findFirstOrThrow({ where: { projectId: id, status: 'APPROVED' } })).content as { sequences: unknown[] };
+    expect(v1).toMatchObject({ version: 1, status: 'IN_REVIEW', origin: 'DRAFT', architectureVersion: 1, qualityPassed: true, notes: 'Keep the opening calm (test).', blocking: [] });
+    expect(v1.sections).toHaveLength(sequences.sequences.length);
+    expect(v1.cost).toMatchObject({ calls: 5, includesEstimates: true });
+    expect(v1.timing).toMatchObject({ minSec: 120, maxSec: 240, targetSec: 180, words: v1.wordCount });
+    expect(v1.evidence.claims.map((x) => x.key).sort()).toEqual([...new Set(v1.sections.flatMap((s) => s.blocks.flatMap((b) => b.claimKeys)))].sort());
+    expect(v1.voice).toMatchObject({ provider: 'elevenlabs', pendingPronunciations: 2 });
+    expect(view.editorial).toMatchObject({ edit: { allowed: true }, approve: { allowed: true }, revise: { allowed: true }, restore: { allowed: false, reason: 'This is the version under review' } });
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${id}` })).json<ProjectDetailView>()).toMatchObject({ status: 'SCRIPT_REVIEW', script: { version: 1, status: 'IN_REVIEW', qualityPassed: true } });
+
+    // Edit one block's text and delivery: the generated text is kept, the gate re-run at once.
+    const second = v1.sections[1]!;
+    const first = second.blocks[0]!;
+    res = await app.inject({ method: 'PATCH', url: `/api/script-blocks/${first.id}`, payload: { text: `${first.text} The towns were watching (test).`, delivery: { pace: 'SLOW' } } });
+    expect(res.statusCode).toBe(200);
+    let edited = res.json<ScriptView>().script!;
+    expect(edited.sections[1]!.blocks[0]).toMatchObject({ text: `${first.text} The towns were watching (test).`, generatedText: first.text, delivery: { pace: 'SLOW' }, editedBy: 'dashboard' });
+    expect(edited.wordCount).toBeGreaterThan(v1.wordCount);
+    expect(edited.qualityReport!.normalizations).toContain("Re-checked after the editor's change (rules only, no model calls)");
+    expect((await app.inject({ method: 'PATCH', url: `/api/script-blocks/${first.id}`, payload: {} })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'PATCH', url: '/api/script-blocks/00000000-0000-4000-8000-000000000000', payload: { text: 'Nothing here.' } })).statusCode).toBe(404);
+
+    // Reorder a section's blocks: exactly that section's blocks, once each.
+    const ids = second.blocks.map((b) => b.id);
+    expect(ids.length).toBeGreaterThan(1);
+    expect((await app.inject({ method: 'PUT', url: `/api/script-sections/${second.id}/order`, payload: { blockIds: ids.slice(1) } })).statusCode).toBe(409);
+    res = await app.inject({ method: 'PUT', url: `/api/script-sections/${second.id}/order`, payload: { blockIds: [...ids].reverse() } });
+    expect(res.statusCode).toBe(200);
+    edited = res.json<ScriptView>().script!;
+    expect(edited.sections[1]!.blocks.map((b) => b.id)).toEqual([...ids].reverse());
+
+    // Reject section 3 with a note: the whole script cannot be approved until it is dealt with.
+    const third = v1.sections[2]!;
+    res = await app.inject({ method: 'PATCH', url: `/api/script-sections/${third.id}`, payload: { reviewStatus: 'REJECTED', editorNotes: 'Too long: cut the background (test).' } });
+    expect(res.json<ScriptView>().script!.sections[2]).toMatchObject({ reviewStatus: 'REJECTED', editorNotes: 'Too long: cut the background (test).', reviewedBy: 'dashboard' });
+    expect(res.json<ScriptView>().editorial.approve).toEqual({ allowed: false, reason: 'Rejected section(s) 3: rewrite or approve them first' });
+    let refused = await app.inject({ method: 'POST', url: `/api/projects/${id}/approvals`, payload: { gate: 'SCRIPT', decision: 'APPROVED' } });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().message).toMatch(/rejected section\(s\) 3/);
+    expect(await db.projectEvent.count({ where: { projectId: id, type: { in: ['SCRIPT_EDITED', 'SCRIPT_SECTION_REVIEWED'] } } })).toBe(3);
+
+    // Regenerate that section only: a new version; the other sections are copied with the editor's changes.
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/revise`, payload: { baseVersion: 1, sections: [3], brief: 'short' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/revise`, payload: { baseVersion: 9, sections: [3], brief: BRIEF } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/revise`, payload: { baseVersion: 1, sections: [42], brief: BRIEF } })).statusCode).toBe(409);
+    const generic = await app.inject({ method: 'POST', url: `/api/projects/${id}/jobs`, payload: { type: 'SCRIPT', input: { notes: BRIEF, revise: { baseVersion: 1 } } } });
+    expect(generic.statusCode).toBe(409);
+    expect(generic.json().message).toMatch(/script\/revise/);
+    const calls = (c.providers.ai as FakeScriptAI).calls;
+    const before = { ...calls };
+    res = await app.inject({ method: 'POST', url: `/api/projects/${id}/script/revise`, payload: { baseVersion: 1, sections: [3], brief: BRIEF } });
+    expect(res.statusCode).toBe(202);
+    await c.runner.drain();
+    expect((calls['script.rewrite'] ?? 0) - (before['script.rewrite'] ?? 0)).toBe(1);
+    expect((calls['script.plan'] ?? 0) - (before['script.plan'] ?? 0)).toBe(0);
+    view = await script(app, id);
+    expect(view.scripts.map(line)).toEqual(['v2 IN_REVIEW SECTIONS of v1', 'v1 SUPERSEDED DRAFT']);
+    const v2 = view.script!;
+    expect(v2).toMatchObject({ sectionsWritten: [3], notes: BRIEF });
+    expect(v2.sections[2]).toMatchObject({ reviewStatus: 'PENDING', editorNotes: null });
+    expect(v2.sections[1]!.blocks.map((b) => [b.text, b.editedBy])).toEqual(edited.sections[1]!.blocks.map((b) => [b.text, b.editedBy]));
+    expect(v2.sections.filter((_, i) => i !== 2).map((s) => s.blocks.map((b) => b.text))).toEqual(edited.sections.filter((_, i) => i !== 2).map((s) => s.blocks.map((b) => b.text)));
+
+    // Compare: only section 3 changed.
+    const cmp = (await app.inject({ method: 'GET', url: `/api/projects/${id}/script/compare?a=1&b=2` })).json<ScriptCompareView>();
+    expect(cmp.sections.filter((s) => s.changed).map((s) => s.sequenceNumber)).toEqual([3]);
+    expect(cmp.totals.sectionsChanged).toBe(1);
+    expect(cmp.sections[2]!.diff.some((d) => d.op === 'added')).toBe(true);
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${id}/script/compare?a=1&b=7` })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${id}/script/compare?a=1` })).statusCode).toBe(400);
+
+    // The voice plan: what the voice provider would be sent (no audio is generated).
+    const plan = (await app.inject({ method: 'GET', url: `/api/projects/${id}/script/voice-plan` })).json<VoiceRenderPlan>();
+    expect(plan.provider).toBe('elevenlabs');
+    expect(plan.segments.flatMap((s) => s.blockKeys)).toEqual(v2.sections.flatMap((s) => s.blocks.map((b) => b.key)));
+    expect(plan.segments.every((s) => !/[<>]/.test(s.text.replace(/<break time="\d+\.\ds" \/>/g, '')))).toBe(true);
+    expect(plan.pendingPronunciations).toEqual(['Cornelis Proefman', 'Pieter Graanhout']);
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${id}/script/voice-plan?version=1` })).statusCode).toBe(200);
+
+    // Restore v1 as v3: a copy with its edits and decisions, and no model calls.
+    const jobs = await db.job.count({ where: { projectId: id } });
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/restore`, payload: { version: 2 } })).statusCode).toBe(409);
+    res = await app.inject({ method: 'POST', url: `/api/projects/${id}/script/restore`, payload: { version: 1 } });
+    expect(res.statusCode).toBe(200);
+    const v3 = res.json<ScriptView>().script!;
+    expect(v3).toMatchObject({ version: 3, status: 'IN_REVIEW', origin: 'RESTORE', revisionOfVersion: 1 });
+    expect(v3.sections.map((s) => s.blocks.map((b) => b.text))).toEqual(edited.sections.map((s) => s.blocks.map((b) => b.text)));
+    expect(v3.sections[2]!.reviewStatus).toBe('REJECTED');
+    expect(await db.job.count({ where: { projectId: id } })).toBe(jobs);
+    expect((await script(app, id)).scripts.map(line)).toEqual(['v3 IN_REVIEW RESTORE of v1', 'v2 SUPERSEDED SECTIONS of v1', 'v1 SUPERSEDED DRAFT']);
+
+    // Approve section 3, then the whole script at the SCRIPT gate.
+    res = await app.inject({ method: 'PATCH', url: `/api/script-sections/${v3.sections[2]!.id}`, payload: { reviewStatus: 'APPROVED' } });
+    expect(res.json<ScriptView>().editorial.approve).toEqual({ allowed: true, reason: null });
+    res = await app.inject({ method: 'POST', url: `/api/projects/${id}/approvals`, payload: { gate: 'SCRIPT', decision: 'APPROVED', notes: 'Ready for a voice preview (test).' } });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<ProjectDetailView>()).toMatchObject({ status: 'SCRIPT_APPROVED', script: { version: 3, status: 'APPROVED' } });
+    view = await script(app, id);
+    expect(view.script!.approvals).toEqual([expect.objectContaining({ gate: 'SCRIPT', decision: 'APPROVED', notes: 'Ready for a voice preview (test).' })]);
+    expect(view.editorial).toMatchObject({ edit: { allowed: false }, approve: { allowed: false }, restore: { allowed: false } });
+    // An approved version is never changed; earlier versions stay readable.
+    expect((await app.inject({ method: 'PATCH', url: `/api/script-blocks/${view.script!.sections[0]!.blocks[0]!.id}`, payload: { text: 'Changed after approval.' } })).statusCode).toBe(409);
+    expect((await script(app, id, '?version=1')).script).toMatchObject({ version: 1, status: 'SUPERSEDED' });
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${id}/script?version=9` })).statusCode).toBe(404);
+  });
+
+  it('refuses to write a script where the script stage is a MOCK, or before an architecture is approved', async () => {
+    const { app } = await start();
+    const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
+    await db.project.update({ where: { id: p.id }, data: { status: 'STORY_APPROVED' } });
+    const mock = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/script`, payload: {} });
+    expect(mock.statusCode).toBe(409);
+    expect(mock.json().message).toMatch(/MOCK/);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/script/revise`, payload: { baseVersion: 1, brief: BRIEF } })).statusCode).toBe(409);
+    expect(await script(app, p.id)).toMatchObject({ realStage: false, script: null, editorial: { generate: { allowed: false, reason: expect.stringMatching(/MOCK/) } } });
+
+    const { app: real } = await start({}, { fakeScript: true });
+    const q = (await real.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
+    await db.project.update({ where: { id: q.id }, data: { status: 'STORY_APPROVED' } });
+    const none = await real.inject({ method: 'POST', url: `/api/projects/${q.id}/script`, payload: {} });
+    expect(none.statusCode).toBe(409);
+    expect(none.json().message).toMatch(/No approved story architecture/);
+    expect((await real.inject({ method: 'POST', url: `/api/projects/${q.id}/jobs`, payload: { type: 'SCRIPT' } })).statusCode).toBe(409);
+    expect(await db.job.count({ where: { projectId: q.id } })).toBe(0);
   });
 });
 

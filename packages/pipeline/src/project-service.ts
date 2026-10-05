@@ -2,8 +2,10 @@ import {
   CandidateOverrides,
   CreateProjectInput,
   ExploreAnglesInput,
+  GenerateScriptInput,
   ReorderSelectionInput,
   ReviseArchitectureInput,
+  ReviseScriptInput,
   STATUS_DEFINITIONS,
   StoryExplorationContent,
   UpdateContentOpportunityInput,
@@ -164,6 +166,7 @@ export class ProjectService {
       const decided = input.decision === 'APPROVED' ? 'APPROVED' : 'REJECTED';
       let dossierId: string | null = null;
       let storyId: string | null = null;
+      let scriptId: string | null = null;
       if (input.gate === 'RESEARCH') {
         const dossier = await tx.researchDossier.findFirst({ where: { projectId, status: 'IN_REVIEW' }, orderBy: { version: 'desc' } });
         if (dossier) {
@@ -188,6 +191,29 @@ export class ProjectService {
             }
           }
         }
+      } else if (input.gate === 'SCRIPT') {
+        const script = await tx.script.findFirst({ where: { projectId, status: 'IN_REVIEW' }, orderBy: { version: 'desc' }, include: { scenes: { select: { sequenceNumber: true, sceneKey: true, reviewStatus: true } } } });
+        if (script) {
+          scriptId = script.id;
+          if (input.decision === 'APPROVED') {
+            // The gate blocks approval, not review: blocking findings and rejected sections must be dealt with first.
+            if (!script.qualityPassed) {
+              const report = script.qualityReport as { checks?: { status: string; label: string }[] } | null;
+              const failed = (report?.checks ?? []).filter((c) => c.status === 'FAIL').map((c) => c.label);
+              throw new ConflictError(`Script v${script.version} has blocking quality findings (${failed.join('; ') || 'see the quality gate'}): fix them by editing, or rewrite the sections, before approving`);
+            }
+            const rejected = script.scenes.filter((s) => s.reviewStatus === 'REJECTED').map((s) => s.sequenceNumber ?? s.sceneKey);
+            if (rejected.length) throw new ConflictError(`Script v${script.version} has rejected section(s) ${rejected.join(', ')}: rewrite or approve them before approving the script`);
+          }
+          if (input.decision !== 'FLAGGED') await tx.script.update({ where: { id: script.id }, data: { status: decided } });
+          if (input.decision === 'APPROVED') {
+            const older = await tx.script.findMany({ where: { projectId, status: 'APPROVED', id: { not: script.id } }, select: { id: true, version: true } });
+            if (older.length) {
+              await tx.script.updateMany({ where: { id: { in: older.map((o) => o.id) } }, data: { status: 'SUPERSEDED' } });
+              await this.event(tx, projectId, EVENT.SCRIPT_SUPERSEDED, `Approved script ${older.map((o) => `v${o.version}`).join(', ')} superseded by approving v${script.version} (kept, not changed)`, { actor, superseded: older.map((o) => o.version), by: script.version });
+            }
+          }
+        }
       }
 
       const approval = await tx.approval.create({
@@ -200,6 +226,7 @@ export class ProjectService {
           projectStatus: project.status,
           dossierId,
           storyId,
+          scriptId,
         },
       });
       await this.event(tx, projectId, EVENT.APPROVAL_RECORDED, `${input.gate}: ${input.decision}`, {
@@ -306,6 +333,81 @@ export class ProjectService {
     });
     await this.onJobQueued?.(job);
     return job;
+  }
+
+  /**
+   * Write a script draft from the approved architecture: starts the script
+   * phase (from STORY_APPROVED), runs again in it, recovers a failed run, or
+   * replaces the version under review or approved (a rewind; every version
+   * is kept).
+   */
+  async generateScript(projectId: string, raw: GenerateScriptInput, actor: Actor): Promise<Job> {
+    const input = GenerateScriptInput.parse(raw);
+    return this.scriptJob(projectId, actor, 'Writing a script draft', async (tx) => {
+      await this.requireApprovedArchitecture(tx, projectId);
+      return { ...(input.notes ? { notes: input.notes } : {}) };
+    });
+  }
+
+  /**
+   * Rewrite part or all of a script version from the editor's brief: the
+   * listed sections (the others are copied unchanged, with no model calls) or
+   * the whole script. A new version is created; every version is kept.
+   */
+  async reviseScript(projectId: string, raw: ReviseScriptInput, actor: Actor): Promise<Job> {
+    const input = ReviseScriptInput.parse(raw);
+    return this.scriptJob(projectId, actor, `Revising script v${input.baseVersion}`, async (tx) => {
+      const approved = await this.requireApprovedArchitecture(tx, projectId);
+      const base = await tx.script.findUnique({ where: { projectId_version: { projectId, version: input.baseVersion } }, include: { scenes: { select: { sequenceNumber: true } } } });
+      if (!base) throw new NotFoundError('Script', `v${input.baseVersion}`);
+      if (base.storyId !== approved.id) throw new ConflictError(`Script v${base.version} tells an architecture that is no longer the approved one (v${approved.version}): write a new draft instead`);
+      const known = base.scenes.map((s) => s.sequenceNumber);
+      const unknown = input.sections.filter((n) => !known.includes(n));
+      if (unknown.length) throw new ConflictError(`Script v${base.version} has no section ${unknown.join(', ')}`);
+      const sections = [...new Set(input.sections)].sort((a, b) => a - b);
+      await this.event(
+        tx,
+        projectId,
+        EVENT.SCRIPT_REVISION_REQUESTED,
+        `${sections.length ? `Section${sections.length > 1 ? 's' : ''} ${sections.join(', ')}` : 'The whole script'} of v${base.version} to be rewritten: ${input.brief.length > 160 ? `${input.brief.slice(0, 159)}…` : input.brief}`,
+        { actor, baseVersion: base.version, sections, brief: input.brief },
+      );
+      return { notes: input.brief, revise: { baseVersion: base.version, sections } };
+    });
+  }
+
+  /**
+   * Enqueue a SCRIPT job, entering SCRIPT_DRAFT first when needed: START from
+   * STORY_APPROVED, REWIND from SCRIPT_APPROVED, RECOVER from a failed run, or
+   * the SCRIPT gate's send-back path from SCRIPT_REVIEW (classified REJECT;
+   * no gate decision is recorded, the version under review stays IN_REVIEW
+   * until the new version supersedes it).
+   */
+  private async scriptJob(projectId: string, actor: Actor, reason: string, prepare: (tx: Tx) => Promise<Record<string, unknown>>): Promise<Job> {
+    const job = await this.db.$transaction(async (tx) => {
+      let project = await this.lockProject(tx, projectId);
+      const failedScript = project.status === 'FAILED' && project.failedFromStatus === 'SCRIPT_DRAFT';
+      if (!['STORY_APPROVED', 'SCRIPT_DRAFT', 'SCRIPT_REVIEW', 'SCRIPT_APPROVED'].includes(project.status) && !failedScript) {
+        throw new ConflictError(`A script can be written once the story architecture is approved (the project is ${project.status})`);
+      }
+      const input = await prepare(tx);
+      if (project.status !== 'SCRIPT_DRAFT') {
+        const kind = getTransitionKind(project.status, 'SCRIPT_DRAFT', { failedFrom: project.failedFromStatus });
+        if (kind !== 'START' && kind !== 'REWIND' && kind !== 'RECOVER' && kind !== 'REJECT') throw new ConflictError(`Cannot write a script from ${project.status}`);
+        project = await this.transition(tx, project, 'SCRIPT_DRAFT', actor, reason);
+      }
+      const languageVersionId = await this.resolveLanguageVersionId(tx, project);
+      return this.insertJob(tx, project, 'SCRIPT', languageVersionId, input as Prisma.InputJsonValue, actor);
+    });
+    await this.onJobQueued?.(job);
+    return job;
+  }
+
+  private async requireApprovedArchitecture(tx: Tx, projectId: string): Promise<{ id: string; version: number }> {
+    const a = await tx.storyArchitecture.findFirst({ where: { projectId, status: 'APPROVED' }, orderBy: { version: 'desc' }, select: { id: true, version: true, engineVersion: true } });
+    if (!a) throw new ConflictError('No approved story architecture: approve one at the Story gate first');
+    if (a.engineVersion !== 2) throw new ConflictError(`Architecture v${a.version} was built by story engine 1; the script engine needs a Story Engine 2.0 architecture`);
+    return a;
   }
 
   /** Why the units of `packId` cannot be used for a revision or angles now, or null. */

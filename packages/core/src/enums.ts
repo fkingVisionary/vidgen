@@ -351,6 +351,73 @@ export const ARCHITECTURE_ORIGINS = ['NEW', 'REVISION'] as const;
 export type ArchitectureOrigin = (typeof ARCHITECTURE_ORIGINS)[number];
 
 // ---------------------------------------------------------------------------
+// Script Engine
+// ---------------------------------------------------------------------------
+
+export const SCRIPT_ENGINE_VERSIONS = [1] as const;
+export type ScriptEngineVersion = (typeof SCRIPT_ENGINE_VERSIONS)[number];
+
+/**
+ * The information class of a narration block: the architecture's four, plus
+ * FRAMING for the narrator's own connective lines (a question, a turn, a
+ * signpost), which carry no facts at all.
+ */
+export const SCRIPT_BLOCK_CLASSES = [...INFORMATION_CLASSES, 'FRAMING'] as const;
+export type ScriptBlockClass = (typeof SCRIPT_BLOCK_CLASSES)[number];
+
+/** Performance metadata. Used where it changes the delivery, not on every block. */
+export const DELIVERY_PACES = ['SLOW', 'NORMAL', 'FAST'] as const;
+export type DeliveryPace = (typeof DELIVERY_PACES)[number];
+export const DELIVERY_ENERGIES = ['LOW', 'MEDIUM', 'HIGH'] as const;
+export type DeliveryEnergy = (typeof DELIVERY_ENERGIES)[number];
+export const DELIVERY_EMOTIONS = ['NEUTRAL', 'TENSE', 'CURIOUS', 'SOMBER', 'EXCITED', 'REFLECTIVE'] as const;
+export type DeliveryEmotion = (typeof DELIVERY_EMOTIONS)[number];
+/** Stress on a word or phrase (no entry = no emphasis). */
+export const EMPHASIS_LEVELS = ['LIGHT', 'STRONG'] as const;
+export type EmphasisLevel = (typeof EMPHASIS_LEVELS)[number];
+
+/** Semantic pauses: placed for a reason, never after every sentence. */
+export const PAUSE_LENGTHS = ['NONE', 'MICRO', 'SHORT', 'MEDIUM', 'LONG'] as const;
+export type PauseLength = (typeof PAUSE_LENGTHS)[number];
+export const PAUSE_REASONS = ['REVEAL', 'NUMBER', 'EMOTIONAL_TURN', 'TRANSITION', 'IMPACT', 'QUESTION', 'RHYTHM'] as const;
+export type PauseReason = (typeof PAUSE_REASONS)[number];
+
+/** What the viewer should see while a block is heard: a handoff to the future storyboard, not a visual plan. */
+export const VISUAL_INTENTS = [
+  'CINEMATIC_RECONSTRUCTION',
+  'DOCUMENT',
+  'MAP',
+  'DATA',
+  'TIMELINE',
+  'ARCHIVAL',
+  'PORTRAIT',
+  'ENVIRONMENT',
+  'ABSTRACT_METAPHOR',
+  'ON_SCREEN_TEXT',
+  'NONE',
+] as const;
+export type VisualIntent = (typeof VISUAL_INTENTS)[number];
+export const VISUAL_PRIORITIES = ['LOW', 'NORMAL', 'HIGH'] as const;
+export type VisualPriority = (typeof VISUAL_PRIORITIES)[number];
+
+/** The editor's decision on one section of a script version. */
+export const SECTION_REVIEW_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'] as const;
+export type SectionReviewStatus = (typeof SECTION_REVIEW_STATUSES)[number];
+
+/** How a script version came about. */
+export const SCRIPT_ORIGINS = [
+  'DRAFT', // written from the approved architecture
+  'SECTIONS', // a version with some sections rewritten (the rest copied unchanged)
+  'REVISION', // the whole script rewritten from the editor's brief
+  'RESTORE', // a copy of an earlier version, made current again (no model calls)
+] as const;
+export type ScriptOrigin = (typeof SCRIPT_ORIGINS)[number];
+
+/** How sure a pronunciation note is. Anything below HIGH is flagged for human review. */
+export const PRONUNCIATION_CONFIDENCES = ['HIGH', 'MEDIUM', 'LOW'] as const;
+export type PronunciationConfidence = (typeof PRONUNCIATION_CONFIDENCES)[number];
+
+// ---------------------------------------------------------------------------
 // Visuals, infographics, media
 // ---------------------------------------------------------------------------
 

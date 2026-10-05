@@ -117,7 +117,7 @@ async function opportunityCounts(db: Database, projectId: string): Promise<Map<s
 }
 
 /** Claims of one dossier by key, with the sources they cite plus `extraSourceIds`. */
-async function evidenceFor(db: Database, dossierId: string, keys: readonly string[], extraSourceIds: readonly string[]): Promise<StoryEvidenceView> {
+export async function evidenceFor(db: Database, dossierId: string, keys: readonly string[], extraSourceIds: readonly string[]): Promise<StoryEvidenceView> {
   const claims = await db.researchClaim.findMany({
     where: { dossierId, claimKey: { in: [...new Set(keys)] } },
     orderBy: { sortOrder: 'asc' },
