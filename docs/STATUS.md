@@ -1,8 +1,9 @@
 # Status — what exists, honestly
 
-Last updated: the first live narrative refinement — Tulip Mania script v1 →
-v2 with the real model, no director's instructions (2026-10-05; results
-below). Deployed: `69f21bc`.
+Last updated: the Script Quality Rules and their acceptance rerun — Tulip
+Mania script v1 → v3 with the real model, no director's instructions,
+compared with v1 and v2 under the new rules (2026-10-05; results below).
+Deployed: `1297c10`.
 
 ## IMPLEMENTED (real, tested)
 
@@ -110,6 +111,30 @@ a retry two minutes later succeeded.
 
 ## NOT YET VERIFIED LIVE
 
+- **Script Quality Rules** acceptance rerun (Tulip Mania, 2026-10-05, v1 → v3
+  with the same empty director's field as v2, `1297c10`): four calls ≈ $2.40
+  estimated, 11.6 minutes; v2 superseded (kept). The refinement step returned
+  2,227 words, 14:51 — inside the 15:00 maximum — and the performance marks
+  took the saved v3 to 15:15 (v1 15:26, v2 15:59); 319 words removed and 294
+  added, all 7 sections changed; claim C028 (background) and the figures 31
+  and 438 dropped as passenger detail, nothing added; quality gate passed.
+  The rules on v1 / v2 / v3: page syntax 7 / 16 / 0; meta-narration 3 / 1 / 0
+  (one framing line allowed in the opening); a fictional device labelled two
+  ways 0 / 1 / 0; three new names in one block 1 / 1 / 0; a person named
+  without their role 1 / 0 / 0; one claim explained in four sections
+  0 / 1 / 0; three numbers in a sentence 0 / 1 / 0; retellings 1 / 2 / 1 (the
+  ending still re-explains the opening's legend, 7.6 → 1.1); section 7
+  3:13 / 3:21 / 3:05 against a 2:24 share. Passenger facts: the rule flagged
+  none in any version — the refiner cut them from the prompt's rules. Script
+  editor 8 / 7 / 8 / 7 / 7; checklist 7 yes, 6 partly, no no; it found 2.6
+  calling a dramatised telling "what probably happened" and some of v1's
+  strong lines dropped. Both reviewers' patches were refused whole — the
+  editor's 12 changes added 6 blocking findings, the fact checker's 2 added
+  1 — so the fact checker's two MINOR issues (2.6; 4.9, a person named
+  without the claim behind the deal) stay open for the editor. Not yet
+  verified by these rules: passenger detection on real text; callbacks (the
+  detector also took repeated hedges and a recurring source name for
+  callbacks).
 - **Narrative refinement** first live run (Tulip Mania, 2026-10-05, v1 → v2,
   no director's instructions, `69f21bc`): four calls ≈ $2.15 estimated, 9.8
   minutes. v2: 81 blocks, 2,319 words, 15:59 (v1: 75 blocks, 2,259 words,
