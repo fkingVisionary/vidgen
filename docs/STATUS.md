@@ -57,6 +57,22 @@ estimate, now decides the real length).
 
 Test counts at time of writing: **461 unit** (38 files) + **94 integration** (7 files), all passing.
 
+## GQF ACCEPTANCE RUN (Railway, 2026-10-05): refinement from script v1 → v4
+
+From the job log (no manual edit): v4 saved for review, **quality gate
+PASSED**, 2,262 words, **15:05** (the 10–15 minute range plus 5 s; a warning,
+not blocking), $1.82 estimated. Rules v1 → v4: uncited assertions 1 → 0,
+retellings 1 → 0, name load 1 → 0, meta-narration 3 → 0, people
+unintroduced 1 → 0, page syntax 7 → 0; sections over budget 2 → 2 and the
+ending drag 1 → 1 remain. The script editor's changes: 11 kept, 1 rejected
+(an unhedged PROBABLE claim). **The fact checker and the performance pass did
+not run** — the Anthropic API refused them for a low credit balance — so v4
+has no fact check of the refinement and no performance marks (0 pauses, no
+delivery). The deterministic evidence rules did run and pass. Consequence for
+voice: the restrained performance strategy translates the script's delivery
+marks, so on v4 it sends the same text as plain until marks are added (by
+editing blocks) or a director's directions are given per chunk.
+
 ## FIRST LIVE RUN (Railway, 2026-10-04)
 
 Project *Tulip Mania*, real Claude (`claude-opus-5-5`) and Tavily (API key):
