@@ -289,6 +289,7 @@ class ScriptRun {
         models: this.models,
         estimatedCostUsd: spend,
         resumedSteps: stats.resumedSteps,
+        notes,
         ...(comparison ? { comparison } : {}),
       },
     );

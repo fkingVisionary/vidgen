@@ -426,9 +426,10 @@ describe('script engine (fake AI, real database)', () => {
     const log3 = await db.projectEvent.findMany({ where: { projectId, type: 'JOB_PROGRESS', jobId: again.id }, orderBy: { createdAt: 'asc' } });
     expect(log3.at(-2)!.message).toMatch(/^Script quality rules, v1 → v3: /);
     expect(Object.keys((log3.at(-2)!.data as { rules: object }).rules)).toEqual(['v1', 'v2', 'v3']);
-    expect(QualityReport.parse((await version(projectId, 3)).row.qualityReport).normalizations).toContainEqual(
-      expect.stringMatching(/^Length: The writer's change log claims [\d,]+ words; measured: [\d,]+ words, 2:\d\d — the measured length is the one that counts$/),
-    );
+    const misstated = expect.stringMatching(/^Length: The writer's change log claims [\d,]+ words; measured: [\d,]+ words, 2:\d\d — the measured length is the one that counts$/);
+    expect(QualityReport.parse((await version(projectId, 3)).row.qualityReport).normalizations).toContainEqual(misstated);
+    // The job log carries the run's notes too.
+    expect((log3.at(-1)!.data as { notes: string[] }).notes).toContainEqual(misstated);
   });
 
   it('holds a refinement to the same rules, whatever the director asks: a dropped hedge or a new figure stops approval; a skipped section is kept', async () => {
