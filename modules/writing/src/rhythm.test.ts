@@ -77,6 +77,13 @@ describe('rhythmProfile on a small known text', () => {
     expect(p.sentences).toBe(3);
     expect(p.longShare).toBe(0.33);
   });
+
+  it('25 words is not yet long; 26 is', () => {
+    const words = (n: number) => Array.from({ length: n }, (_, i) => ['the', 'guild', 'paid', 'its', 'masons', 'in', 'silver', 'every', 'spring'][i % 9]).join(' ');
+    expect(rhythmProfile([block('1.1', `${words(25)}.`)]).longShare).toBe(0);
+    expect(rhythmProfile([block('1.1', `${words(26)}.`)]).longShare).toBe(1);
+    expect(rhythmProfile([block('1.1', `${words(25)}. ${words(26)}.`)])).toMatchObject({ sentences: 2, meanWords: 25.5, longShare: 0.5 });
+  });
 });
 
 // ── Runs, openings and endings ───────────────────────────────────────────────
@@ -106,6 +113,18 @@ describe('repeated openings and same-length runs', () => {
   it('short sentences never make a same-length run', () => {
     expect(rhythmProfile([block('1.1', 'Ships waited. Crews waited. Prices rose. Banks lent. Nobody paid.')])).toMatchObject({ sameLengthRuns: 0, longestFragmentRun: 5, fragmentShare: 1 });
   });
+
+  it('a long run counts once; two runs broken by a sentence of another length count twice', () => {
+    const six = [...FOUR, 'The council kept the money in a locked chest.', 'The council spent none of it on the old bridge.'];
+    expect(rhythmProfile([block('1.1', six.join(' '))]).sameLengthRuns).toBe(1);
+    const broken = [...FOUR, 'Nobody asked where it went.', ...FOUR];
+    expect(rhythmProfile([block('1.1', broken.join(' '))]).sameLengthRuns).toBe(2);
+  });
+
+  it('fragments run on across the blocks of a section, but a section boundary breaks the run', () => {
+    expect(rhythmProfile([block('1.1', 'Ships waited. Crews waited.'), block('1.2', 'Prices rose. Nobody paid.')]).longestFragmentRun).toBe(4);
+    expect(rhythmProfile([block('1.1', 'Ships waited. Crews waited.'), block('2.1', 'Prices rose. Nobody paid.')])).toMatchObject({ longestFragmentRun: 2, fragmentShare: 1 });
+  });
 });
 
 describe('ending repetition', () => {
@@ -123,6 +142,14 @@ describe('ending repetition', () => {
   it('is zero for a single block', () => {
     expect(rhythmProfile([block('1.1', 'It failed. It failed again.')]).endingRepetition).toBe(0);
   });
+
+  it('reads the ending without a closing aside: the aside is not how the block ends', () => {
+    const p = rhythmProfile([
+      block('1.1', 'The guild raised its fees for the first time that year.'),
+      block('1.2', 'Half of the apprentices left the city before the end of that year (the records give no number).'),
+    ]);
+    expect(p.endingRepetition).toBe(1);
+  });
 });
 
 describe('variation', () => {
@@ -135,8 +162,9 @@ describe('variation', () => {
     ]);
     expect(monotone.variation).toBeLessThan(0.3);
     expect(varied.variation).toBeGreaterThan(0.6);
-    expect(monotone.sameLengthRuns).toBe(1);
-    expect(varied.sameLengthRuns).toBe(0);
+    // 9, 8, 8, 9 words: mean 8.5, sd 0.5. 5, 21, 2, 24 words: mean 13, sd √92.5 = 9.6.
+    expect(monotone).toMatchObject({ sentences: 4, meanWords: 8.5, sdWords: 0.5, variation: 0.06, sameLengthRuns: 1 });
+    expect(varied).toMatchObject({ sentences: 4, meanWords: 13, sdWords: 9.6, variation: 0.74, sameLengthRuns: 0, fragmentShare: 0.25 });
   });
 });
 
@@ -150,8 +178,8 @@ describe("only the narrator's words", () => {
 
   it('a quotation is the record speaking: its short sentences are not the narrator’s fragments', () => {
     const p = rhythmProfile([block('1.1', 'In his last letter the harbour master wrote to the council: "Ships wait. Crews wait. Prices rise." The council did not reply.')]);
-    expect(p.sentences).toBe(2);
-    expect(p.longestFragmentRun).toBe(0);
+    // "In his last letter … to the council" (11 words) and "The council did not reply." (5): the quotation counts as no words and ends its sentence.
+    expect(p).toMatchObject({ sentences: 2, meanWords: 8, fragmentShare: 0, longestFragmentRun: 0 });
   });
 
   it('an empty script gives zeros, never NaN', () => {

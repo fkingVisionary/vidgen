@@ -1,4 +1,4 @@
-import type { AiPattern, AiSignal } from '@docengine/core';
+import { AI_PATTERNS, type AiPattern, type AiSignal } from '@docengine/core';
 import { describe, expect, it } from 'vitest';
 import { STOCK_PHRASES, actionable, aiSignals, blockPatterns, describesPicture, overThreshold, summarise } from './fingerprints.ts';
 import type { NarrationBlock } from './text.ts';
@@ -42,7 +42,8 @@ describe("the brief's own examples", () => {
     expect(of(signals, 'visual_description').map((s) => s.excerpt)).toEqual(['From a corner bench, Thijs watches a thumb wipe a figure away.', 'The table shrugs.', 'He leans closer.']);
     expect(of(signals, 'visual_description').every((s) => s.kind === 'HARD' && s.ref === '1.1')).toBe(true);
     expect(patternsOf(act)).toEqual(['visual_description']);
-    expect(summary.score).toBeGreaterThan(50);
+    // Three HARD signals in three sentences: 9 / 4.5 → capped at 100.
+    expect(summary).toMatchObject({ score: 100, signals: 3, overThreshold: ['visual_description'] });
   });
 
   it('allows a single "not a flower — a promise" contrast: one DENSITY signal, nothing to act on, a score of zero', () => {
@@ -74,7 +75,12 @@ describe('rhetorical questions', () => {
     const { signals, actionable: act } = detect(one('Who paid for the bridge? And who kept the tolls? The council records do not say.'));
     const hard = of(signals, 'rhetorical_question').filter((s) => s.kind === 'HARD');
     expect(hard).toEqual([{ pattern: 'rhetorical_question', ref: '1.1', excerpt: 'Who paid for the bridge? And who kept the tolls?', kind: 'HARD' }]);
-    expect(of(act, 'rhetorical_question').length).toBeGreaterThan(0);
+    // Each question is also a DENSITY signal; with a HARD run in the script the pattern warns, so all three are actionable.
+    expect(act).toEqual([
+      { pattern: 'rhetorical_question', ref: '1.1', excerpt: 'Who paid for the bridge?', kind: 'DENSITY' },
+      { pattern: 'rhetorical_question', ref: '1.1', excerpt: 'And who kept the tolls?', kind: 'DENSITY' },
+      ...hard,
+    ]);
     // A HARD finding stays actionable in a script of any length.
     expect(actionable(signals, 10_000).filter((s) => s.kind === 'HARD')).toEqual(hard);
   });
@@ -130,7 +136,16 @@ describe('rhetorical questions', () => {
     expect(of(signals, 'qa_pair')).toEqual([{ pattern: 'qa_pair', ref: '1.1', excerpt: 'The result? Chaos.', kind: 'DENSITY' }]);
     expect(act).toEqual([]);
     const twice = detect(film(['The council voted to double the tolls. The result? Riots.', 'The mayor called in the militia. The cost? Ruinous.']));
-    expect(of(twice.actionable, 'qa_pair')).toHaveLength(2);
+    expect(of(twice.actionable, 'qa_pair').map((s) => [s.ref, s.excerpt])).toEqual([
+      ['1.1', 'The result? Riots.'],
+      ['1.2', 'The cost? Ruinous.'],
+    ]);
+  });
+
+  it('a longer question, or a longer answer, is not the clipped question-and-answer habit', () => {
+    // Question of eight words; answer of eight words.
+    expect(of(aiSignals(one('Who in the whole town paid for the bridge? Nobody.')), 'qa_pair')).toEqual([]);
+    expect(of(aiSignals(one('The result? Chaos in the streets of the city.')), 'qa_pair')).toEqual([]);
   });
 });
 
@@ -189,8 +204,10 @@ describe('fake dramatic transitions', () => {
   it('reports a sentence once per pattern, even when several of its rules match', () => {
     // "That's when" opens the sentence and "that's when everything" follows: one beat, one signal.
     const { signals, summary } = detect(film(['The firm had survived two recessions. That\'s when everything went wrong for the company.', 'Its largest customer cancelled every order in a single week.']));
-    expect(of(signals, 'dramatic_transition')).toHaveLength(1);
+    expect(of(signals, 'dramatic_transition')).toEqual([{ pattern: 'dramatic_transition', ref: '1.1', excerpt: "That's when everything went wrong for the company.", kind: 'HARD' }]);
     expect(summary.signals).toBe(1);
+    // One HARD signal in three sentences: 3 / 4.5.
+    expect(summary.score).toBe(67);
   });
 
   it('"Little did they know" is a stock phrase, wherever it appears', () => {
@@ -261,7 +278,7 @@ describe('trailer, mystery and explained emotion', () => {
     ["Here's the thing: nobody checked the books.", 'truth_reveal'],
   ])('flags "%s" (%s)', (line, pattern) => {
     const { signals } = detect(one(line));
-    expect(signals).toContainEqual({ pattern, ref: '1.1', excerpt: line, kind: 'HARD' });
+    expect(signals).toEqual([{ pattern, ref: '1.1', excerpt: line, kind: 'HARD' }]);
   });
 
   it('"The truth is…" is fine once and formulaic twice', () => {
@@ -302,8 +319,34 @@ describe('"not X, but Y" contrasts', () => {
 
   it('a single contrast followed by a sentence starting "It was" is still one contrast', () => {
     const { signals, actionable: act } = detect(one('It was not a strike, but a lockout. It was the owners who closed the gates.'));
-    expect(of(signals, 'contrast_formula')).toHaveLength(1);
+    expect(of(signals, 'contrast_formula')).toEqual([{ pattern: 'contrast_formula', ref: '1.1', excerpt: 'It was not a strike, but a lockout.', kind: 'DENSITY' }]);
     expect(act).toEqual([]);
+  });
+
+  it.each([
+    "It's not about the money. It's about power.",
+    "They're not farmers. They're speculators.",
+    "They aren't farmers. They are speculators.",
+    "That's not how it worked. It was a lottery.",
+    "It isn't a market. It's a casino.",
+  ])('the contracted and present-tense forms are the same formula: "%s"', (text) => {
+    expect(aiSignals(one(text))).toEqual([{ pattern: 'contrast_formula', ref: '1.1', excerpt: text, kind: 'DENSITY' }]);
+  });
+
+  it('a hedge is not a contrast, but "known for" is: only uncertainty about the record is spared', () => {
+    for (const hedge of [
+      "It's not clear who ordered it. It's possible that nobody did.",
+      'It is not clear from the records whether he paid. It was, at least, promised.',
+      'It is not recorded. It was, in any case, never repaid.',
+      'It was not certain that the ship had sailed. It was, by then, a month overdue.',
+    ])
+      expect(aiSignals(one(hedge)), hedge).toEqual([]);
+    const known = "It wasn't known for its tulips. It was known for its herring.";
+    expect(aiSignals(one(known))).toEqual([{ pattern: 'contrast_formula', ref: '1.1', excerpt: known, kind: 'DENSITY' }]);
+  });
+
+  it('"It\'s nothing like…" is not a negation', () => {
+    expect(aiSignals(one("It's nothing like the first auction. It's smaller."))).toEqual([]);
   });
 
   it('several contrasts in a short script are past the threshold and all of them are actionable', () => {
@@ -313,11 +356,14 @@ describe('"not X, but Y" contrasts', () => {
     expect(of(signals, 'contrast_formula').map((s) => s.excerpt)).toEqual(['It was not a strike, but a lockout.', 'It was not a protest, but a riot.', 'It was not a debate, but a purge.']);
     expect(summary.overThreshold).toEqual(['contrast_formula']);
     expect(of(act, 'contrast_formula')).toHaveLength(3);
-    expect(summary.score).toBeGreaterThan(0);
+    // Three DENSITY signals past their threshold, in three sentences: 3 / 4.5.
+    expect(summary.score).toBe(67);
   });
 
   it('"It wasn\'t X. It wasn\'t Y. It was Z." is one contrast, not two', () => {
-    expect(of(aiSignals(one('It was not a strike. It was not a protest. It was a lockout.')), 'contrast_formula')).toHaveLength(1);
+    expect(aiSignals(one('It was not a strike. It was not a protest. It was a lockout.'))).toEqual([
+      { pattern: 'contrast_formula', ref: '1.1', excerpt: 'It was not a protest. It was a lockout.', kind: 'DENSITY' },
+    ]);
   });
 
   it('the allowance grows with the length of the script', () => {
@@ -344,10 +390,15 @@ describe('em-dash density', () => {
     const three = detect(film(dashed));
     expect(of(three.signals, 'em_dash').map((s) => s.ref)).toEqual(['1.1', '1.2', '1.3']);
     expect(of(three.actionable, 'em_dash')).toHaveLength(3);
+    // The same three blocks in a script of 1,200 words are within the allowance (one per 400 words).
+    expect(overThreshold(three.signals, 1200)).toEqual([]);
+    expect(actionable(three.signals, 1200)).toEqual([]);
+    expect(actionable(three.signals, 1199)).toHaveLength(3);
   });
 
   it('a single dash and hyphenated words are not dash density', () => {
-    expect(aiSignals(one('The well-known merchant sold his share — all of it — in 1637.'))).toHaveLength(1);
+    // Two dashes, not three: the hyphen in "well-known" is not one.
+    expect(aiSignals(one('The well-known merchant sold his share — all of it — in 1637.'))).toEqual([{ pattern: 'em_dash', ref: '1.1', excerpt: '2 dashes', kind: 'DENSITY' }]);
     expect(aiSignals(one('The well-known merchant sold his share in 1637 — all of it.'))).toEqual([]);
     expect(aiSignals(one('The twenty-two-year-old clerk kept a day-by-day record of the sale.'))).toEqual([]);
   });
@@ -476,6 +527,14 @@ describe('narration describing the picture', () => {
     expect(aiSignals([block('1.1', informs, { visual })])).toEqual([]);
   });
 
+  it('ambient movement is a picture only with something seen: prices, credit and doubt drift, hover and tighten too', () => {
+    for (const line of ['Smoke curls from the chimney.', 'Her eyes narrow.', 'Light dances on the water of the canal.']) expect(describesPicture(line), line).toBe(true);
+    for (const line of ['Credit tightens.', 'Prices hover near their peak.', 'The gap narrows.', 'Doubt lingers.', 'Interest rates drift upward.', 'Confidence flickers.', 'Rumours swirl.']) {
+      expect(describesPicture(line), line).toBe(false);
+      expect(aiSignals(one(line)), line).toEqual([]);
+    }
+  });
+
   it('a thin visual note is not enough to call narration an echo', () => {
     const visual = { note: 'Contract', mustShow: [] };
     expect(describesPicture('The signed contract was witnessed by two aldermen.', visual)).toBe(false);
@@ -484,7 +543,7 @@ describe('narration describing the picture', () => {
 
 // ── Precision: human documentary prose, quotations, speakers, hedges ─────────
 
-/** Plain narration on six unrelated subjects, written the way a documentary editor would want it. */
+/** Plain narration on seven unrelated subjects, written the way a documentary editor would want it. */
 const HUMAN_PROSE: Record<string, string[][]> = {
   'public health (cholera, 1854)': [
     [
@@ -546,6 +605,16 @@ const HUMAN_PROSE: Record<string, string[][]> = {
       'Whose grave was it? Nobody knows for certain. There was no body, and the acidic soil may have dissolved it.',
     ],
   ],
+  'finance (the panic of 1907)': [
+    [
+      'In October 1907, a failed attempt to corner the shares of a copper company brought down the banks that had lent the money for it. By morning, depositors were queueing outside the Knickerbocker Trust.',
+      'Credit tightens quickly in a panic. Within days, the rate on overnight loans in New York had passed one hundred percent, and brokers could not borrow to settle their trades.',
+    ],
+    [
+      "There was no central bank to step in. John Pierpont Morgan, then seventy years old, called the city's bankers to his library and kept them there until they agreed to pool their reserves.",
+      'Share prices drifted lower for weeks after the worst had passed. The episode persuaded Congress that the country needed a lender of last resort, and in 1913 it created the Federal Reserve.',
+    ],
+  ],
 };
 
 describe('precision on human documentary prose', () => {
@@ -558,7 +627,7 @@ describe('precision on human documentary prose', () => {
     expect(summary.words).toBeGreaterThan(90);
   });
 
-  it('all six subjects run together as one long film still read as written by a person', () => {
+  it('all seven subjects run together as one long film still read as written by a person', () => {
     const sections = Object.values(HUMAN_PROSE).flat();
     const { actionable: act, summary } = detect(film(...sections));
     expect(act).toEqual([]);
@@ -637,9 +706,9 @@ describe('the fingerprint score', () => {
 
   it('rises with every signal and stays within 0–100', () => {
     const scores = [0, 1, 2, 3].map((n) => summarise(withHabits(n)).score);
-    expect(scores[0]).toBe(0);
-    for (let i = 1; i < scores.length; i++) expect(scores[i]!).toBeGreaterThan(scores[i - 1]!);
-    expect(scores.every((s) => s >= 0 && s <= 100)).toBe(true);
+    // Six sentences each time: every HARD signal adds 3 / (6 × 1.5) of the scale. The one same-length run of the plain text is below its threshold and counts nothing.
+    expect(scores).toEqual([0, 33, 67, 100]);
+    expect(aiSignals(withHabits(0)).map((s) => [s.pattern, s.kind])).toEqual([['length_repetition', 'DENSITY']]);
     // Every sentence a habit, several times over: capped at 100.
     expect(summarise(one('And then, little did they know, it was destiny. And then it was a house of cards. Imagine.')).score).toBe(100);
   });
@@ -684,6 +753,31 @@ describe('blockPatterns and the stock lexicon', () => {
       const sentence = `${typeset[0]!.toUpperCase()}${typeset.slice(1)}, according to the second narrator.`;
       expect(of(aiSignals(one(sentence)), 'stock_phrase').map((s) => s.excerpt), sentence).toContain(phrase);
     }
+  });
+
+  it('every pattern of the contract has a detector', () => {
+    // A Record over AiPattern: a pattern added to the contract without an example here fails to compile.
+    const EXAMPLES: Record<AiPattern, NarrationBlock[]> = {
+      stock_phrase: one('Little did they know what the auditors would find.'),
+      dramatic_transition: one('And then the bank failed.'),
+      hype_adverb: one('Incredibly, nobody was hurt.'),
+      imagine_opener: one('Imagine a city without clean water.'),
+      trailer_language: one('It was destiny.'),
+      mystery_language: one('The deal was shrouded in mystery.'),
+      emotion_explained: one('A palpable sense of dread filled the room.'),
+      truth_reveal: one("Here's the thing: nobody checked the books."),
+      micro_hook: one('The council approved the new tolls in March. But not for long.'),
+      contrast_formula: one("It wasn't a strike. It was a lockout."),
+      qa_pair: one('The result? Chaos.'),
+      fragment_run: one('Production slowed. Wages fell. Strikes began.'),
+      em_dash: one('The cost was high — far higher than the partners expected — and the bank knew it.'),
+      metaphor_stack: one('The settlement was a house of cards.'),
+      rhetorical_question: one('Who paid for the bridge? The council records do not say.'),
+      repeated_ending: film(['The first well was dug in 1902. It failed.', 'A second crew drilled deeper that summer. It failed too.', 'The investors sent an engineer from the coast. He gave up.']),
+      length_repetition: one('The harbour master wrote to the city council every week. The council sent him back the same reply each time. The merchants began to borrow money against their next cargo. The banks lent them the money at a very high rate.'),
+      visual_description: one('She nods.'),
+    };
+    for (const pattern of AI_PATTERNS) expect(patternsOf(aiSignals(EXAMPLES[pattern])), pattern).toContain(pattern);
   });
 
   it('signals point at the block they were found in', () => {

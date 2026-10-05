@@ -50,10 +50,12 @@ export function rhythmProfile(blocks: readonly NarrationBlock[]): RhythmProfile 
   let run = 0;
   for (let i = 0; i < all.length; i++) {
     const s = all[i]!;
-    fragRun = s.words <= 3 ? fragRun + 1 : 0;
-    longestFragmentRun = Math.max(longestFragmentRun, fragRun);
     const prev = all[i - 1];
-    if (prev && prev.section === s.section) {
+    // A section boundary breaks every run, fragments included (as the AI-pattern check reads them).
+    const sameSection = prev !== undefined && prev.section === s.section;
+    fragRun = s.words <= 3 ? (sameSection ? fragRun : 0) + 1 : 0;
+    longestFragmentRun = Math.max(longestFragmentRun, fragRun);
+    if (sameSection) {
       const a = wordTokens(prev.text)[0];
       if (a && a === wordTokens(s.text)[0]) repeatedOpenings++;
       if (s.words >= 5 && Math.abs(s.words - prev.words) <= 2) {

@@ -114,8 +114,10 @@ const MICRO_HOOK: RegExp[] = [
 
 /** Body parts, light and ambience: what a camera shows. */
 const SEEN = /\b(?:thumb|thumbs|finger|fingers|hand|hands|eyes|eye|brow|brows|lips|jaw|shoulder|shoulders|knuckles|candle|candles|candlelight|lamp|lamplight|shadow|shadows|smoke|dust|light)\b/;
-/** Gestures and ambient movement: what the picture carries better than words. */
-const GESTURE = /\b(?:leans?|leaning|glances?|glancing|nods?|nodding|shrugs?|shrugging|sighs?|sighing|smiles?|smiling|frowns?|frowning|blinks?|squints?|fidgets?|flickers?|flickering|gutters?|guttering|glints?|gleams?|shimmers?|swirls?|creaks?|rustles?|hovers?|hovering|trembles?|trembling|drums?|tapping|taps?|wipes?|wiping|lingers?|lingering|drifts?|dances?|dancing|twitches?|curls?|tightens?|narrows?)\b/;
+/** Gestures: what the picture carries better than words. */
+const GESTURE = /\b(?:leans?|leaning|glances?|glancing|nods?|nodding|shrugs?|shrugging|sighs?|sighing|smiles?|smiling|frowns?|frowning|blinks?|squints?|fidgets?|drums?|tapping|taps?|wipes?|wiping|twitches?)\b/;
+/** Ambient movement: a picture only with something seen ("candlelight flickers"); prices, credit and doubt drift, hover and tighten too. */
+const AMBIENT = /\b(?:flickers?|flickering|gutters?|guttering|glints?|gleams?|shimmers?|swirls?|creaks?|rustles?|hovers?|hovering|trembles?|trembling|lingers?|lingering|drifts?|dances?|dancing|curls?|tightens?|narrows?)\b/;
 const PICTURE_TALK = /\b(?:we see|you can see|on screen|in this (?:painting|picture|image|photograph|engraving|map|shot)|as we (?:look|watch))\b/;
 const INFORMATIVE = /\d|\b(?:because|so that|which meant|that meant|cost|price|paid|worth|owed|law|court|contract|record|records|ledger|accounts?)\b/;
 
@@ -124,7 +126,7 @@ export function describesPicture(sentence: string, visual?: NarrationBlock['visu
   const s = normalize(sentence);
   if (PICTURE_TALK.test(s)) return true;
   const words = wordTokens(s);
-  if (GESTURE.test(s) && !INFORMATIVE.test(s) && (SEEN.test(s) || words.length <= 8)) return true;
+  if (!INFORMATIVE.test(s) && ((GESTURE.test(s) && (SEEN.test(s) || words.length <= 8)) || (AMBIENT.test(s) && SEEN.test(s)))) return true;
   // Narration that repeats the block's own visual direction word for word.
   if (visual) {
     const shown = new Set(wordTokens([visual.note, ...visual.mustShow.map((m) => m.detail)].join(' ')).filter((w) => w.length > 3));
@@ -135,10 +137,15 @@ export function describesPicture(sentence: string, visual?: NarrationBlock['visu
 }
 
 const CONTRAST_ONE = /\bnot (?:just |only |simply |merely )?(?:a |an |the |about )?[\w' -]{1,30},? but\b/;
-const NEGATED = /^(?:it|this|that|he|she|they|what [\w' ]{1,30})\s+(?:(?:was|is|were)\s*n'?o?t|(?:was|is|were) not|did not|didn'?t)\b/;
-const AFFIRMED = /^(?:it|this|that|he|she|they)(?:'s| was| is| were)\b/;
-/** "It is not known whether…", "It was not clear who…": a hedge about the record, not the "It wasn't X. It was Y." formula. */
-const NOT_KNOWN = /(?:\bnot|n't) (?:entirely |altogether |yet |fully )?(?:known|clear|certain|sure|obvious|recorded|documented)\b/;
+/** "It wasn't…", "It is not…", and the contracted "It's not…", "They're not…". */
+const NEGATED = /^(?:it|this|that|he|she|they|what [\w' ]{1,30})(?:\s+(?:(?:was|is|were|are)\s*n'?o?t|(?:was|is|were|are) not|did not|didn'?t)|'(?:s|re) not)\b/;
+const AFFIRMED = /^(?:it|this|that|he|she|they)(?:'s|'re| was| is| were| are)\b/;
+/**
+ * "It is not known whether…", "It was not clear who…", "It is not recorded.": a
+ * hedge about the record, not the "It wasn't X. It was Y." formula — which
+ * "It wasn't known for its silver. It was known for its herring." still is.
+ */
+const NOT_KNOWN = /(?:\bnot|n't) (?:entirely |altogether |yet |fully )?(?:known|clear|certain|sure|obvious|recorded|documented)(?:\s*(?:[.,;:]|$)| (?:that|to (?:have|be))\b|(?: [\w']+){0,4}? (?:whether|if|who|whom|whose|what|which|why|how|when|where)\b)/;
 
 /**
  * Every AI-pattern signal of the narration, in order. A pattern that only

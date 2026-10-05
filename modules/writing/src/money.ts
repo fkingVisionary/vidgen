@@ -43,7 +43,10 @@ const NUMBER_WORDS: Record<string, number> = {
 };
 const SCALE: Record<string, number> = { hundred: 100, thousand: 1000, million: 1_000_000, billion: 1_000_000_000 };
 
-/** "1,200" → 1200; "twelve hundred" → 1200; "three thousand" → 3000; "a hundred" → 100; "40 million" → 40000000. */
+/**
+ * "1,200" → 1200; "twelve hundred" → 1200; "three thousand" → 3000; "a hundred" → 100; "40 million" → 40000000.
+ * Two sums are not one: "two hundred and three hundred" or "one thousand and two thousand" → null.
+ */
 export function parseAmount(text: string): number | null {
   const t = text.trim().toLowerCase();
   if (/^\d/.test(t)) {
@@ -57,6 +60,8 @@ export function parseAmount(text: string): number | null {
   }
   let total = 0;
   let current = 0;
+  let hundred = false; // the group being read already has its "hundred"
+  let last = Infinity; // the scale of the last group added to the total
   let seen = false;
   for (const w of t.split(/[\s-]+/)) {
     if (w === 'and') continue;
@@ -64,12 +69,21 @@ export function parseAmount(text: string): number | null {
       current += NUMBER_WORDS[w]!;
       seen = true;
     } else if (w in SCALE) {
-      current = (current || 1) * SCALE[w]!;
-      if (SCALE[w]! >= 1000) {
-        total += current;
-        current = 0;
-      }
+      const scale = SCALE[w]!;
       seen = true;
+      if (scale < 1000) {
+        if (hundred) return null;
+        current = (current || 1) * scale;
+        hundred = true;
+      } else if (scale < last) {
+        total += (current || 1) * scale;
+        current = 0;
+        hundred = false;
+        last = scale;
+      } else if (!current) {
+        total *= scale; // "ten thousand million"
+        last = scale;
+      } else return null;
     } else return null;
   }
   return seen ? total + current : null;
@@ -91,6 +105,14 @@ const DIGITS = String.raw`(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:[\s-]
 const WORDS = String.raw`(?:(?:a|an)(?=[\s-]+(?:${SCALES})\b)|(?:${UNITS}|${SCALES})\b)(?:(?:[\s-]+|(?<=(?:${SCALES}))\s+and\s+)(?:${UNITS}|${SCALES})\b)*`;
 const NUM = `${DIGITS}|${WORDS}`;
 
+/** The sum a run of number words ends with: "between two hundred and three hundred" is two sums, and the currency after them is the last one's. */
+function lastSum(text: string): { text: string; amount: number } | null {
+  const amount = parseAmount(text);
+  if (amount !== null) return { text, amount };
+  const and = /\s+and\s+/i.exec(text);
+  return and ? lastSum(text.slice(and.index + and[0].length)) : null;
+}
+
 /** Sums of money in a text: "1,200 crowns", "£300", "three hundred pounds". */
 export function moneyMentions(text: string, currencies: ReadonlySet<string>): MoneyMention[] {
   const out: MoneyMention[] = [];
@@ -99,8 +121,8 @@ export function moneyMentions(text: string, currencies: ReadonlySet<string>): Mo
   const symbol = new RegExp(String.raw`([£$€¥])\s?(${DIGITS})`, 'gi');
   for (const s of sentences(maskQuotes(text))) {
     for (const m of s.matchAll(named)) {
-      const amount = parseAmount(m[1]!);
-      if (amount !== null) out.push({ amount, amountText: m[1]!, currency: singular(m[2]!), sentence: s });
+      const sum = lastSum(m[1]!);
+      if (sum) out.push({ amount: sum.amount, amountText: sum.text, currency: singular(m[2]!), sentence: s });
     }
     for (const m of s.matchAll(symbol)) {
       const amount = parseAmount(m[2]!);
@@ -148,11 +170,13 @@ const yearIn = (s: string | null | undefined): number | null => {
   return m ? Number(m[1]) : null;
 };
 
-/** The words around a sum (six on each side): what they say is what the sum is. */
+/** The words around a sum (six on each side): what they say is what the sum is. The sum is found whole ("one hundred and fifty", not the "one" in "done"). */
 function around(sentence: string, amountText: string): string {
-  const words = sentence.split(/\s+/);
-  const at = words.findIndex((w) => w.includes(amountText.split(/\s+/)[0]!));
-  return at < 0 ? sentence : words.slice(Math.max(0, at - 6), at + 7).join(' ');
+  const at = new RegExp(String.raw`(?<![\p{L}\p{N}]|\d[,.])${amountText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\p{L}\p{N}]|[,.]\d)`, 'u').exec(sentence);
+  if (!at) return sentence;
+  const before = sentence.slice(0, at.index).split(/\s+/).filter(Boolean).slice(-6);
+  const after = sentence.slice(at.index + amountText.length).split(/\s+/).filter(Boolean).slice(0, 6);
+  return [...before, amountText, ...after].join(' ');
 }
 
 function classify(sentence: string): MoneyComparisonType | 'PRICE' {
@@ -296,8 +320,13 @@ export function moneyContexts(evidence: EvidenceBase, claimSet: ReadonlySet<stri
     .map((c, i) => ({ ...c, id: `M${i + 1}` }));
 }
 
-/** Words that already give a sum some meaning. */
-const CONTEXT_WORDS = /\b(?:earn(?:ed|s|t)?|wages?|pay|paid|salary|income|a year'?s|years'|months'|weeks'|days'|as much as|more than|worth|enough to buy|the price of|cost of|equal to|for comparison|records don'?t give)\b/;
+/** Words that already give a sum some meaning. (A plural possessive ends in an apostrophe, where "\b" cannot follow.) */
+const CONTEXT_WORDS = /\b(?:earn(?:ed|s|t)?|wages?|pay|paid|salary|income|a (?:day|week|month|year)'?s|as much as|more than|worth|enough to buy|the price of|cost of|equal to|for comparison|records don'?t give)\b|\b(?:days|weeks|months|years)'(?!\w)/;
+/** …but the same words only leading up to the sum ("agreed to pay 1,200 crowns", "worth 5,500 crowns") say nothing of what it meant — unless the sum is a rate ("paid 300 crowns a year"). */
+const LEADS_TO_SUM = new RegExp(
+  String.raw`\b(?:pay|paid|worth|more than|as much as|the price of|cost of|equal to)\s+(?:(?:about|around|roughly|nearly|almost|some|over|only|just|at least|more than|as much as)\s+)*(?:[£$€¥]\s?)?(?:${NUM})\b(?![^.;:!?]*\b(?:a|per|each|every) (?:day|week|month|year)\b)`,
+  'gi',
+);
 
 export interface MoneyUse {
   ref: string;
@@ -315,7 +344,7 @@ export function moneyInNarration(blocks: readonly NarrationBlock[], contexts: re
   narration.forEach((b, i) => {
     for (const m of moneyMentions(b.text, currencies)) {
       const near = [narration[i - 1], b, narration[i + 1]].filter((x): x is NarrationBlock => !!x && x.section === b.section);
-      const contextualised = near.some((x) => CONTEXT_WORDS.test(normalize(maskQuotes(x.text))));
+      const contextualised = near.some((x) => CONTEXT_WORDS.test(normalize(maskQuotes(x.text)).replace(LEADS_TO_SUM, '')));
       out.push({ ref: b.key, mention: m, contexts: contexts.filter((c) => c.amount === m.amount && c.currency === m.currency), contextualised });
     }
   });

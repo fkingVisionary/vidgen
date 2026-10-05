@@ -66,11 +66,30 @@ describe('parseAmount: a sum as written, as a number', () => {
     expect(parseAmount('two hundred and fifty')).toBe(250);
     expect(parseAmount('twenty-five')).toBe(25);
     expect(parseAmount('two thousand five hundred')).toBe(2500);
+    expect(parseAmount('a hundred and fifty')).toBe(150);
+    expect(parseAmount('twelve hundred and fifty')).toBe(1250);
+    expect(parseAmount('a thousand and one')).toBe(1001);
+  });
+
+  it('reads large sums whole, a group at a time', () => {
+    expect(parseAmount('two hundred and fifty thousand')).toBe(250_000);
+    expect(parseAmount('one million two hundred thousand')).toBe(1_200_000);
+    expect(parseAmount('three hundred thousand two hundred')).toBe(300_200);
+    expect(parseAmount('two billion')).toBe(2_000_000_000);
+    expect(parseAmount('ten thousand million')).toBe(10_000_000_000);
+  });
+
+  it('gives null for two sums written together: they are not one sum', () => {
+    expect(parseAmount('two hundred and three hundred')).toBeNull();
+    expect(parseAmount('a hundred and two hundred')).toBeNull();
+    expect(parseAmount('one thousand and two thousand')).toBeNull();
   });
 
   it('reads digits followed by a scale word', () => {
     expect(parseAmount('40 million')).toBe(40_000_000);
     expect(parseAmount('1.5 million')).toBe(1_500_000);
+    expect(parseAmount('2 billion')).toBe(2_000_000_000);
+    expect(parseAmount('40 dollars')).toBeNull();
   });
 
   it('gives null for anything that is not a number', () => {
@@ -81,7 +100,7 @@ describe('parseAmount: a sum as written, as a number', () => {
 });
 
 describe('moneyMentions: the sums a text says', () => {
-  const currencies = keys('guilder', 'pound', 'dollar', 'euro');
+  const currencies = keys('guilder', 'pound', 'dollar', 'euro', 'florin');
 
   it('finds each sum with its currency (in the singular) and the sentence it is in', () => {
     const text = 'Proefman had bought the bulbs for 1,200 guilders. A craftsman earned about three hundred guilders a year.';
@@ -92,12 +111,17 @@ describe('moneyMentions: the sums a text says', () => {
   });
 
   it('reads currency symbols', () => {
-    const found = moneyMentions('The rent was £30 a year. The company raised $40 million. The painting sold for €1,500.', currencies);
-    expect(found.map((m) => [m.amount, m.currency])).toEqual([
-      [30, 'pound'],
-      [40_000_000, 'dollar'],
-      [1500, 'euro'],
+    const found = moneyMentions('The rent was £30 a year. The company raised $40 million. The painting sold for €1,500. The ship cost £1.5 million.', currencies);
+    expect(found.map((m) => [m.amountText, m.amount, m.currency])).toEqual([
+      ['30', 30, 'pound'],
+      ['40 million', 40_000_000, 'dollar'],
+      ['1,500', 1500, 'euro'],
+      ['1.5 million', 1_500_000, 'pound'],
     ]);
+  });
+
+  it('reads a metal named between the sum and its currency', () => {
+    expect(moneyMentions('He paid a thousand gold florins.', currencies).map((m) => [m.amountText, m.amount, m.currency])).toEqual([['a thousand', 1000, 'florin']]);
   });
 
   it('reads a sum written in several words whole, never just its last word', () => {
@@ -110,8 +134,14 @@ describe('moneyMentions: the sums a text says', () => {
     expect(read('Lumeo raised 40 million dollars in 2019.')).toEqual([['40 million', 40_000_000]]);
   });
 
-  it('does not join two separate numbers into one sum', () => {
-    expect(moneyMentions('Prices ran between ten and twenty pounds.', currencies).map((m) => m.amount)).toEqual([20]);
+  it('does not join two separate numbers into one sum: the currency belongs to the last of them', () => {
+    const read = (text: string) => moneyMentions(text, currencies).map((m) => [m.amountText, m.amount]);
+    expect(read('Prices ran between ten and twenty pounds.')).toEqual([['twenty', 20]]);
+    expect(read('A craftsman earned between two hundred and three hundred guilders a year.')).toEqual([['three hundred', 300]]);
+    expect(read('It cost between a hundred and two hundred pounds.')).toEqual([['two hundred', 200]]);
+    expect(read('Bids came in at one thousand and two thousand guilders.')).toEqual([['two thousand', 2000]]);
+    // …while one sum with "and" in it stays one sum.
+    expect(read('The estate was valued at two hundred and fifty thousand guilders.')).toEqual([['two hundred and fifty thousand', 250_000]]);
   });
 
   it('ignores numbers that are not money, and currencies it was not told about', () => {
@@ -130,6 +160,14 @@ describe('currenciesOf: what counts as money in a dossier', () => {
     expect(c.has('guilder')).toBe(true);
     expect(c.has('pound')).toBe(true);
     expect(currenciesOf(dossier([])).has('guilder')).toBe(false);
+  });
+
+  it('takes the last word of a currency the price evidence qualifies, in the singular', () => {
+    const price = (currency: string): PriceEvidence => ({ item: 'a cask', price: '12', currency, date: '1720', context: 'market', reliability: 'high', claimKeys: [] });
+    const c = currenciesOf(dossier([], [price('Dutch guilders'), price('rijksdaalders')]));
+    expect(c.has('guilder')).toBe(true);
+    expect(c.has('rijksdaalder')).toBe(true);
+    expect(c.has('dutch')).toBe(false);
   });
 });
 
@@ -233,6 +271,14 @@ describe('moneyContexts: what a sum meant, from the evidence only', () => {
     expect(c.explanation).toBe("nearly five years' pay for a skilled craftsman");
   });
 
+  it('reads what a sum in words is from the words around the whole sum, not from a word that happens to contain its first word', () => {
+    // "honest" contains "one": the wage and its period are read around "one hundred and fifty", where they are.
+    const evidence = tulipWith({ C018: { statement: 'A skilled craftsman of honest trade earned one hundred and fifty guilders a year.', citations: [] } });
+    expect(moneyFacts(evidence, keys('C018'))).toMatchObject([{ amount: 150, amountText: 'one hundred and fifty', kind: 'CONTEMPORARY_WAGE', period: 'year', who: 'a skilled craftsman' }]);
+    const c = moneyContexts(evidence, keys('C008', 'C018'))[0]!;
+    expect(c).toMatchObject({ comparisonType: 'CONTEMPORARY_WAGE', ratio: 8, explanation: "about eight years' pay for a skilled craftsman" });
+  });
+
   describe('on a dossier from another domain', () => {
     const SHARE = 'In 1720 a single share in the company sold for 1,000 pounds.';
     const WAGE = 'A labourer earned about 25 pounds a year in the 1720s.';
@@ -300,8 +346,7 @@ describe('moneyContexts: what a sum meant, from the evidence only', () => {
         { key: 'S9', statement: 'In 1721 a share sold for 200 pounds.' },
       ]);
       const contexts = moneyContexts(evidence, keys('S8', 'S9'));
-      expect(contexts.filter((c) => c.amount === 200)).toEqual([]);
-      expect(contexts.every((c) => c.amount === 1000)).toBe(true);
+      expect(contexts.map((c) => [c.amount, c.comparisonType, c.sourceClaimKeys])).toEqual([[1000, 'MODERN_ESTIMATE', ['S8']]]);
       expect(JSON.stringify(contexts)).not.toContain('30,000');
     });
 
@@ -318,6 +363,8 @@ describe('moneyContexts: what a sum meant, from the evidence only', () => {
     const evidence = new EvidenceBase({ ...input, claims: [...input.claims, rate] });
     const contexts = moneyContexts(evidence, keys('C008', 'C900'));
     expect(contexts.filter((c) => c.amount === 1200)).toEqual([]);
+    // The rate stays with the one sum it is given for, in its own words; nothing is multiplied out.
+    expect(contexts.map((c) => [c.amount, c.comparisonType, c.sourceClaimKeys, c.ratio])).toEqual([[1, 'MODERN_ESTIMATE', ['C900'], null]]);
     expect(JSON.stringify(contexts)).not.toContain('12,000');
   });
 });
@@ -327,6 +374,13 @@ describe('spokenRatio: a ratio as a narrator says it', () => {
     expect(spokenRatio(4)).toEqual({ phrase: 'about four', value: 4 });
     expect(spokenRatio(4.8)).toEqual({ phrase: 'nearly five', value: 5 });
     expect(spokenRatio(18.33)).toEqual({ phrase: 'more than eighteen', value: 18 });
+  });
+
+  it('says "about" only within a small margin of the whole number', () => {
+    expect(spokenRatio(4.1).phrase).toBe('about four');
+    expect(spokenRatio(3.9).phrase).toBe('about four');
+    expect(spokenRatio(4.2).phrase).toBe('more than four');
+    expect(spokenRatio(3.8).phrase).toBe('nearly four');
   });
 
   it('rounds large ratios to fives', () => {
@@ -360,6 +414,26 @@ describe('moneyInNarration and moneyGaps: the sums the narrator says', () => {
     expect(moneyInNarration([block('2.1', `${SUM.text} ${meaning}`)], contexts, currencies)[0]!.contextualised).toBe(true);
   });
 
+  it('hears a span of working time as context, whatever word follows it', () => {
+    const told = (meaning: string) => moneyInNarration([block('2.1', `${SUM.text} ${meaning}`)], contexts, currencies)[0]!.contextualised;
+    expect(told("That was four years' work for a skilled craftsman.")).toBe(true);
+    expect(told('That was more than four years’ earnings for a skilled craftsman.')).toBe(true);
+    expect(told("It was two months' rent for a family.")).toBe(true);
+    expect(told("It was a month's pay for a clerk.")).toBe(true);
+  });
+
+  it('does not take the words that only lead up to a sum for its meaning', () => {
+    const plain = (text: string) => moneyInNarration([block('2.1', text)], contexts, currencies)[0]!.contextualised;
+    expect(plain('Cornelis Proefman agreed to pay 1,200 guilders for a single bulb.')).toBe(false);
+    expect(plain('He paid 1,200 guilders for a single bulb.')).toBe(false);
+    expect(plain('He bought bulbs worth more than 1,200 guilders.')).toBe(false);
+    expect(plain('The bulbs came at a cost of 1,200 guilders.')).toBe(false);
+    // A sum said as a rate is a wage or an income: that is what it meant.
+    expect(plain('A craftsman was paid about 300 guilders a year.')).toBe(true);
+    // The same words around something other than the sum still give it meaning.
+    expect(plain('He paid 1,200 guilders, as much as a house in the town.')).toBe(true);
+  });
+
   it('does not borrow meaning from another section, or from a block further away', () => {
     const meaning = "That was about four years' pay for a skilled craftsman.";
     expect(moneyInNarration([SUM, block('3.1', meaning)], contexts, currencies)[0]!.contextualised).toBe(false);
@@ -378,7 +452,13 @@ describe('moneyInNarration and moneyGaps: the sums the narrator says', () => {
     expect(gaps).toHaveLength(1);
     expect(gaps[0]).toMatchObject({ ref: '1.1', amountText: '90,000', currency: 'guilder' });
     expect(gaps[0]!.note.startsWith(NO_EQUIVALENT)).toBe(true);
+    expect(gaps[0]!.note).toContain('No claim the architecture cites sets 90,000 guilders beside a wage');
     expect(NO_EQUIVALENT).toBe("The surviving records don't give us a reliable equivalent.");
+  });
+
+  it('still names the gap when the narration only says who paid the sum', () => {
+    const gaps = moneyGaps(moneyInNarration([block('1.1', 'Buyers at Alkmaar paid 90,000 guilders in all.')], contexts, currencies));
+    expect(gaps.map((g) => [g.ref, g.amountText])).toEqual([['1.1', '90,000']]);
   });
 
   it('is not a gap when the evidence offers a context (that is an editorial finding) or the narration already gives one', () => {
@@ -405,15 +485,15 @@ describe('renderMoneyContexts: the money context, for a prompt', () => {
 
   it('gives each context with its claims, the wording its verdict requires and its method', () => {
     const text = renderMoneyContexts(moneyContexts(tulip(), keys('C008', 'C009', 'C018')));
-    const [first, second] = text.split('\n');
-    expect(first).toContain('money context M1: 1,200');
-    expect(first).toContain("about four years' pay for a skilled craftsman");
+    const lines = text.split('\n');
+    expect(lines).toHaveLength(2);
+    const [first, second] = lines;
+    expect(first).toMatch(/^- money context M1: 1,200 guilders — about four years' pay for a skilled craftsman\. /);
     expect(first).toContain('Rests on C008 and C018 (PROBABLE: hedge)');
     expect(first).toContain('confidence medium');
     expect(first).toContain('say "about"');
     expect(first).toContain('1200 ÷ 300 = 4');
-    expect(second).toContain('money context M2: 5,500');
-    expect(second).toContain('Semper Augustus (one bulb)');
+    expect(second).toMatch(/^- money context M2: 5,500 guilders \(Semper Augustus \(one bulb\)\) — more than eighteen years' pay for a skilled craftsman\. /);
     expect(second).toContain('(DISPUTED: present as disputed)');
     expect(second).toContain('confidence low');
   });

@@ -59,10 +59,15 @@ describe('nameLayer: the names the narration uses, in layers', () => {
   it('counts a cast member’s own lines as mentions of them, even where the narration does not say the name', () => {
     const thijs = byName(layer({ blocks: [block('1.1', 'I will sign for the bulbs tomorrow.', { speakerId: 'R1' })] }), 'Thijs')!;
     expect(thijs).toMatchObject({ historicalName: 'Thijs', displayName: 'Thijs', mentions: 1, firstRef: '1.1' });
+    // Narration and the cast member's own lines together, each block counted once — another speaker's line is not theirs.
+    const blocks = [block('1.1', 'Thijs walked to the inn.'), block('1.2', 'Thijs, they call me. I will sign tomorrow.', { speakerId: 'R1' }), block('1.3', 'Thijs is late.', { speakerId: 'R2' })];
+    expect(byName(layer({ blocks }), 'Thijs')).toMatchObject({ displayName: 'Thijs', mentions: 2, firstRef: '1.1' });
   });
 
   it('takes the spoken form only from a pronunciation note: without one there is none, and no phonemes are guessed', () => {
-    for (const e of layer()) {
+    const entries = layer();
+    expect(entries.map((e) => e.historicalName)).toEqual(['Thijs', 'Cornelis Proefman', 'Charles Mackay']);
+    for (const e of entries) {
       expect(e.spokenForm).toBeNull();
       expect(e.pronunciation).toBeNull();
     }
@@ -116,7 +121,12 @@ describe('nameLayer: the names the narration uses, in layers', () => {
 
   it('numbers the entries N1, N2… and fits the shared contract', () => {
     const entries = layer({ otherNames: [{ form: 'Haarlem', refs: ['1.1'] }], pronunciations: [note('Thijs')] });
-    expect(entries.map((e) => e.id)).toEqual(['N1', 'N2', 'N3', 'N4']);
+    expect(entries.map((e) => [e.id, e.historicalName])).toEqual([
+      ['N1', 'Thijs'],
+      ['N2', 'Cornelis Proefman'],
+      ['N3', 'Charles Mackay'],
+      ['N4', 'Haarlem'],
+    ]);
     for (const e of entries) expect(() => NameEntry.parse(e)).not.toThrow();
   });
 });
@@ -136,6 +146,7 @@ describe('pronunciationRisk: why a narrator might say a name wrong', () => {
   it('notices a name particle in a name of more than one word', () => {
     expect(pronunciationRisk('Jan van Goyen')).toEqual(['a name particle']);
     expect(pronunciationRisk('Willem van Schoonhoven')).toEqual(['the spelling "sch"', 'a name particle']);
+    expect(pronunciationRisk('Van')).toEqual([]);
   });
 
   it('finds no reason in a name English readers already know how to say', () => {
@@ -157,6 +168,17 @@ describe('namesAltered: a rewording that respells a name', () => {
     ];
     expect(namesAltered('Matthijs signed the contract.', 'Matthew signed the contract.', known)).toEqual(['"matthijs" became "matthew"']);
     expect(namesAltered('Pieter signed the contract.', 'Peter signed the contract.', known)).toEqual(['"pieter" became "peter"']);
+  });
+
+  it('allows up to a third of the name’s length in edits, rounded up: "Hendrik" → "Henry" is three', () => {
+    const hendrik: KnownName[] = [{ name: 'Hendrik Fakename', kind: 'PERSON', castId: null, fictional: true, claimKeys: [] }];
+    expect(namesAltered('Hendrik bet everything on one bulb.', 'Henry bet everything on one bulb.', hendrik)).toEqual(['"hendrik" became "henry"']);
+    // Four edits on eight letters is another word, not a respelling.
+    expect(namesAltered('Cornelis Proefman sailed home.', 'Proefman sailed home to Cornwall.', KNOWN)).toEqual([]);
+  });
+
+  it('reads only the narrator’s words: a respelling inside a quotation is the record’s', () => {
+    expect(namesAltered('Thijs signed the register.', 'He signed the register "Thys".', KNOWN)).toEqual([]);
   });
 
   it('does not count a pronoun in place of the name', () => {
