@@ -1,4 +1,4 @@
-import { QualityReport, ScriptContent, type JobType } from '@docengine/core';
+import { QualityReport, ScriptContent, runtimeTarget, type JobType } from '@docengine/core';
 import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers } from '@docengine/pipeline';
 import { ALL_MOCK, createProviders, type ProviderSet } from '@docengine/providers';
 import { createStoryArchitectureStage, createStoryMiningStage } from '@docengine/story';
@@ -10,7 +10,7 @@ import type { ScriptConfig } from './config.ts';
 import { ScriptEditing } from './editing.ts';
 import { createScriptStage } from './stage.ts';
 import { loadVersion } from './store.ts';
-import { REFINEMENT_CHECKLIST } from './prompts.ts';
+import { REFINEMENT_CHECKLIST, refineSystemPrompt } from './prompts.ts';
 import { FakeScriptAI } from './testing.ts';
 
 const db = useTestDatabase();
@@ -252,7 +252,7 @@ describe('script engine (fake AI, real database)', () => {
     const v1 = await snapshot(projectId, 1);
     const callsBefore = { ...s.ai.calls };
 
-    const job = await s.projects.refineScript(projectId, { baseVersion: 1, brief: 'Protect the opening line; less signposting (test).' }, 'editor');
+    const job = await s.projects.refineScript(projectId, { baseVersion: 1, instructions: 'Protect the opening line; less signposting (test).' }, 'editor');
     expect(await statusOf(projectId)).toBe('SCRIPT_DRAFT');
     await s.runner.drain();
     expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
@@ -289,14 +289,17 @@ describe('script engine (fake AI, real database)', () => {
     const prompt = s.ai.prompts['script.refine']![0]!;
     for (const part of [
       '# Refine the narration of script v1 — every section; its story, order, evidence and information classes stay as they are',
-      "The editor's brief for this refinement: Protect the opening line; less signposting (test).",
-      '- Section 4: Too much signposting here (test).',
-      '# What the script editor said about v1',
-      '# What the automated checks flag in v1',
+      '# What the reviewers and the checks said about v1 (rank 4)\n## The script editor',
+      '## The fact checker (do not reintroduce what it fixed)',
+      '## The automated checks (',
       '# Script v1 — the text to refine (each block with its class, beats, claims and speaker)',
       editedText,
+      "# The director's instructions (rank 5: they may steer style, emphasis, pacing and creative direction; never parts 1 and 3)\nProtect the opening line; less signposting (test).\nThe director's notes on sections:\n- Section 4: Too much signposting here (test).",
     ])
       expect(prompt).toContain(part);
+    // The director speaks last, after the reviewers, the script, the architecture and the evidence.
+    expect(prompt.indexOf("# The director's instructions")).toBeGreaterThan(prompt.indexOf('# Evidence: the '));
+    expect(prompt.indexOf('# Evidence: the ')).toBeGreaterThan(prompt.indexOf('# What the reviewers and the checks said about v1'));
     expect(prompt).toMatch(/^# The approved story architecture \(v\d+\)$/m);
     expect(prompt).toMatch(/^# Evidence: the \d+ claims the architecture cites/m);
     const editorPrompt = s.ai.prompts['script.edit']!.at(-1)!;
@@ -318,7 +321,63 @@ describe('script engine (fake AI, real database)', () => {
     expect(await db.projectEvent.findFirstOrThrow({ where: { projectId, type: 'SCRIPT_REVISION_REQUESTED' } })).toMatchObject({ data: { kind: 'REFINEMENT', baseVersion: 1 } });
   });
 
-  it('holds a refinement to the same rules: a dropped hedge or a new figure stops approval, a skipped section is kept as it was', async () => {
+  it('needs no instructions: an empty director field gets the complete house style, and instructions only add to it', async () => {
+    const s = setup();
+    const projectId = await scripted(s);
+    const project = await db.project.findUniqueOrThrow({ where: { id: projectId } });
+    const job = await s.projects.refineScript(projectId, { baseVersion: 1 }, 'editor');
+    await s.runner.drain();
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
+
+    // The model gets the whole house style in its system prompt, with nothing from the editor.
+    const system = s.ai.systems['script.refine']![0]!;
+    expect(system).toBe(refineSystemPrompt(runtimeTarget(project)));
+    for (const rule of [
+      'These instructions are complete.',
+      'apply in full whether or not the director adds instructions',
+      'HOW THE INSTRUCTIONS RANK',
+      'PART 1 — EVIDENCE AND SAFETY (non-overridable)',
+      'PART 2 — THE REFINEMENT STYLE (the defaults)',
+      'PART 3 — THE STORY IS DECIDED',
+      '1. Meta-narration.',
+      '2. Protect what is strong.',
+      '3. Information through story.',
+      '4. No purple prose.',
+      '5. Trust the viewer.',
+      '6. Rhythm.',
+      '7. Silence.',
+      '8. Facts with consequences.',
+      '9. Earn the turning point.',
+      '10. Uncertainty as part of the investigation',
+      '11. Legend as discovery.',
+      '12. A fictional companion is a lens',
+      '13. Cut only what is weak',
+      '14. Transitions through consequence',
+      '15. Sources as detective work',
+      'A version slightly over the range is acceptable when the story needs it.',
+    ])
+      expect(system).toContain(rule);
+    const prompt = s.ai.prompts['script.refine']![0]!;
+    expect(prompt).toContain("# The director's instructions (rank 5: they may steer style, emphasis, pacing and creative direction; never parts 1 and 3)\nNone. Apply the refinement style in full.");
+    expect(await db.projectEvent.findFirstOrThrow({ where: { projectId, type: 'JOB_PROGRESS', jobId: job.id }, orderBy: { createdAt: 'asc' } })).toMatchObject({ message: expect.stringContaining("the house style, no director's instructions") });
+
+    // The full behaviour: a REFINEMENT version, the checklist answered, kept lines, the same evidence, the gate passed.
+    const v2 = await version(projectId, 2);
+    const content = ScriptContent.parse(v2.row.content);
+    expect(v2.row).toMatchObject({ status: 'IN_REVIEW', qualityPassed: true, notes: null });
+    expect(content.provenance).toMatchObject({ origin: 'REFINEMENT', brief: null, changeLog: { kept: [expect.any(String)] } });
+    expect(content.editor!.assessment).toHaveLength(REFINEMENT_CHECKLIST.length);
+    expect(evidenceChanges((await version(projectId, 1)).draft, v2.draft)).toEqual({ claimsAdded: [], claimsRemoved: [], figuresAdded: [], figuresRemoved: [] });
+
+    // With instructions, the house style is the same, word for word; the instructions come last, as rank 5.
+    await s.projects.refineScript(projectId, { baseVersion: 2, instructions: 'Drier humour in the opening (test).' }, 'editor');
+    await s.runner.drain();
+    expect(s.ai.systems['script.refine']![1]).toBe(system);
+    expect(s.ai.prompts['script.refine']![1]!.trimEnd().endsWith("never parts 1 and 3)\nDrier humour in the opening (test).")).toBe(true);
+    expect((await version(projectId, 3)).row).toMatchObject({ notes: 'Drier humour in the opening (test).' });
+  });
+
+  it('holds a refinement to the same rules, whatever the director asks: a dropped hedge or a new figure stops approval; a skipped section is kept', async () => {
     const s = setup();
     const projectId = await scripted(s);
     s.ai.refineTransform = (out) => {
@@ -331,12 +390,16 @@ describe('script engine (fake AI, real database)', () => {
       hedged.text = hedged.text.replace('Records suggest that ', '').replace(/^./, (c) => c.toUpperCase());
       return out;
     };
-    const job = await s.projects.refineScript(projectId, { baseVersion: 1 }, 'editor');
+    // The director asks for exactly what the rules forbid; the (fake) model complies; the rules do not move.
+    const asked = 'Punchier: drop the hedging and add that 9,999 people watched (test).';
+    const job = await s.projects.refineScript(projectId, { baseVersion: 1, instructions: asked }, 'editor');
     await s.runner.drain();
     expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('SUCCEEDED');
+    expect(s.ai.prompts['script.refine']![0]).toContain(`never parts 1 and 3)\n${asked}`);
+    expect(s.ai.systems['script.refine']![0]).toContain('They never override factual integrity, the architecture, the information classes, the integrity of quotations or the boundaries of fictional characters');
     const v2 = await version(projectId, 2);
     // It reaches review — the editor sees what went wrong — but cannot be approved.
-    expect(v2.row).toMatchObject({ status: 'IN_REVIEW', qualityPassed: false, notes: null });
+    expect(v2.row).toMatchObject({ status: 'IN_REVIEW', qualityPassed: false, notes: asked });
     const report = QualityReport.parse(v2.row.qualityReport);
     expect(report.checks.find((c) => c.id === 'figures_names')).toMatchObject({ status: 'FAIL', detail: expect.stringContaining('9999 is in no claim of the approved architecture') });
     expect(report.checks.find((c) => c.id === 'uncertainty')).toMatchObject({ status: 'FAIL', detail: expect.stringContaining('is PROBABLE but the narration does not hedge it') });

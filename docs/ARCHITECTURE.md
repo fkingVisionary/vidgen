@@ -877,7 +877,7 @@ POST /api/projects/:id/script { notes? }            (STORY_APPROVED → SCRIPT_D
 
 POST /api/projects/:id/script/revise { baseVersion, sections: [3], brief }   one section (or several)
 POST /api/projects/:id/script/revise { baseVersion, brief }                  the whole script
-POST /api/projects/:id/script/refine { baseVersion, brief? }                 the narration refined, story unchanged
+POST /api/projects/:id/script/refine { baseVersion, instructions? }          the narration refined, story unchanged
 POST /api/projects/:id/script/restore { version }                            an earlier version, as a new one
 PATCH /api/script-blocks/:id · PUT /api/script-sections/:id/order · PATCH /api/script-sections/:id
 GET  /api/projects/:id/script[?version=N] · …/script/compare?a=&b= · …/script/voice-plan[?version=N]
@@ -1005,11 +1005,26 @@ lines word for word (returned as `keptLines`), information through story
 viewer, rhythm, room for silence, facts with consequences, uncertainty said
 naturally, the legend met first and overturned by the record, a fictional
 companion as a lens, cuts only of what is weak, transitions through
-consequence, sources as detective work; the runtime follows the story within
-the acceptable range, never padded. The prompt also carries the base's
-script-editor verdict and issues, the rules' findings on the base, and the
-editor's section notes. The examples in it are generic, like every
-production prompt (a test checks for topic terms). Then the usual chain: the
+consequence, sources as detective work, an earned turning point; the runtime
+follows the story within the acceptable range (slightly over is acceptable
+when the story needs it), never padded. **This house style is built in**: a
+refinement with no instructions gets all of it. The system prompt ranks what
+the model follows — (1) evidence and safety, non-overridable; (2) the
+refinement style, the defaults; (3) the architecture and the script's
+constraints; (4) what the script editor, the fact checker and the rules said
+about the base; (5) the director's instructions — and the user prompt is laid
+out in that order, the director's optional instructions and section notes
+last ("None. Apply the refinement style in full." when there are none).
+**Director's instructions** (the optional field, `instructions`) may steer
+style, emphasis, pacing and creative direction, adjusting the defaults and
+the reviewers' craft notes; they never override factual integrity, the
+architecture, information classes, quotation integrity or the boundaries of
+fictional characters — the prompt says so, and the deterministic rules and
+the gate enforce it whatever the model does (a test has the director ask for
+an unhedged claim and a new number, the model comply, and the gate block
+approval). The system prompt does not depend on the instructions. The
+examples in it are generic, like every production prompt (a test checks for
+topic terms). Then the usual chain: the
 script editor — shown the base for comparison — answers a fixed 13-question
 refinement checklist (`REFINEMENT_CHECKLIST`: curiosity in 30 seconds, the
 companion useful, every section advancing, facts that matter, an earned
@@ -1057,7 +1072,7 @@ model's full 128k output budget: Tulip Mania's 15-minute draft used about
 46k output tokens with thinking, and a truncated output fails the job). Every call is a `provider_calls` row with its
 estimated cost; `SCRIPT_MAX_COST_USD` (default 15) stops a job (FAILED, not
 retried) once its recorded spend passes it. Each step is checkpointed
-(`PROMPT_VERSION` = `script-1.1-2026-10-05.1`): a retry resumes after the last
+(`PROMPT_VERSION` = `script-1.2-2026-10-05.1`): a retry resumes after the last
 completed call. A section rewrite makes 4 calls (rewrite, editor, fact
 checker, performance) over the chosen sections; a refinement 4 (refine,
 editor, fact checker, performance) over the whole script; a draft or whole
@@ -1147,4 +1162,5 @@ Timing is an estimate from word counts, not a measurement of a voice.
 | D62 | Narrative refinement is a mode of the SCRIPT job (no planner, the base's plan kept, its own prompt), not a new stage | It improves how the story is told, not what it is: keeping the plan and the architecture fixed, and running the same reviewers, rules and gate, means a refinement cannot skip a check or quietly restructure | A whole-script revision from a style brief (re-plans; may restructure) |
 | D63 | The script editor answers a fixed 13-question checklist against the base, recorded with the version, never blocking | The brief's quality test, asked the same way every time, makes versions comparable; craft is a judgement for the human, the gate stays about evidence | A free-form verdict only |
 | D64 | The wording checks accept natural uncertainty phrasing | "Don't make uncertainty sound like a database warning": the rules still require the signal in the same block, they just recognise how people say it | Formulaic hedges only |
+| D66 | The refinement's house style is the system prompt's default; director's instructions rank last and steer style only | The intended behaviour must not depend on someone pasting a brief; a director still needs a way to steer tone, emphasis and pacing for one film — but never the evidence, which the rules enforce regardless | Behaviour from a pasted brief; no director control |
 | D65 | The writer step gets the model's full output budget | Measured: about 46k of 64k for a 15-minute draft, thinking included; a truncated script fails the job, an unused budget costs nothing | Keep 64k and risk a failed run |

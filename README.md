@@ -216,11 +216,14 @@ Once the story architecture is approved (Story Engine 2.0), the project's
 3. **Edit** a block (text, class, delivery, pauses, emphasis, visual
    intent), reorder blocks (▲▼), **Approve section**, **Reject**, **Add
    note**. Each change re-runs the rules at once; the generated text is kept.
-4. **Refine the narration…** (optional brief): a new version whose writing
-   is rewritten for the ear — meta-narration cut, strong lines kept, facts
-   arriving through the story, uncertainty said naturally — with the story,
-   structure, information classes and evidence unchanged. The script editor
-   answers a 13-question checklist against the version refined.
+4. **Refine the narration…**: a new version whose writing is rewritten for
+   the ear — meta-narration cut, strong lines kept, facts arriving through
+   the story, uncertainty said naturally — with the story, structure,
+   information classes and evidence unchanged. The house style is built in:
+   nothing needs to be written. **Director's instructions** (optional) can
+   steer tone, emphasis, pacing and creative direction for the film, never
+   the facts, quotations or the line between fiction and history. The script
+   editor answers a 13-question checklist against the version refined.
    **Regenerate section…** with a brief: a new version where only that
    section is rewritten (and reviewed); the others are copied unchanged, with
    no model calls. **Generate Revision** rewrites the whole script from a

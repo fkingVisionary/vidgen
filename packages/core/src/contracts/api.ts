@@ -205,12 +205,15 @@ export type ReviseScriptInput = z.input<typeof ReviseScriptInput>;
 
 /**
  * Refine the narration of a whole script version for the ear: the story,
- * structure, information classes and evidence stay; the writing changes. An
- * optional brief adds what this film needs (lines to protect, what to watch).
+ * structure, information classes and evidence stay; the writing changes. The
+ * house style is built in. `instructions` (Director Mode, optional) steer
+ * style, emphasis, pacing and creative direction for this film; they never
+ * override the evidence rules, the architecture, information classes,
+ * quotations or the boundaries of fictional characters.
  */
 export const RefineScriptInput = z.object({
   baseVersion: z.number().int().min(1),
-  brief: z.string().trim().max(5000).optional(),
+  instructions: z.string().trim().max(5000).optional(),
 });
 export type RefineScriptInput = z.input<typeof RefineScriptInput>;
 

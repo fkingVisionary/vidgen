@@ -381,12 +381,13 @@ export class ProjectService {
    * Refine the narration of a whole script version for the ear: a new
    * version whose telling is rewritten while its story, structure,
    * information classes and evidence stay (no planner; the script editor
-   * answers the refinement checklist against the version refined). The base
-   * is kept; every version is kept.
+   * answers the refinement checklist against the version refined). The house
+   * style is built in; the director's instructions are optional. The base is
+   * kept; every version is kept.
    */
   async refineScript(projectId: string, raw: RefineScriptInput, actor: Actor): Promise<Job> {
     const input = RefineScriptInput.parse(raw);
-    const brief = input.brief?.trim() || null;
+    const instructions = input.instructions?.trim() || null;
     return this.scriptJob(projectId, actor, `Refining the narration of script v${input.baseVersion}`, async (tx) => {
       const approved = await this.requireApprovedArchitecture(tx, projectId);
       const base = await tx.script.findUnique({ where: { projectId_version: { projectId, version: input.baseVersion } }, select: { version: true, storyId: true } });
@@ -396,10 +397,10 @@ export class ProjectService {
         tx,
         projectId,
         EVENT.SCRIPT_REVISION_REQUESTED,
-        `The narration of v${base.version} to be refined for the ear (story and evidence unchanged)${brief ? `: ${brief.length > 160 ? `${brief.slice(0, 159)}…` : brief}` : ''}`,
-        { actor, baseVersion: base.version, kind: 'REFINEMENT', brief },
+        `The narration of v${base.version} to be refined for the ear (story and evidence unchanged) — ${instructions ? `director's instructions: ${instructions.length > 160 ? `${instructions.slice(0, 159)}…` : instructions}` : 'the house style'}`,
+        { actor, baseVersion: base.version, kind: 'REFINEMENT', instructions },
       );
-      return { ...(brief ? { notes: brief } : {}), revise: { baseVersion: base.version, sections: [], refine: true } };
+      return { ...(instructions ? { notes: instructions } : {}), revise: { baseVersion: base.version, sections: [], refine: true } };
     });
   }
 

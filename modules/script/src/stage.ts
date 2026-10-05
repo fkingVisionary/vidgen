@@ -101,7 +101,7 @@ class ScriptRun {
       mode === 'DRAFT'
         ? `Script draft from architecture v${arch.version}: ${all.length} sequences, ${scope.claims.length} claims; target ${fmtClock(target.targetSec)}`
         : mode === 'REFINEMENT'
-          ? `Refining the narration of script v${base!.row.version} for the ear (story, structure and evidence unchanged)${brief ? `; the editor's brief: "${clip(brief, 140)}"` : ''}`
+          ? `Refining the narration of script v${base!.row.version} for the ear (story, structure and evidence unchanged) — ${brief ? `with the director's instructions: "${clip(brief, 140)}"` : 'the house style, no director\'s instructions'}`
           : `${mode === 'SECTIONS' ? `Rewriting section${written.length > 1 ? 's' : ''} ${written.join(', ')}` : 'Revising the whole script'} of script v${base!.row.version} from the editor's brief: "${clip(brief ?? '', 140)}"`,
       { architectureVersion: arch.version, mode, sections: written, brief, target },
     );
@@ -385,33 +385,37 @@ class ScriptRun {
 
   /**
    * A narrative refinement: the whole script's telling rewritten for the ear
-   * from the base version, with what its reviewers and the rules said about
-   * it. The plan is the base's; the architecture and evidence are the bounds.
+   * from the base version. The system prompt carries the complete house style
+   * and the order of precedence; this prompt follows that order — what the
+   * reviewers and the rules said about the base (4), the script, plan,
+   * architecture and evidence it must keep to (3), and last the director's
+   * optional instructions and section notes (5). Without them the house style
+   * applies in full.
    */
-  private async refine(scope: ScriptScope, target: RuntimeTarget, base: LoadedScript, brief: string | null, plans: ReadonlyMap<number, ScriptSectionPlan>): Promise<RefineOutput> {
+  private async refine(scope: ScriptScope, target: RuntimeTarget, base: LoadedScript, instructions: string | null, plans: ReadonlyMap<number, ScriptSectionPlan>): Promise<RefineOutput> {
     const v = base.row.version;
     const timing = scriptTiming(allBlocks(base.draft), target);
     const sectionNotes = base.draft.sections.filter((s) => s.editorNotes || s.reviewStatus === 'REJECTED').map((s) => `- Section ${s.sequence}${s.reviewStatus === 'REJECTED' ? ' (rejected by the editor)' : ''}: ${s.editorNotes ?? 'no note'}`);
     const editor = base.content?.editor;
-    const findings = checkScript(base.draft, scope, { target, factIssues: base.content?.factCheck?.issues });
+    const factCheck = base.content?.factCheck;
+    const findings = checkScript(base.draft, scope, { target, factIssues: factCheck?.issues });
     const parts = [
       this.header(target),
       `Script v${v} runs ${fmtClock(timing.totalSec)} (${timing.words} spoken words).`,
       '',
       `# Refine the narration of script v${v} — every section; its story, order, evidence and information classes stay as they are`,
-      brief ? `The editor's brief for this refinement: ${brief}` : 'No brief beyond the principles: make it sound like a person telling a story.',
-      ...(sectionNotes.length ? ["The editor's notes on sections:", ...sectionNotes] : []),
+      '',
+      `# What the reviewers and the checks said about v${v} (rank 4)`,
       ...(editor
         ? [
-            '',
-            `# What the script editor said about v${v}`,
+            '## The script editor',
             editor.verdict,
             ...Object.entries(editor.scores).map(([k, x]) => `- ${k}: ${x!.score}/10 — ${x!.why}`),
             ...editor.issues.map((i) => `- ${i.severity} ${i.kind}${i.ref ? ` at ${i.ref}` : ''}: ${i.note} [${i.resolution}]`),
           ]
-        : []),
-      '',
-      `# What the automated checks flag in v${v} (${findings.length})`,
+        : ['## The script editor', 'No review.']),
+      ...(factCheck ? ['## The fact checker (do not reintroduce what it fixed)', factCheck.verdict, ...factCheck.issues.map((i) => `- ${i.severity} ${i.kind}${i.ref ? ` at ${i.ref}` : ''}: ${i.note} [${i.resolution}]`)] : ['## The fact checker', 'No review.']),
+      `## The automated checks (${findings.length})`,
       ...(findings.length ? findings.slice(0, 40).map((f) => `- ${SCRIPT_BLOCKING.includes(f.kind) ? 'BLOCKING' : 'warning'} ${f.kind}: ${f.detail}`) : ['- nothing']),
       '',
       `# Script v${v} — the text to refine (each block with its class, beats, claims and speaker)`,
@@ -422,6 +426,10 @@ class ScriptRun {
       renderArchitecture(scope),
       '',
       renderEvidence(scope),
+      '',
+      "# The director's instructions (rank 5: they may steer style, emphasis, pacing and creative direction; never parts 1 and 3)",
+      instructions ?? 'None. Apply the refinement style in full.',
+      ...(sectionNotes.length ? ["The director's notes on sections:", ...sectionNotes] : []),
     ];
     return this.call('write', 'script.refine', RefineOutput, 'RefinedScript', refineSystemPrompt(target), parts.join('\n'), (x) => ({ ...summarizeWriter(x), keptLines: x.keptLines.length }));
   }

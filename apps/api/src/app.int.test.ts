@@ -669,7 +669,7 @@ describe('script API', () => {
 
     expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/refine`, payload: { baseVersion: 9 } })).statusCode).toBe(404);
     expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/refine`, payload: { baseVersion: 'one' } })).statusCode).toBe(400);
-    const res = await app.inject({ method: 'POST', url: `/api/projects/${id}/script/refine`, payload: { baseVersion: 1, brief: 'Keep the first line as it is (test).' } });
+    const res = await app.inject({ method: 'POST', url: `/api/projects/${id}/script/refine`, payload: { baseVersion: 1, instructions: 'Keep the first line as it is (test).' } });
     expect(res.statusCode).toBe(202);
     expect(res.json<JobView>()).toMatchObject({ type: 'SCRIPT', status: 'QUEUED' });
     await c.runner.drain();
@@ -689,6 +689,13 @@ describe('script API', () => {
     expect(cmp.assessment.map((x) => x.answer)).toEqual(new Array(13).fill('YES'));
     expect(cmp.changeLog).toMatchObject({ summary: expect.any(String), kept: [expect.any(String)] });
     expect(cmp.sections[0]).toMatchObject({ changed: true, words: { removed: 0 } });
+
+    // No director's instructions at all: the house style alone.
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/script/refine`, payload: { baseVersion: 2 } })).statusCode).toBe(202);
+    await c.runner.drain();
+    view = await script(app, id);
+    expect(view.script).toMatchObject({ version: 3, origin: 'REFINEMENT', revisionOfVersion: 2, qualityPassed: true, notes: null, content: { provenance: { brief: null } } });
+    expect(view.script!.content!.editor!.assessment).toHaveLength(13);
   });
 
   it('refuses to write a script where the script stage is a MOCK, or before an architecture is approved', async () => {

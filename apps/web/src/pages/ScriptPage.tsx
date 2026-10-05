@@ -166,9 +166,9 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
     setBrief('');
     onQueued();
   });
-  const [refineBrief, setRefineBrief] = useState('');
-  const refine = useScriptRequest(() => api.refineScript(p.id, { baseVersion: s!.version, ...(refineBrief.trim() ? { brief: refineBrief.trim() } : {}) }), () => {
-    setRefineBrief('');
+  const [direction, setDirection] = useState('');
+  const refine = useScriptRequest(() => api.refineScript(p.id, { baseVersion: s!.version, ...(direction.trim() ? { instructions: direction.trim() } : {}) }), () => {
+    setDirection('');
     onQueued();
   });
   const decide = useScriptRequest((decision: ApprovalDecision) => api.approve(p.id, { gate: 'SCRIPT', decision, notes: gateNotes.trim() || undefined }), () => setGateNotes(''));
@@ -253,7 +253,11 @@ function ScriptActions({ project: p, view: v, running, onQueued }: { project: Pr
             Rewrites how the whole script is told, for the ear: the same story, structure, information classes and evidence — no new facts. Strong lines are kept; signposting, restated explanations and essay-like passages go. The script editor then
             judges it against v{s.version} with a checklist, the fact checker checks it and the performance is marked again (four model calls). v{s.version} is kept; compare them in Versions.
           </p>
-          <textarea value={refineBrief} onChange={(e) => setRefineBrief(e.target.value)} rows={3} placeholder="What this film needs (optional) — lines to protect, what to watch for" className="mt-2 w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm" />
+          <p className="mt-1 text-xs text-stone-500">The house style is built in — nothing needs to be written here. Director's instructions are optional: they can steer tone, emphasis, pacing and creative direction, never the facts, the architecture, quotations or the line between fiction and history.</p>
+          <label className="mt-2 block text-xs font-medium text-stone-600" htmlFor="director-instructions">
+            Director's instructions (optional)
+          </label>
+          <textarea id="director-instructions" value={direction} onChange={(e) => setDirection(e.target.value)} rows={3} placeholder="e.g. drier humour in the opening; let the court scene breathe; keep the companion out of section 5" className="mt-1 w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm" />
           <button disabled={refine.isPending} onClick={() => refine.mutate(undefined)} className={`${button} mt-1 bg-violet-700 text-white hover:bg-violet-600`}>
             Refine the narration
           </button>
@@ -298,9 +302,10 @@ function ScriptTab({ projectId, view: v }: { projectId: string; view: ScriptView
       )}
       {s.content?.provenance.brief && (
         <p className="text-sm text-stone-600">
-          Brief for v{s.version}: “{s.content.provenance.brief}”{s.content.provenance.requestedBy ? ` — ${s.content.provenance.requestedBy}` : ''}
+          {s.origin === 'REFINEMENT' ? "Director's instructions" : 'Brief'} for v{s.version}: “{s.content.provenance.brief}”{s.content.provenance.requestedBy ? ` — ${s.content.provenance.requestedBy}` : ''}
         </p>
       )}
+      {s.origin === 'REFINEMENT' && !s.content?.provenance.brief && <p className="text-sm text-stone-600">Refined with the house style (no director's instructions).</p>}
       {s.content?.provenance.changeLog && s.content.provenance.changeLog.changes.length > 0 && (
         <details className="rounded-lg border border-stone-200 bg-white p-3 text-sm">
           <summary className="cursor-pointer font-medium text-stone-700">What changed in v{s.version}, and why</summary>

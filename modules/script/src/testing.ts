@@ -259,6 +259,8 @@ export class FakeScriptAI extends FakeStoryAI {
   writerTransform: ((out: WriterOutput, task: string) => WriterOutput) | null = null;
   /** Change the refinement's output (e.g. to drop a hedge or a section). */
   refineTransform: ((out: RefineOutput) => RefineOutput) | null = null;
+  /** System prompts of the script tasks, by task, in call order. */
+  systems: Record<string, string[]> = {};
   /** The script editor's review (default: scores, no issues, no changes; the checklist answered when there is one). */
   editor: (prompt: string) => ScriptEditorOutput = (prompt) => ({ verdict: 'A solid draft (test).', scores: { NARRATIVE_SCORE: SCORE, AUDIO_FLOW_SCORE: SCORE, CLARITY_SCORE: SCORE, EMOTIONAL_SCORE: SCORE, ENDING_SCORE: SCORE }, issues: [], assessment: fakeChecklist(prompt), edits: [], removals: [], insertions: [] });
   /** The fact checker's review (default: no issues). */
@@ -270,6 +272,7 @@ export class FakeScriptAI extends FakeStoryAI {
     this.calls[req.task] = (this.calls[req.task] ?? 0) + 1;
     const user = req.messages.map((m) => m.content).join('\n');
     (this.prompts[req.task] ??= []).push(user);
+    (this.systems[req.task] ??= []).push(req.system ?? '');
     if (this.failNextTask === req.task) {
       this.failNextTask = null;
       throw new ProviderError('fake-ai', 'overloaded (test)', true);

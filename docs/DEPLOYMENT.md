@@ -202,8 +202,9 @@ approving the script does not start anything.
 ## Deploying the narrative refinement
 
 No migration, no new variables. The script prompt version changed
-(`script-1.1-2026-10-05.1`), so a Retry of a script job started before the
-deploy starts its model calls again. The writer step's output budget is now
+(`script-1.2-2026-10-05.1`), so a Retry of a script job started before the
+deploy starts its model calls again. The refinement's house style is built
+in; the *Director's instructions* field is optional. The writer step's output budget is now
 the model's full 128k tokens (a model with a smaller output limit set for the
 `write` step through `SCRIPT_MODELS` would be refused by the provider). A
 refinement makes four model calls.

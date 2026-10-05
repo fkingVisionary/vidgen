@@ -24,6 +24,24 @@ describe('script prompts', () => {
     expect(REFINEMENT_CHECKLIST.join(' ')).not.toMatch(TOPIC);
   });
 
+  it('make the house style the refinement default, complete without any director instructions, ranked under the evidence rules', () => {
+    const r = prompts.refine;
+    // The system prompt depends only on the runtime target: there is no slot for the director here.
+    expect(refineSystemPrompt(target)).toBe(r);
+    expect(r).not.toMatch(/director's instructions:|brief:/i);
+    expect(r).toContain('These instructions are complete. They are the house style of every refinement and apply in full whether or not the director adds instructions of their own.');
+    const ranks = ['1. Evidence and safety (part 1) — non-overridable, by anyone.', '2. The refinement style (part 2) — the defaults of every refinement.', "3. The approved architecture and the script's own constraints (part 3)", '4. What the script editor, the fact checker and the automated checks said', "5. The director's instructions (last in the prompt, if any)"];
+    for (const rank of ranks) expect(r).toContain(rank);
+    expect(ranks.map((x) => r.indexOf(x))).toEqual([...ranks.map((x) => r.indexOf(x))].sort((a, b) => a - b));
+    expect(r).toContain('They never override factual integrity, the architecture, the information classes, the integrity of quotations or the boundaries of fictional characters (1 and 3).');
+    // The parts appear in rank order, and part 1 is the draft's own evidence rules.
+    const parts = ['PART 1 — EVIDENCE AND SAFETY (non-overridable)', 'PART 2 — THE REFINEMENT STYLE (the defaults)', 'PART 3 — THE STORY IS DECIDED'];
+    expect(parts.map((x) => r.indexOf(x)).every((i, n, all) => i > 0 && (n === 0 || i > all[n - 1]!))).toBe(true);
+    expect(r.indexOf('THE EVIDENCE BOUNDARY')).toBeGreaterThan(r.indexOf(parts[0]!));
+    expect(r.indexOf('THE EVIDENCE BOUNDARY')).toBeLessThan(r.indexOf(parts[1]!));
+    for (const rule of ['Earn the turning point', 'A version slightly over the range is acceptable when the story needs it.', "including any director's instruction you could not follow, and why"]) expect(r).toContain(rule);
+  });
+
   it('ask a refinement to change the telling only, within the same bounds as the draft', () => {
     const r = prompts.refine;
     for (const rule of ['Meta-narration', 'Protect what is strong', 'keptLines', 'No purple prose', 'Trust the viewer', 'Legend as discovery', 'Cut only what is weak', 'No new facts, no new claims, no new people', 'Every block keeps its information class', 'never inside a documented event', 'is a planning midpoint, not a target. Never pad.'])
