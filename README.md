@@ -251,14 +251,21 @@ Once the story architecture is approved (Story Engine 2.0), the project's
    pronunciation is flagged for a person to check).
 6. **Voice** (once a version is approved; needs `VOICE_PROVIDER=elevenlabs`
    and a bucket for real audio — see DEPLOYMENT.md, otherwise every take is a
-   labelled MOCK beep): **Plan** an opening audition (the chunks, the exact
-   text each would send, characters, estimated cost, what it covers), then
-   generate it. Each chunk: play, approve, reject, regenerate (optionally with
-   your own directions), compare and restore earlier takes, see what was
-   sent. Compare plain / restrained / over-directed, or three chunk sizes, on
-   the same passage. Decide the pronunciation list, version the voice
-   profile, ask "what is said at 02:43". The whole narration (a full run,
-   every take approved, nothing blocking) is approved at the VOICE gate.
+   labelled MOCK beep): **Plan** an opening audition (chunks of about 8–12 s,
+   the exact text each would send, characters, estimated cost, what it
+   covers), then generate it — or plan and generate the **acceptance
+   experiment**, the opening narrated seven ways in one job (plain,
+   restrained, expressive, over-directed, without neighbouring text, smaller
+   and larger chunks). Each chunk: play, approve, reject, regenerate
+   (optionally with your own directions, which add to the house style),
+   compare and restore earlier takes, see what was sent; regenerate the
+   selected chunks, a section or every chunk, or make an A/B of chosen
+   chunks. Compare direction (plain / restrained / expressive, with an
+   optional over-directed reference), continuity, or three chunk sizes on the
+   same passage. Decide the pronunciation list, version the voice profile,
+   ask "what is said at 02:43". Nothing is approved automatically: the whole
+   narration (a full run, every take approved, nothing blocking) is approved
+   at the VOICE gate.
 
 `SCRIPT_MAX_COST_USD=15` stops a script job whose recorded spend passes it;
 `SCRIPT_MODELS` (optional) sets a model per step.
@@ -295,4 +302,6 @@ connected to this repository (not "+ New → GitHub Repository", which splits
 the monorepo into one broken service per package). On the app service set the
 pre-deploy command `sh scripts/release.sh`, healthcheck `/api/health`,
 `DATABASE_URL=${{Postgres.DATABASE_URL}}` and `DASHBOARD_PASSWORD`; generate a
-domain. Railway no longer reads `railway.json` for new services.
+domain. Railway no longer reads `railway.json` for new services. Real
+narration also needs a Railway bucket and the ElevenLabs variables
+(DEPLOYMENT.md, *Enabling real narration*).

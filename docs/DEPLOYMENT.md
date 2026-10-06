@@ -14,7 +14,7 @@ Two Railway services, plus a bucket once narration is real:
 | **app** (e.g. `vidgen`) | This whole repository as **one** service, built from the root `Dockerfile` | Yes |
 | **Postgres** | Railway PostgreSQL (Database → PostgreSQL) | Yes |
 | worker | Same image, start command `node apps/api/dist/worker.js` | No — only when generation load justifies it |
-| **Bucket** | A Railway Storage Bucket (S3-compatible, private) for narration audio | Yes for real narration (ElevenLabs): paid audio is never kept in memory |
+| **Bucket** | A Railway Storage Bucket (S3-compatible, private) for narration audio; production: `media` | Yes for real narration (ElevenLabs): paid audio is never kept in memory |
 
 `apps/api`, `apps/web`, `modules/research` and `packages/*` are parts of the
 one application, **not** separate services.
@@ -252,6 +252,29 @@ deploy starts its model calls again. The generate, revise and refine panels
 have an option, off by default, to let the performance pass run past the
 runtime maximum.
 
+## Deploying Voice Engine V1 (ElevenLabs v4)
+
+No new services beyond the bucket. The pre-deploy command applies two
+migrations, both additive only:
+
+- `20261005070000_voice_engine`: the voice tables (`voice_profiles`,
+  `voice_runs`, `voice_chunks`, `voice_generations`, `voice_assemblies`,
+  `voice_pronunciations`), the `VOICE_REVIEW` status, the VOICE gate and
+  `approvals.voice_assembly_id`;
+- `20261006090000_voice_v4_production`: the enum values `IN_REVIEW` (a take
+  awaiting review) and `EXPRESSIVE` (a performance strategy), and two
+  nullable columns on `voice_generations`, `performance_text_hash` and
+  `variant` (an A/B take's label). The new values are not used inside the
+  migration itself, as PostgreSQL requires.
+
+No existing row is changed: a current take stored as `GENERATED` reads as
+*To review*, and an assembly made before audio assets were recorded in its
+entries gets them from its takes. Both migrations are applied in
+production. The real VOICE stage runs when the script stage is real
+(`AI_PROVIDER=anthropic`); with `VOICE_PROVIDER=mock` every take is a
+labelled MOCK beep. Real voice needs real storage: see [Enabling real
+narration](#enabling-real-narration-elevenlabs--a-railway-bucket).
+
 ## Environment variables
 
 `✓` = read by V1 code. Planned variables are documented now so the shape is
@@ -295,48 +318,193 @@ agreed, but they are not read yet.
 | `ELEVENLABS_VOICE_ID` | — | ✓ | The voice of the first voice profile (profiles are versioned in the dashboard; nothing is hard-coded) |
 | `ELEVENLABS_MODEL_ID` | `eleven_v4` | ✓ | Production default; no automatic fallback to another model |
 | `ELEVENLABS_OUTPUT_FORMAT` | `mp3_44100_128` | ✓ | `mp3_*`, `wav_*` or `pcm_*` (opus/µ-law cannot be measured or joined without transcoding). 192 kbps MP3 needs Creator+, 44.1 kHz PCM/WAV Pro+ |
-| `ELEVENLABS_USD_PER_1K_CHARS` | — | ✓ | Your plan's price; default is the documented API list price per model (v4: $0.08). ElevenLabs reports characters, so dollar cost is an estimate |
-| `VOICE_CONFIRM_CHARACTERS` | `3000` | ✓ | Above this (and for the whole script, and every comparison) a generation must be confirmed |
-| `VOICE_MAX_CHARACTERS` | `40000` | ✓ | Ceiling on what one voice job may send |
+| `ELEVENLABS_USD_PER_1K_CHARS` | — | ✓ | Your plan's price, used for every model; unset, the estimate uses the documented API list price per model (v4: $0.08). ElevenLabs reports characters, so dollar cost is an estimate |
+| `VOICE_CONFIRM_CHARACTERS` | `3000` | ✓ | Above this a run or regeneration must be confirmed; the whole script, every comparison, every A/B and a regeneration of every chunk always are |
+| `VOICE_MAX_CHARACTERS` | `40000` | ✓ | Ceiling on what one voice job may send: a plan above it is blocked, generating it is refused, a running job stops sending at it. Production: `12000` (the hard stop: the opening experiment fits, a full narration does not) |
 | `VOICE_CONCURRENCY` | `2` | ✓ | Takes generated at once (1 when stitching) |
 | `HIGGSFIELD_API_KEY`, `HIGGSFIELD_API_SECRET` | — | planned | Exact credential format confirmed when integrated |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | —, `auto`, — | ✓ | Required when `STORAGE_PROVIDER=s3`; reference a Railway bucket's `ENDPOINT`, `REGION`, `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` |
-| `S3_FORCE_PATH_STYLE`, `S3_SIGNED_URL_TTL_SEC` | `false`, `3600` | ✓ | Path-style only for buckets whose Credentials tab says so (older Railway buckets, MinIO) |
+| `S3_FORCE_PATH_STYLE`, `S3_SIGNED_URL_TTL_SEC` | `false`, `3600` | ✓ | Path-style only for buckets whose Credentials tab says so (older Railway buckets, MinIO); production leaves path style unset (a virtual-hosted bucket). Narration streams through the API and uses no signed URLs |
 | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` | — | planned | |
 
 ## Enabling real narration (ElevenLabs + a Railway bucket)
 
 Narration audio is paid for per character, so the app refuses real
-narration while storage is in memory.
+narration while storage is in memory. Production (`vidgen`) is configured as
+below; its health check reports storage and voice `ok` (2026-10-06). No real
+narration has been generated yet.
 
-1. **Bucket.** In the Railway project: *Create* → *Bucket* (pick a region,
-   any name). It is private; its *Credentials* tab lists the S3 endpoint and
-   keys.
+1. **Bucket.** In the Railway project: *Create* → *Bucket*. Production uses
+   the bucket **`media`**: S3-compatible and private, virtual-hosted-style
+   URLs, endpoint `https://t3.storageapi.dev`, region `auto`. Do not create
+   another one.
 2. **Storage variables** on the app service, as variable references to the
    bucket (no secret is copied by hand):
-   `STORAGE_PROVIDER=s3`, `S3_ENDPOINT=${{<bucket>.ENDPOINT}}`,
-   `S3_REGION=${{<bucket>.REGION}}`, `S3_BUCKET=${{<bucket>.BUCKET}}`,
-   `S3_ACCESS_KEY_ID=${{<bucket>.ACCESS_KEY_ID}}`,
-   `S3_SECRET_ACCESS_KEY=${{<bucket>.SECRET_ACCESS_KEY}}`. Set
-   `S3_FORCE_PATH_STYLE=true` only if the Credentials tab says the bucket
-   uses path-style URLs.
+
+   | Variable | Value |
+   |---|---|
+   | `STORAGE_PROVIDER` | `s3` |
+   | `S3_ENDPOINT` | `${{media.ENDPOINT}}` |
+   | `S3_REGION` | `${{media.REGION}}` |
+   | `S3_BUCKET` | `${{media.BUCKET}}` |
+   | `S3_ACCESS_KEY_ID` | `${{media.ACCESS_KEY_ID}}` |
+   | `S3_SECRET_ACCESS_KEY` | `${{media.SECRET_ACCESS_KEY}}` |
+   | `S3_FORCE_PATH_STYLE` | **unset** (`false`: virtual-hosted requests, which the bucket uses; `true` only for a bucket whose *Credentials* tab says path-style) |
+   | `S3_SIGNED_URL_TTL_SEC` | unset (narration never uses signed URLs: the API streams the audio) |
+
+   Do not use Railway's credential presets that inject `AWS_*` names: the app
+   reads only the `S3_*` names above.
 3. **Voice variables:** `VOICE_PROVIDER=elevenlabs`, `ELEVENLABS_API_KEY`,
    `ELEVENLABS_VOICE_ID` (a voice that works with Eleven v4 — voice clones
-   made before v4 may need retraining for it). Optional:
-   `ELEVENLABS_MODEL_ID` (default `eleven_v4`), `ELEVENLABS_OUTPUT_FORMAT`
-   (default `mp3_44100_128`), `ELEVENLABS_USD_PER_1K_CHARS` (your plan's
-   price).
-4. Deploy, then check `/api/health`: `providers` lists `VOICE elevenlabs` and
-   `STORAGE s3` with `mock: false`.
-5. In the dashboard: approve a script version, open **Voice**, plan an
-   audition of the opening (nothing is generated by planning: it shows the
-   chunks, the exact text each would send, characters and estimated cost),
-   then generate it.
+   made before v4 may need retraining for it), `ELEVENLABS_MODEL_ID=eleven_v4`
+   (the default; set explicitly in production). Optional:
+   `ELEVENLABS_OUTPUT_FORMAT` (default `mp3_44100_128`). A key limited by
+   scope needs text to speech, reading voices (the startup check also reads
+   the model list) and writing pronunciation dictionaries (approved
+   phonemes); a 401, 402, 403 or 404 stops a voice job.
+4. **Cost estimates:** ElevenLabs reports characters, not dollars. Unless
+   `ELEVENLABS_USD_PER_1K_CHARS` is set, every estimate uses the documented
+   API list price (`eleven_v4`: $0.08 per 1,000 characters, checked
+   2026-10-05; the pricing page then gave v4 a launch price of $0.022 until
+   2026-10-12). Set it to the account's actual rate to make the estimates
+   match the bill; it then prices every model. Estimates are labelled
+   ESTIMATED; the provider's own character count is used where it reports
+   one (`character-cost`), else the characters sent, noted as counted.
+5. **Hard-stop guard:** `VOICE_MAX_CHARACTERS=12000` in production. One job
+   (a run, an experiment, a regeneration) may not send more: a plan above
+   it is shown as blocked, generating it is refused, and a running job stops
+   sending at it. This allows the acceptance experiment (about 10,700
+   characters for the seven variants of the opening) and refuses a full
+   narration (about 13,500 characters). Raise it only when a full narration
+   is wanted.
+   `VOICE_CONFIRM_CHARACTERS` (default 3,000) and `VOICE_CONCURRENCY`
+   (default 2; set 1 if ElevenLabs answers 429) stay at their defaults.
+6. **Migrations:** the pre-deploy command applies them (see [Deploying Voice
+   Engine V1](#deploying-voice-engine-v1-elevenlabs-v4)). Production has
+   `20261006090000_voice_v4_production` applied.
+7. **Verify:** after the deploy, `/api/health` shows
+
+   ```
+   "providers": [… {"kind":"VOICE","name":"elevenlabs","mock":false}, … {"kind":"STORAGE","name":"s3","mock":false} …],
+   "realStages": [… "SCRIPT", "VOICE"],
+   "storage": "ok", "storageDetail": "wrote, read back and deleted healthchecks/probe-….txt in 730 ms",
+   "voice": "ok", "voiceDetail": "voice \"…\" found; model eleven_v4 listed"
+   ```
+
+   Both checks run once at startup, spend nothing, and are logged once
+   (`connectivity check passed`, or a warning naming what failed). A check
+   still running reads `"error"` with "Startup check still running" for up
+   to 15 s after a start. `storage: "error"` or `voice: "error"` never makes
+   the health check fail (only the database does): read the detail, fix the
+   variable, and the redeploy checks again. After the first take, the
+   bucket's *Files* tab shows `projects/<project id>/<language>/narration_audio/…`.
 
 The browser never sees a key or a bucket URL: audio is streamed by the API
 (with byte ranges) behind the dashboard's authentication. Bucket storage is
 $0.015 per GB-month; a 15-minute narration in MP3 is about 15 MB plus its
 takes.
+
+**Do not deploy or change variables while a voice job runs.** A restart
+hands the job back to the queue: untried takes stay pending; a take caught
+mid-request is closed as FAILED (its request may have been billed — see the
+ledger) and the next attempt makes a new take for that chunk instead of
+sending the same one again.
+
+### Operator runbook: the opening audition and the regeneration test
+
+The acceptance run is triggered by the operator in the dashboard; the
+engineers check it from the Railway logs (app service, filtered by the
+job's `jobId`; every line also carries `jobType: VOICE`). Nothing below approves anything: every take waits for a
+human decision.
+
+**Before.** `/api/health` as in step 7. The project (Tulip Mania) has an
+approved script version and is in *Script approved* or a *Voice* status. No
+other voice job is queued or running.
+
+**1. Plan the acceptance experiment** (nothing is generated, nothing is
+paid). Project page → **Voice** → *Audition & generate* → the panel
+*Acceptance experiment — eleven_v4* → **Plan the acceptance experiment
+(nothing is generated)**. The first plan creates the ElevenLabs voice
+profile ("House narrator") from the configured voice, model and output
+format, with the house settings (restrained, 20–30 words, neighbouring
+text); the *Voice profile* tab shows it. Check, for each of the seven
+variants (A plain,
+B restrained, C expressive, D over-directed, E no context, F 5–8 s chunks,
+G 12–20 s chunks): the chunk count, the planned seconds per chunk (chunks
+outside 5–20 s are counted), the characters and the estimated cost; open
+*The N chunks* to read exactly what each chunk sends (C adds at most one
+deliberate moment per chunk to B's directions; D has a bracket on every
+sentence). The total should be about 10,700 characters. A red line instead
+of the confirmation box says why it cannot be generated (for example over
+`VOICE_MAX_CHARACTERS`): stop there.
+
+Planning also fills the *Pronunciation* tab with the opening's names,
+places and foreign words. Decide them there if wanted (terms still to check
+do not block an audition, but they are reported in its QA and its log),
+then come back and plan again, so the figures include the decisions.
+
+**2. Generate it.** Tick *I confirm all 7 runs (each variant is generated in
+full): … characters, … estimated* and press **Generate the acceptance
+experiment (7 runs, one job)**. One VOICE job generates the seven runs one
+after another, each chunk a separate request; the page shows "Generating
+takes…" and fills in as chunks finish. The run picker lists the seven runs.
+
+**3. Listen and read the results.** On any of the seven runs, the
+*Comparison "Acceptance experiment" — 7 variants* panel shows each
+variant's measured length, mean chunk, characters, cost and its assembled
+audio to play whole; *Open run N to review its chunks* opens one. Each
+chunk card plays its take and shows *what was sent*. Every take and every
+assembly reads *To review*. In the logs, the job has a `voice chunk` line
+per chunk, a `voice run summary` per variant and one `voice experiment
+comparison` (ARCHITECTURE.md §16, *Acceptance logging*).
+
+**4. Regenerate one chunk.** Open run **B restrained** (the house default).
+Note its assembly (*Assembled narration v1 — m:ss*) and pick one chunk.
+Press **Regenerate** on that chunk's card: one new take of one chunk (a few
+hundred characters, below the confirmation threshold, so no confirmation
+is asked). When the job finishes:
+
+- the chunk shows take 2 as current, *To review*, and take 1 under
+  *Compare 1 earlier take* (still playable; *Use this take* would make it
+  current again);
+- the assembly heading reads v2 with the new length, and *Earlier versions
+  (1)* still plays v1;
+- every other chunk still shows its take 1;
+- the log has a `voice regeneration summary`: the chunk's previous take
+  and the new one (generation, duration, alignment, ledger row and cost),
+  the assembly version and total duration before → after, and the other
+  chunks with `othersIntact: true`.
+
+**5. Stop.** This milestone ends with the audition: no full narration.
+`VOICE_MAX_CHARACTERS=12000` refuses *The whole script* at planning.
+
+### Browser QA of the Voice page (MOCK, local)
+
+`sh scripts/ui/voice-ui.sh` builds the dashboard, seeds a throwaway
+database with a MOCK fixture (`scripts/ui/voice-fixture.ts`: a project with
+an approved script, a direction comparison, an audition with a take still
+generating and a newer one failed), serves it with the job worker, and
+clicks through the Voice page with Playwright at 1280, 412 and 360 px
+(`scripts/ui/voice-ui.mjs`): plan, generate an audition, play the assembled
+audio, regenerate one chunk, approve, use the previous take, compare takes
+and variants; at 1280 also directions, selected chunks, an A/B, the
+acceptance experiment and a new profile version (which a confirmed plan is
+not moved to); on every width no horizontal overflow, every button in a
+chunk card at least 24 px tall, generation state visible and no console
+errors. It prints `ok` / `FAIL` per check, ends with "every check passed",
+and exits non-zero on any failure. MOCK voice and MOCK storage only: nothing
+is paid and no key is read.
+
+It needs PostgreSQL (`DATABASE_URL`, read from `.env` if present), `psql`,
+and Playwright with Chromium. Options (environment variables):
+
+| Variable | Default | What |
+|---|---|---|
+| `VOICE_UI_DB` | `docengine_voice_ui` | Database created next to `DATABASE_URL`'s, dropped first: its name must contain `ui` |
+| `VOICE_UI_PORT` | `3102` | Port the fixture serves on |
+| `VOICE_UI_OUT` | `$TMPDIR/voice-ui` (else `/tmp/voice-ui`) | Screenshots and the build, migration and server logs |
+| `VOICE_UI_SKIP_BUILD` | — | `1` reuses `apps/web/dist` instead of building |
+| `PLAYWRIGHT_MODULE` | — | Where to load Playwright from, if it is neither installed in the repository nor globally |
 
 ## Scaling the worker (later)
 
@@ -369,9 +537,15 @@ takes.
 | Deploy fails at health check, log says `DASHBOARD_PASSWORD … is required in production` | Set `DASHBOARD_PASSWORD` (≥ 12 chars). |
 | Startup fails with `VOICE_PROVIDER=elevenlabs needs ELEVENLABS_API_KEY` / `STORAGE_PROVIDER=s3 needs S3_ENDPOINT, S3_BUCKET…` | Set the missing variables (see [Enabling real narration](#enabling-real-narration-elevenlabs--a-railway-bucket)). |
 | Planning a voice run says `Real narration needs durable storage` | Real voice with in-memory storage is refused: set up the bucket and `STORAGE_PROVIDER=s3`. |
-| A voice job stops with `HTTP 401` / `HTTP 402` / `HTTP 404` | Rejected key, no credits, or a voice/model the account cannot use. The takes not tried yet stay pending: fix the variable or the plan, then *Retry* the job. |
+| A voice job stops with `HTTP 401` / `HTTP 402` / `HTTP 403` / `HTTP 404` | Rejected key, no credits, no access (a key without the permission), or a voice/model the account cannot use — decided by the status code. The takes not tried yet stay pending: fix the variable or the plan, then *Retry* the job. |
 | A take fails with `HTTP 422` or `HTTP 400` | That chunk's request was refused (the error says why); the other takes went on. Regenerate the chunk. |
 | A take is flagged `No timestamps came back` | The provider returned no alignment for it: it cannot be placed on the timeline. Regenerate it. |
+| `/api/health` shows `"storage":"error"` | The startup probe could not write, read back or delete `healthchecks/probe-….txt`; `storageDetail` names the step and the bucket's answer. Check the `S3_*` references (and `S3_FORCE_PATH_STYLE`, unset for a virtual-hosted bucket); a variable change redeploys and checks again. |
+| `/api/health` shows `"voice":"error"` | `voiceDetail` says whether the voice was not found (`ELEVENLABS_VOICE_ID`, or a key that cannot read voices) or the model is `NOT listed for this key` (`ELEVENLABS_MODEL_ID`). "Startup check still running" right after a start clears within 15 s. |
+| A take fails with `Storage failed: …` (QA `STORAGE_FAILED`) | The audio came back (and was paid for) but the bucket did not take it after three tries; its ledger row is kept. Regenerate the chunk once storage works. A refusal (e.g. HTTP 403) stops the job before more audio is bought. |
+| A take fails with `Interrupted mid-request …` | A deploy or restart caught it during its request: it may have been billed (see its ledger row) and is never sent again; the chunk's next take was generated in its place. |
+| Planning or generating says the characters are `over the ceiling of …` (`VOICE_MAX_CHARACTERS`) | Intended: the per-job hard stop (production 12000 refuses a full narration). Plan a smaller scope, or raise the variable when a full narration is wanted. |
+| `POST /api/projects/:id/jobs` with `type: VOICE` answers `Use POST /api/projects/:id/voice/runs` | Real narration starts from a planned run (Voice page, or the voice routes), never from a bare VOICE job. |
 | Research job fails with `ANTHROPIC_API_KEY is not set` / `TAVILY_API_KEY is not set` | Set the key on the service (or `TAVILY_ACCESS_MODE=keyless`). |
 | Research job fails with `Research stopped: estimated spend … exceeds the per-run ceiling` | Intended stop. Raise `RESEARCH_MAX_COST_USD` if the spend is justified, then *Retry* (stored documents and readings are reused). |
 | Research job fails with `Research quality gate failed: …` | The dossier was saved as DRAFT; open it (Research dossier → Quality gate tab) to see which checks failed. Rewind and run again, possibly with a research brief. |
