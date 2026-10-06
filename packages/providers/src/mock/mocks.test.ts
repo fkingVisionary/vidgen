@@ -38,6 +38,10 @@ describe('mock providers are clearly labelled and never fake success', () => {
     }
   });
 
+  it('answers a connectivity check as MOCK, reaching nothing', async () => {
+    expect(await new MockVoiceProvider().check()).toEqual({ ok: true, detail: 'MOCK: no voice provider to reach', voiceName: '[MOCK] Deep documentary narrator', modelListed: true });
+  });
+
   it('marks generated text as MOCK', async () => {
     const r = await new MockAIProvider().generateText({ task: 't', messages: [{ role: 'user', content: 'Write a hook' }] });
     expect(r.text).toMatch(/^\[MOCK\]/);

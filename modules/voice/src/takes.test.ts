@@ -48,7 +48,7 @@ describe('performance preparation (the canonical text never changes)', () => {
       [2, null, 'quiet', 'SCRIPT'],
     ]);
     expect(prepared.passed).toBe(true);
-    expect(prepared.prepared.checks.map((c) => `${c.id}:${c.status}`)).toEqual(['spoken-forms:PASS', 'words:PASS', 'sentences:PASS', 'boundaries:PASS', 'quotations:PASS', 'vocabulary:PASS', 'density:PASS', 'restraint:PASS']);
+    expect(prepared.prepared.checks.map((c) => `${c.id}:${c.status}`)).toEqual(['spoken-forms:PASS', 'words:PASS', 'sentences:PASS', 'boundaries:PASS', 'quotations:PASS', 'vocabulary:PASS', 'markup:PASS', 'density:PASS', 'restraint:PASS']);
     // v4 has no speed setting: the slow pace is carried by the direction, the setting is unchanged.
     expect(prepared.prepared.settings.speed).toBe(1);
     expect(chunk.text).toBe("Nobody at this table has seen what he is buying.\nWhat changes hands is not a flower.\nIt's a promise.");
@@ -59,7 +59,9 @@ describe('performance preparation (the canonical text never changes)', () => {
     const loud = take(PROMISE(), 'DIRECTED').prepared;
     expect(loud.rendered.text).toBe("[dramatic, intense] Nobody at this table has seen what he is buying. [pause] [curious, intense] What changes hands is not a flower. [pause] [dramatic, quiet] It's a promise.");
     expect(loud.passed).toBe(true);
-    expect(loud.prepared.checks.filter((c) => c.status === 'WARN').map((c) => c.id)).toEqual(['density', 'restraint']);
+    // The high intensity is not in the words the model takes: reported, not dropped.
+    expect(loud.prepared.checks.filter((c) => c.status === 'WARN').map((c) => c.id)).toEqual(['density', 'restraint', 'unsupported']);
+    expect(loud.prepared.unsupported).toEqual(['high intensity on sentences 1, 2, 3 (not expressed: only the direction\'s words are sent)']);
   });
 
   it('does not manufacture emotion: plain documentary narration gets no direction, and a marked passage is reset when plain narration follows', () => {
@@ -94,7 +96,7 @@ describe('performance preparation (the canonical text never changes)', () => {
 describe('performance checks catch a derived text that strays from the script', () => {
   const base = () => {
     const { prepared, chunk } = take(PROMISE(), 'RESTRAINED');
-    const input = { canonical: chunk.text, forms: prepared.prepared.spokenForms, spoken: prepared.spokenText, spokenSentences: prepared.spokenSentences, marks: prepared.prepared.marks, sentences: [], strategy: 'RESTRAINED' as const, director: false };
+    const input = { canonical: chunk.text, forms: prepared.prepared.spokenForms, spoken: prepared.spokenText, spokenSentences: prepared.spokenSentences, marks: prepared.prepared.marks, sentences: [], strategy: 'RESTRAINED' as const, director: false, caps: v4.capabilities('eleven_v4') };
     return { prepared, input };
   };
   const status = (checks: ReturnType<typeof checkTake>, id: string) => checks.find((c) => c.id === id)?.status;
@@ -113,17 +115,82 @@ describe('performance checks catch a derived text that strays from the script', 
     const r = quoted.prepared.rendered;
     const inside = r.text.replace('"We have', '"We [whispers] have');
     const mid = { ...r, text: inside, markup: [...r.markup, { start: inside.indexOf('[whispers]'), end: inside.indexOf('[whispers]') + 10, kind: 'DIRECTION' as const }] };
-    const checks = checkTake({ canonical: quoted.chunk.text, forms: [], spoken: quoted.prepared.spokenText, spokenSentences: quoted.prepared.spokenSentences, rendered: mid, marks: quoted.prepared.prepared.marks, sentences: [], strategy: 'RESTRAINED', director: false });
+    const caps = v4.capabilities('eleven_v4');
+    const checks = checkTake({ canonical: quoted.chunk.text, forms: [], spoken: quoted.prepared.spokenText, spokenSentences: quoted.prepared.spokenSentences, rendered: mid, marks: quoted.prepared.prepared.marks, sentences: [], strategy: 'RESTRAINED', director: false, caps });
     expect(status(checks, 'boundaries')).toBe('FAIL');
     expect(status(checks, 'quotations')).toBe('FAIL');
     const dialogue = { ...r, text: r.text.replace('[somber]', '[He Says Hello]') };
-    expect(status(checkTake({ canonical: quoted.chunk.text, forms: [], spoken: quoted.prepared.spokenText, spokenSentences: quoted.prepared.spokenSentences, rendered: dialogue, marks: [], sentences: [], strategy: 'RESTRAINED', director: false }), 'vocabulary')).toBe('FAIL');
+    expect(status(checkTake({ canonical: quoted.chunk.text, forms: [], spoken: quoted.prepared.spokenText, spokenSentences: quoted.prepared.spokenSentences, rendered: dialogue, marks: [], sentences: [], strategy: 'RESTRAINED', director: false, caps }), 'vocabulary')).toBe('FAIL');
   });
 
   it('a plain take with a direction fails; a spoken form that is not recorded fails', () => {
     const { prepared, input } = base();
     expect(status(checkTake({ ...input, strategy: 'PLAIN', rendered: prepared.rendered }), 'density')).toBe('FAIL');
     expect(status(checkTake({ ...input, spoken: input.spoken.replace('Nobody', 'No one'), rendered: prepared.rendered }), 'spoken-forms')).toBe('FAIL');
+  });
+
+  it('only markup the model takes: an SSML break fails for v4 (it takes no SSML) and passes for v2; a pause tag fails for v2', () => {
+    order = 0;
+    const blocks = [block('8.1', 'It begins.', { pauseAfter: { length: 'MEDIUM', reason: 'TRANSITION' } }), block('8.2', 'Then it is over, quickly, for everyone who had bought in late.')];
+    const tags = take(blocks, 'PLAIN').prepared;
+    const v2 = take(blocks, 'PLAIN', v4, 'eleven_multilingual_v2').prepared;
+    const input = (p: typeof tags, model: string) => ({ canonical: tags.spokenText, forms: [], spoken: p.spokenText, spokenSentences: p.spokenSentences, marks: [], sentences: [], strategy: 'PLAIN' as const, director: false, caps: v4.capabilities(model) });
+    expect(status(tags.prepared.checks, 'markup')).toBe('PASS');
+    expect(status(v2.prepared.checks, 'markup')).toBe('PASS');
+    // The v2 rendering (an SSML break) sent to v4, and the v4 rendering (a pause tag) sent to v2.
+    const ssmlToV4 = checkTake({ ...input(v2, 'eleven_v4'), rendered: v2.rendered });
+    expect(status(ssmlToV4, 'markup')).toBe('FAIL');
+    expect(ssmlToV4.find((c) => c.id === 'markup')!.detail).toMatch(/<break time="1\.2s" \/> \(it takes audio tags\)/);
+    expect(status(checkTake({ ...input(v2, 'eleven_multilingual_v2'), rendered: v2.rendered }), 'markup')).toBe('PASS');
+    expect(status(checkTake({ ...input(tags, 'eleven_multilingual_v2'), rendered: tags.rendered }), 'markup')).toBe('FAIL');
+  });
+
+  it('warns about a forward slash for a tag model (it may read the text between two slashes as phonemes); fractions are spoken as words', () => {
+    order = 0;
+    const fraction = take([block('9.1', 'About 1/3 of the buyers never paid, and 2 1/2 thousand guilders went unpaid.')], 'PLAIN').prepared;
+    expect(fraction.rendered.text).toBe('About one third of the buyers never paid, and two and a half thousand guilders went unpaid.');
+    expect(fraction.prepared.checks.map((c) => c.id)).not.toContain('slashes');
+    order = 0;
+    const slash = take([block('9.2', 'The market ran 24/7 that winter, or so the pamphlets claimed.')], 'PLAIN').prepared;
+    expect(status(slash.prepared.checks, 'slashes')).toBe('WARN');
+    expect(slash.passed).toBe(true);
+  });
+
+  it('warns when a direction heightens a sentence the script marks uncertain, reconstructed or fictional', () => {
+    order = 0;
+    const uncertain = { ...block('10.1', 'Some said a single bulb once bought a brewery outright.', { emotion: 'EXCITED' }), infoClass: 'UNCERTAIN' as const };
+    const restrained = take([uncertain], 'RESTRAINED').prepared;
+    expect(restrained.prepared.checks.find((c) => c.id === 'info-class')).toMatchObject({ status: 'WARN', detail: 'sentence 1 (uncertain): excited' });
+    order = 0;
+    const documented = take([block('10.2', 'The guild records list every sale that winter.', { emotion: 'CURIOUS' })], 'DIRECTED').prepared;
+    expect(documented.prepared.checks.map((c) => c.id)).not.toContain('info-class');
+    // A direction carries forward: the excitement marked on the documented block is in force over the uncertain one.
+    order = 0;
+    const excited = { emotion: 'EXCITED' } as const;
+    const carried = take([block('10.3', 'The price doubled in a week, and then it doubled again.', excited), { ...block('10.4', 'Some said a single bulb once bought a brewery outright.', excited), infoClass: 'UNCERTAIN' as const }], 'RESTRAINED').prepared;
+    expect(carried.prepared.marks.map((m) => m.sentence)).toEqual([0]);
+    expect(carried.prepared.checks.find((c) => c.id === 'info-class')).toMatchObject({ status: 'WARN', detail: 'sentence 2 (uncertain): excited (carried from sentence 1)' });
+    expect(carried.passed).toBe(true);
+  });
+
+  it('reports the script\'s emphasis as not expressed, never silently dropped (stress would need the words changed)', () => {
+    order = 0;
+    const stressed = take([block('11.1', 'In 1637 nobody paid. Nobody.', { emphasis: [{ text: 'nobody', level: 'STRONG' }, { text: '1637', level: 'LIGHT' }] })], 'PLAIN');
+    expect(stressed.prepared.segments[0]!.emphasis).toEqual([
+      { start: 3, end: 23, level: 'LIGHT' },
+      { start: 24, end: 30, level: 'STRONG' },
+    ]);
+    expect(stressed.prepared.segments[0]!.text.slice(3, 23)).toBe('sixteen thirty-seven');
+    expect(stressed.prepared.prepared.unsupported).toEqual([
+      'sentence 1: light stress on "sixteen thirty-seven" (not expressed: the words are sent as written)',
+      'sentence 1: strong stress on "nobody" (not expressed: the words are sent as written)',
+    ]);
+    expect(stressed.prepared.rendered.text).toBe('In sixteen thirty-seven nobody paid. Nobody.');
+    // Stress on part of a figure is stress on all of it as said.
+    order = 0;
+    const part = take([block('11.2', 'In 1637 nobody paid.', { emphasis: [{ text: '16', level: 'LIGHT' }] })], 'PLAIN');
+    expect(part.prepared.segments[0]!.emphasis).toEqual([{ start: 3, end: 23, level: 'LIGHT' }]);
+    expect(status(stressed.prepared.prepared.checks, 'unsupported')).toBe('WARN');
   });
 });
 

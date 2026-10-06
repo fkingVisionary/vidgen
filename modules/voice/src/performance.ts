@@ -1,4 +1,4 @@
-import type { ChunkPauses, DeliveryEmotion, DirectorMark, PauseLength, PerformanceIntent, PerformanceMark, PerformanceStrategy, ScriptBlockClass, ScriptDelivery } from '@docengine/core';
+import type { ChunkPauses, DeliveryEmotion, DirectorMark, PauseLength, PauseReason, PerformanceIntent, PerformanceMark, PerformanceStrategy, ScriptBlockClass, ScriptDelivery } from '@docengine/core';
 import { countWords, isQuestion } from './text.ts';
 
 /**
@@ -24,9 +24,22 @@ import { countWords, isQuestion } from './text.ts';
  *   low intensity; one emotion and at most one delivery word; never a vocal
  *   action (sighs, breaths) unless the director asks for one.
  *
+ * EXPRESSIVE is the house style plus at most one deliberate moment per
+ * chunk, where the script turns: the sentence after a reveal, impact or
+ * emotional-turn pause, or else the start of a block the script marks with a
+ * delivery. The moment is one bracket of up to two cues from the script
+ * (feeling, then energy, then pace; for a turn the script gives no delivery,
+ * a slower or quieter manner), six words or more from any other direction.
+ * It colours its block; the next block goes back to the direction the house
+ * style has in force there, so nothing outside that block differs from it.
+ *
  * PLAIN sends no directions at all. DIRECTED marks every sentence, loudly —
  * kept only to compare against (what over-direction sounds like), never the
  * default.
+ *
+ * A director's directions are laid over the strategy's: the director's wins
+ * on its sentence, the rest of the strategy's stay, and the next sentence
+ * goes back to what the strategy has in force there.
  */
 
 export interface PreparedSentence {
@@ -65,6 +78,36 @@ export const HOUSE_STYLE = { maxMarksPerChunk: 2, minWordsBetweenMarks: 6 } as c
 
 const RESET: Omit<PerformanceIntent, 'pacing'> = { emotion: null, delivery: 'matter-of-fact', intensity: 'LOW', vocalAction: null };
 
+/** A direction back to the plain register. */
+export const isReset = (i: PerformanceIntent) => !i.emotion && i.delivery === 'matter-of-fact' && !i.vocalAction;
+
+/** The house style's words for a delivery: its feeling and one delivery word (both null for plain narration). */
+function houseWords(d: ScriptDelivery): Pick<PerformanceIntent, 'emotion' | 'delivery'> {
+  return { emotion: EMOTION_WORDS[d.emotion], delivery: deliveryWord(d) };
+}
+
+/** The direction in force at a sentence: the last one at or before it (null: none yet). */
+export function inForceAt(marks: readonly PerformanceMark[], sentence: number): PerformanceMark | null {
+  let found: PerformanceMark | null = null;
+  for (const m of marks) if (m.sentence <= sentence && (!found || m.sentence >= found.sentence)) found = m;
+  return found;
+}
+
+/**
+ * A direction the house style itself would give or has in force there: back
+ * to the plain register, the house's words for the sentence's own delivery,
+ * or the house direction carried to that sentence.
+ */
+export function isHouseDirection(m: PerformanceMark, sentences: readonly PreparedSentence[]): boolean {
+  if (isReset(m.intent)) return true;
+  const s = sentences[m.sentence];
+  if (!s || m.intent.vocalAction) return false;
+  const says = (w: Pick<PerformanceIntent, 'emotion' | 'delivery'>) => m.intent.emotion === w.emotion && m.intent.delivery === w.delivery;
+  if (says(houseWords(s.delivery))) return true;
+  const carried = inForceAt(restrained(sentences), m.sentence);
+  return !!carried && says(carried.intent);
+}
+
 function restrained(sentences: readonly PreparedSentence[]): PerformanceMark[] {
   const marks: PerformanceMark[] = [];
   let wordsSince = Number.POSITIVE_INFINITY;
@@ -74,7 +117,7 @@ function restrained(sentences: readonly PreparedSentence[]): PerformanceMark[] {
     const change = i === 0 || (s.blockStart && prev && !sameDelivery(prev.delivery, s.delivery));
     if (change && marks.length < HOUSE_STYLE.maxMarksPerChunk) {
       if (!isPlainDelivery(s.delivery) && (i === 0 || wordsSince >= HOUSE_STYLE.minWordsBetweenMarks)) {
-        const intent: PerformanceIntent = { emotion: EMOTION_WORDS[s.delivery.emotion], delivery: deliveryWord(s.delivery), intensity: 'LOW', pacing: s.delivery.pace, vocalAction: null };
+        const intent: PerformanceIntent = { ...houseWords(s.delivery), intensity: 'LOW', pacing: s.delivery.pace, vocalAction: null };
         if (intent.emotion || intent.delivery) {
           marks.push({ sentence: i, intent, source: 'SCRIPT', reason: `block ${s.blockKey}: the script marks it ${describe(s.delivery)}` });
           wordsSince = 0;
@@ -100,25 +143,105 @@ function directed(sentences: readonly PreparedSentence[]): PerformanceMark[] {
   });
 }
 
+/** Pause reasons that mark a turn worth one deliberate moment, strongest first. */
+const TURNS: readonly PauseReason[] = ['REVEAL', 'IMPACT', 'EMOTIONAL_TURN'];
+/** The manner of a moment where the script marks a turn but no delivery. */
+const TURN_MANNER: Partial<Record<PauseReason, string>> = { REVEAL: 'deliberate', IMPACT: 'deliberate', EMOTIONAL_TURN: 'quiet' };
+
+/**
+ * The words of a moment: the script's feeling and its manner (energy, then
+ * pace), two at most — "[curious, quiet]", "[quiet, deliberate]"; for a turn
+ * the script gives no delivery, its manner alone. Null when there is nothing
+ * to say.
+ */
+function momentWords(d: ScriptDelivery, turn: PauseReason | null): Pick<PerformanceIntent, 'emotion' | 'delivery'> | null {
+  const manner = [d.energy === 'LOW' ? 'quiet' : d.energy === 'HIGH' ? 'urgent' : null, d.pace === 'SLOW' ? 'deliberate' : d.pace === 'FAST' ? 'brisk' : null].filter((w): w is string => !!w);
+  const feeling = EMOTION_WORDS[d.emotion];
+  if (feeling) return { emotion: feeling, delivery: manner[0] ?? null };
+  if (manner.length === 2) return { emotion: manner[0]!, delivery: manner[1]! };
+  if (manner.length === 1) return { emotion: null, delivery: manner[0]! };
+  const turnManner = turn ? TURN_MANNER[turn] : undefined;
+  return turnManner ? { emotion: null, delivery: turnManner } : null;
+}
+
+function expressive(sentences: readonly PreparedSentence[], pauses: ChunkPauses): PerformanceMark[] {
+  const house = restrained(sentences);
+  const candidates: { sentence: number; turn: PauseReason | null }[] = [];
+  for (const turn of TURNS) {
+    if (sentences[0]?.delivery.pauseBefore.reason === turn && pauses.before !== 'NONE') candidates.push({ sentence: 0, turn });
+    for (const p of pauses.inside) if (p.reason === turn && p.afterSentence + 1 < sentences.length) candidates.push({ sentence: p.afterSentence + 1, turn });
+  }
+  sentences.forEach((s, i) => {
+    if (s.blockStart && !isPlainDelivery(s.delivery)) candidates.push({ sentence: i, turn: null });
+  });
+  for (const c of candidates) {
+    const s = sentences[c.sentence]!;
+    const words = momentWords(s.delivery, c.turn);
+    // A moment says more than the house style would there.
+    if (!words) continue;
+    const intent: PerformanceIntent = { ...words, intensity: 'LOW', pacing: s.delivery.pace, vocalAction: null };
+    const moment: PerformanceMark = { sentence: c.sentence, intent, source: 'STRATEGY', reason: `expressive moment: ${c.turn ? `after a ${c.turn.toLowerCase().replace('_', ' ')} pause` : `block ${s.blockKey}: the script marks it ${describe(s.delivery)}`}` };
+    if (isHouseDirection(moment, sentences)) continue;
+    // Never on consecutive short sentences: six words or more from the directions before and after it.
+    const before = house.filter((m) => m.sentence < c.sentence && !isReset(m.intent)).at(-1);
+    const after = house.find((m) => m.sentence > c.sentence && !isReset(m.intent));
+    if (before && wordsBetween(sentences, before.sentence, c.sentence) < HOUSE_STYLE.minWordsBetweenMarks) continue;
+    if (after && wordsBetween(sentences, c.sentence, after.sentence) < HOUSE_STYLE.minWordsBetweenMarks) continue;
+    // The moment colours its block, as the house style's directions do; the next block goes back to the direction the house style has in force there.
+    return overlay(house, [moment], (m, marks) => {
+      const next = sentences.findIndex((x, i) => i > m.sentence && x.blockStart);
+      if (next < 0 || marks.some((x) => x.sentence > m.sentence && x.sentence <= next)) return null;
+      const back = inForceAt(house, next);
+      const key = sentences[next]!.blockKey;
+      return back && !isReset(back.intent)
+        ? { sentence: next, intent: back.intent, source: 'STRATEGY', reason: `block ${key}: back to the house style after the expressive moment (the direction of sentence ${back.sentence + 1})` }
+        : { sentence: next, intent: { ...RESET, pacing: 'NORMAL' }, source: 'STRATEGY', reason: `block ${key}: back to the plain register after the expressive moment (a direction carries forward)` };
+    });
+  }
+  return house;
+}
+
 function describe(d: ScriptDelivery): string {
   return [d.emotion !== 'NEUTRAL' ? d.emotion.toLowerCase() : null, d.energy !== 'MEDIUM' ? `${d.energy.toLowerCase()} energy` : null, d.pace !== 'NORMAL' ? `${d.pace.toLowerCase()} pace` : null].filter(Boolean).join(', ');
 }
 
-/** The directions for one chunk: the director's, if given; otherwise the strategy's. */
-export function performanceMarks(sentences: readonly PreparedSentence[], strategy: PerformanceStrategy, director?: readonly DirectorMark[]): PerformanceMark[] {
-  if (director?.length) {
-    return director
-      .filter((d) => d.sentence < sentences.length && (d.emotion || d.delivery || d.vocalAction))
-      .sort((a, b) => a.sentence - b.sentence)
-      .map((d) => ({
+const wordsBetween = (sentences: readonly PreparedSentence[], from: number, to: number) => sentences.slice(from, to).reduce((n, s) => n + countWords(s.text), 0);
+
+/** Marks laid over others: each wins on its sentence, and `end` gives the mark (if any) that ends it — a direction carries forward. */
+function overlay(base: readonly PerformanceMark[], over: readonly PerformanceMark[], end: (m: PerformanceMark, marks: readonly PerformanceMark[]) => PerformanceMark | null): PerformanceMark[] {
+  const taken = new Set(over.map((m) => m.sentence));
+  const out = [...base.filter((m) => !taken.has(m.sentence)), ...over];
+  for (const m of over) {
+    const closing = end(m, out);
+    if (closing) out.push(closing);
+  }
+  return out.sort((a, b) => a.sentence - b.sentence);
+}
+
+/** The directions for one chunk: the strategy's, with the director's laid over them (each for its one sentence). */
+export function performanceMarks(sentences: readonly PreparedSentence[], strategy: PerformanceStrategy, pauses: ChunkPauses, director?: readonly DirectorMark[]): PerformanceMark[] {
+  const base = strategy === 'PLAIN' ? [] : strategy === 'DIRECTED' ? directed(sentences) : strategy === 'EXPRESSIVE' ? expressive(sentences, pauses) : restrained(sentences);
+  const own = (director ?? [])
+    .filter((d) => d.sentence < sentences.length && (d.emotion || d.delivery || d.vocalAction))
+    .sort((a, b) => a.sentence - b.sentence)
+    .map(
+      (d): PerformanceMark => ({
         sentence: d.sentence,
         intent: { emotion: d.emotion ?? null, delivery: d.delivery ?? null, intensity: 'LOW', pacing: sentences[d.sentence]!.delivery.pace, vocalAction: d.vocalAction ?? null },
         source: 'DIRECTOR',
         reason: "the director's direction",
-      }));
-  }
-  if (strategy === 'PLAIN') return [];
-  return strategy === 'DIRECTED' ? directed(sentences) : restrained(sentences);
+      }),
+    );
+  if (!own.length) return base;
+  // After the director's sentence, back to the strategy's direction in force there (or the plain register).
+  return overlay(base, own, (m, marks) => {
+    const next = m.sentence + 1;
+    if (next >= sentences.length || marks.some((x) => x.sentence === next)) return null;
+    const inForce = inForceAt(base, next);
+    return inForce && !isReset(inForce.intent)
+      ? { sentence: next, intent: inForce.intent, source: 'DIRECTOR', reason: `back to the direction of sentence ${inForce.sentence + 1} after the director's (a direction carries forward)` }
+      : { sentence: next, intent: { ...RESET, pacing: 'NORMAL' }, source: 'DIRECTOR', reason: "back to the plain register after the director's direction (a direction carries forward)" };
+  });
 }
 
 /** The pause after each sentence inside the chunk (the chunk's edges are pauses between takes, made in assembly). */

@@ -25,37 +25,34 @@ const tail = (s: string, n: number) => (s.length > n ? s.slice(s.length - n) : s
 const head = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s);
 
 /**
- * ElevenLabs Multilingual / Flash v2 models (SSML era): pauses as
- * `<break time="1.2s" />` (up to 3 s), one speed per request (0.7–1.2),
- * neighbouring text for continuous prosody, and pronunciation dictionaries
- * (alias or IPA rules). Emphasis, energy and emotion have no markup in these
- * models: they are reported as unsupported. This is the Script page's
- * read-only voice summary; narration itself goes through the Voice Engine
+ * The Script page's legacy character estimate for ElevenLabs: the spoken
+ * text in one segment per run of blocks with the same pace, neighbouring
+ * text, and the pronunciation dictionary it would use. It writes no markup
+ * (no SSML `<break>`, no tags) and lists the pauses, emphasis, energy and
+ * emotion it leaves out. Narration itself goes through the Voice Engine
  * (modules/voice), which chunks smaller and renders each model's own markup
- * through the provider (audio tags and no SSML for Eleven v4).
+ * through the provider (audio tags and no SSML for tag models).
  */
 export class ElevenLabsScriptAdapter implements VoiceScriptAdapter {
   readonly provider = 'elevenlabs';
   static readonly SPEED: Record<DeliveryPace, number> = { SLOW: 0.92, NORMAL: 1, FAST: 1.08 };
-  static readonly MAX_BREAK_SEC = 3;
 
   render(sections: readonly VoiceScriptSection[], pronunciations: readonly Pronunciation[]): VoiceRenderPlan {
     const segments: VoiceSegment[] = [];
+    let paused = 0;
     let emphasis = 0;
     let coloured = 0;
     for (const s of sections) {
-      // One request per run of blocks with the same pace (speed is per request).
+      // One segment per run of blocks with the same pace (speed is per request).
       let run: VoiceScriptSection['blocks'][number][] = [];
       const flush = () => {
         if (!run.length) return;
-        const text = run
-          .map((b) => [this.pause(pauseSec(b.delivery.pauseBefore)), b.text, this.pause(pauseSec(b.delivery.pauseAfter))].filter(Boolean).join(' '))
-          .join(' ')
-          .trim();
+        const text = run.map((b) => b.text).join(' ').trim();
         segments.push({ sectionKey: s.key, blockKeys: run.map((b) => b.key), text, speed: ElevenLabsScriptAdapter.SPEED[run[0]!.delivery.pace], characters: plain(text).length, previousText: null, nextText: null });
         run = [];
       };
       for (const b of s.blocks) {
+        if (pauseSec(b.delivery.pauseBefore) > 0 || pauseSec(b.delivery.pauseAfter) > 0) paused++;
         if (b.delivery.emphasis.length) emphasis++;
         if (b.delivery.emotion !== 'NEUTRAL' || b.delivery.energy !== 'MEDIUM') coloured++;
         if (run.length && run[0]!.delivery.pace !== b.delivery.pace) flush();
@@ -70,8 +67,9 @@ export class ElevenLabsScriptAdapter implements VoiceScriptAdapter {
     });
     const confirmed = pronunciations.filter((p) => !p.needsReview);
     const unsupported = [
-      emphasis ? `emphasis on ${emphasis} block(s): no emphasis markup in these models` : null,
-      coloured ? `energy or emotion on ${coloured} block(s): not expressible per block; choose the voice and settings for the overall register` : null,
+      paused ? `pauses on ${paused} block(s): not in this estimate (the Voice Engine writes them in each model's own markup)` : null,
+      emphasis ? `emphasis on ${emphasis} block(s): not in this estimate` : null,
+      coloured ? `energy or emotion on ${coloured} block(s): not in this estimate (the Voice Engine directs them per chunk)` : null,
     ].filter((x): x is string => x !== null);
     return {
       provider: this.provider,
@@ -81,16 +79,11 @@ export class ElevenLabsScriptAdapter implements VoiceScriptAdapter {
       pendingPronunciations: pronunciations.filter((p) => p.needsReview).map((p) => p.term),
       characters: segments.reduce((n, s) => n + s.characters, 0),
       notes: [
-        `${segments.length} request(s): one per run of blocks with the same pace in a section`,
-        `Pauses as break tags (up to ${ElevenLabsScriptAdapter.MAX_BREAK_SEC} s); characters exclude the tags`,
+        'Legacy character estimate: the spoken text only, without markup; the Voice Engine plans the real requests in small chunks',
+        `${segments.length} segment(s): one per run of blocks with the same pace in a section`,
         'Only confirmed pronunciations go into the dictionary',
       ],
     };
-  }
-
-  private pause(sec: number): string {
-    if (sec <= 0) return '';
-    return `<break time="${Math.min(sec, ElevenLabsScriptAdapter.MAX_BREAK_SEC).toFixed(1)}s" />`;
   }
 }
 

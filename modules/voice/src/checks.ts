@@ -1,6 +1,6 @@
-import type { PerformanceCheck, PerformanceMark, PerformanceStrategy, SpokenForm } from '@docengine/core';
-import { stripMarkup, type RenderedNarration } from '@docengine/providers';
-import { HOUSE_STYLE, isPlainDelivery, type PreparedSentence } from './performance.ts';
+import type { PerformanceCheck, PerformanceMark, PerformanceStrategy, ScriptBlockClass, SpokenForm } from '@docengine/core';
+import { stripMarkup, type RenderedNarration, type VoiceModelCapabilities } from '@docengine/providers';
+import { HOUSE_STYLE, inForceAt, isHouseDirection, isPlainDelivery, isReset, type PreparedSentence } from './performance.ts';
 import { applyForms } from './spoken.ts';
 import { countWords, wordList, type TextSpan } from './text.ts';
 
@@ -9,7 +9,8 @@ import { countWords, wordList, type TextSpan } from './text.ts';
  * sent (a FAIL means the take is not sent). They prove the derived text says
  * exactly the script's words: no word added, dropped or changed, every
  * spoken form recorded, directions only between sentences and never inside
- * a quotation, directions in plain words, within the strategy's density.
+ * a quotation, directions in plain words and pauses in the model's own
+ * markup, within the strategy's density.
  */
 
 export interface TakeCheckInput {
@@ -23,11 +24,16 @@ export interface TakeCheckInput {
   sentences: readonly PreparedSentence[];
   strategy: PerformanceStrategy;
   director: boolean;
+  /** The model's markup: what it would read aloud or reject is never sent. */
+  caps: Pick<VoiceModelCapabilities, 'directions' | 'pauses'>;
 }
 
 const DESCRIPTOR = /^[a-z][a-z \-']*[a-z]$/;
 const PAUSE_TAGS = new Set(['[pause]', '[long pause]']);
 const BREAK = /^<break time="\d+(?:\.\d+)?s" \/>$/;
+/** Classes whose delivery stays measured: told with their uncertainty, or declared as reconstruction or fiction. */
+const MEASURED: ReadonlySet<ScriptBlockClass> = new Set(['UNCERTAIN', 'RECONSTRUCTION', 'FICTION']);
+const HEIGHTENED = new Set(['excited', 'dramatic']);
 
 function firstDifference(a: readonly string[], b: readonly string[]): string {
   const n = Math.max(a.length, b.length);
@@ -112,27 +118,55 @@ export function checkTake(t: TakeCheckInput): PerformanceCheck[] {
   }
   add('vocabulary', 'Directions in plain words', bad.length ? 'FAIL' : 'PASS', bad.length ? `not a plain direction: ${bad.join(', ')}` : 'every direction is a few plain words');
 
-  // 7. Density, by strategy.
+  // 7. Only markup the model takes: SSML breaks for a model that reads SSML, audio tags for one that takes tags.
+  const foreign: string[] = [];
+  for (const m of t.rendered.markup) {
+    const piece = t.rendered.text.slice(m.start, m.end);
+    const ok = m.kind === 'DIRECTION' ? t.caps.directions : BREAK.test(piece) ? t.caps.pauses === 'BREAKS' : t.caps.pauses === 'TAGS';
+    if (!ok) foreign.push(piece);
+  }
+  const mode = t.caps.pauses === 'TAGS' ? 'audio tags' : t.caps.pauses === 'BREAKS' ? 'SSML breaks' : 'punctuation only';
+  add('markup', 'Markup the model takes', foreign.length ? 'FAIL' : 'PASS', foreign.length ? `the model would read or reject: ${foreign.join(', ')} (it takes ${mode})` : `pauses as ${mode}${t.caps.directions ? ', directions as tags' : ''}`);
+
+  // 8. Density, by strategy. The house limits hold for what the strategy translates from the script; an expressive take adds one moment; the director's directions only warn when they crowd the chunk.
   const directions = t.rendered.markup.filter((m) => m.kind === 'DIRECTION').length;
   const words = countWords(t.spoken);
-  if (t.director) {
-    add('density', 'Direction density', directions * 10 > Math.max(words, 10) ? 'WARN' : 'PASS', `${directions} direction(s) in ${words} words (the director's)`);
-  } else if (t.strategy === 'PLAIN') {
-    add('density', 'Direction density', directions ? 'FAIL' : 'PASS', directions ? `${directions} direction(s) in a plain take` : 'no directions (plain)');
-  } else if (t.strategy === 'RESTRAINED') {
-    const reset = (m: PerformanceMark) => !m.intent.emotion && m.intent.delivery === 'matter-of-fact';
-    const tooClose = t.marks.some((m, i) => i > 0 && !reset(m) && wordsBetween(t.sentences, t.marks[i - 1]!.sentence, m.sentence) < HOUSE_STYLE.minWordsBetweenMarks);
-    const over = t.marks.length > HOUSE_STYLE.maxMarksPerChunk || tooClose;
-    add('density', 'Direction density', over ? 'FAIL' : 'PASS', `${t.marks.length} direction(s) in ${words} words (house style: at most ${HOUSE_STYLE.maxMarksPerChunk}, ${HOUSE_STYLE.minWordsBetweenMarks}+ words apart)`);
+  const house = t.marks.filter((m) => m.source === 'SCRIPT');
+  const moments = t.marks.filter((m) => m.source === 'STRATEGY' && !isHouseDirection(m, t.sentences));
+  const crowded = t.director && directions * 10 > Math.max(words, 10);
+  const director = t.director ? `; ${t.marks.filter((m) => m.source === 'DIRECTOR').length} of them the director's${crowded ? ', more than one in ten words' : ''}` : '';
+  if (t.strategy === 'PLAIN') {
+    const strategyMarks = t.marks.filter((m) => m.source !== 'DIRECTOR').length;
+    const own = t.director ? strategyMarks : Math.max(strategyMarks, directions);
+    add('density', 'Direction density', own ? 'FAIL' : crowded ? 'WARN' : 'PASS', own ? `${own} direction(s) in a plain take` : `no directions of its own (plain)${director}`);
+  } else if (t.strategy === 'RESTRAINED' || t.strategy === 'EXPRESSIVE') {
+    const tooClose = house.some((m, i) => i > 0 && !isReset(m.intent) && wordsBetween(t.sentences, house[i - 1]!.sentence, m.sentence) < HOUSE_STYLE.minWordsBetweenMarks);
+    const allowed = t.strategy === 'EXPRESSIVE' ? 1 : 0;
+    const over = house.length > HOUSE_STYLE.maxMarksPerChunk || tooClose || moments.length > allowed;
+    const limits = `house style: at most ${HOUSE_STYLE.maxMarksPerChunk}, ${HOUSE_STYLE.minWordsBetweenMarks}+ words apart${allowed ? `, plus ${allowed} expressive moment` : ''}`;
+    add('density', 'Direction density', over ? 'FAIL' : crowded ? 'WARN' : 'PASS', `${t.marks.length} direction(s) in ${words} words (${limits})${director}`);
   } else {
-    add('density', 'Direction density', 'WARN', `over-directed (comparison only): ${directions} direction(s) in ${words} words`);
+    add('density', 'Direction density', 'WARN', `over-directed (comparison only): ${directions} direction(s) in ${words} words${director}`);
   }
 
-  // 8. No emotion manufactured where the script marks plain narration.
-  const manufactured = t.marks.filter((m) => m.source === 'STRATEGY' && isPlainDelivery(t.sentences[m.sentence]!.delivery));
+  // 9. No emotion manufactured where the script marks plain narration.
+  const manufactured = t.marks.filter((m) => m.source === 'STRATEGY' && !!m.intent.emotion && isPlainDelivery(t.sentences[m.sentence]!.delivery));
   add('restraint', 'No manufactured emotion', manufactured.length ? 'WARN' : 'PASS', manufactured.length ? `${manufactured.length} direction(s) on narration the script marks as plain` : 'directions only where the script asks for a delivery');
 
-  // 9. What the model cannot take is reported, not sent.
+  // 10. Measured delivery where the script is uncertain, reconstructed or fictional (it must not sound like documented fact, or like drama) — under the direction in force there, which carries forward.
+  const heightened = t.sentences.flatMap((s, i) => {
+    const m = inForceAt(t.marks, i);
+    if (!m || !MEASURED.has(s.infoClass) || (m.intent.intensity === 'LOW' && !HEIGHTENED.has(m.intent.emotion ?? ''))) return [];
+    const said = [m.intent.emotion, m.intent.delivery].filter(Boolean).join(', ');
+    return [`sentence ${i + 1} (${s.infoClass.toLowerCase()}): ${said}${m.intent.intensity !== 'LOW' ? `, ${m.intent.intensity.toLowerCase()} intensity` : ''}${m.sentence !== i ? ` (carried from sentence ${m.sentence + 1})` : ''}`];
+  });
+  if (heightened.length) add('info-class', 'Delivery fits the information class', 'WARN', heightened.join('; '));
+
+  // 11. A forward slash may be read as inline phonemes by a model that takes audio tags.
+  const slashes = t.caps.directions ? (stripMarkup(t.rendered).match(/\//g) ?? []).length : 0;
+  if (slashes) add('slashes', 'No inline phonemes', 'WARN', `${slashes} forward slash(es) in the sent text: the model may read the text between two slashes as phonemes`);
+
+  // 12. What the model cannot take is reported, not sent.
   if (t.rendered.unsupported.length) add('unsupported', 'Not expressible by the model', 'WARN', t.rendered.unsupported.join('; '));
   return checks;
 }

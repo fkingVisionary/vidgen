@@ -1,4 +1,4 @@
-import { NarrationAlignment, PreparedNarration, type JobType } from '@docengine/core';
+import { NarrationAlignment, PreparedNarration, VOICE_ACCEPTANCE_EXPERIMENT, type JobType } from '@docengine/core';
 import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers } from '@docengine/pipeline';
 import { ALL_MOCK, MockVoiceProvider, ProviderError, createProviders, type NarrationRequest, type NarrationResult, type ProviderSet } from '@docengine/providers';
 import { ScriptEditing, createScriptStage } from '@docengine/script';
@@ -8,6 +8,8 @@ import { seedFakeDossier } from '@docengine/story/testing';
 import { describe, expect, it } from 'vitest';
 import { tulipInput, useTestDatabase } from '../../../test/helpers.ts';
 import { voiceGate } from './gate.ts';
+import { rebuildAssembly } from './runs.ts';
+import { loadScriptForVoice } from './script.ts';
 import { VoiceService } from './service.ts';
 import { createVoiceStage } from './stage.ts';
 import { loadVoiceView } from './views.ts';
@@ -110,7 +112,7 @@ describe('voice engine (MOCK voice, real database)', () => {
     expect(r).toMatchObject({ number, kind: 'AUDITION', scriptVersion: 1, chunkCount: plan.chunks.length, stale: false });
     for (const c of r.chunks) {
       const take = c.current!;
-      expect(take).toMatchObject({ generation: 1, status: 'GENERATED', provider: 'mock', model: 'mock', voiceId: 'mock-narrator-deep', alignment: 'MOCK', mock: true });
+      expect(take).toMatchObject({ generation: 1, status: 'IN_REVIEW', variant: null, provider: 'mock', model: 'mock', voiceId: 'mock-narrator-deep', alignment: 'MOCK', mock: true });
       expect(take.audioUrl).toMatch(/^\/api\/voice\/audio\//);
       expect(take.durationMs).toBeGreaterThan(0);
       expect(take.words.length).toBeGreaterThan(0);
@@ -125,63 +127,126 @@ describe('voice engine (MOCK voice, real database)', () => {
     const audio = await s.service.audio(first.audioUrl!.split('/').pop()!);
     expect(audio.mimeType).toBe('audio/wav');
     expect(audio.bytes.byteLength).toBeGreaterThan(44);
-    // Assembly: in order, on the takes' durations, with pauses between them.
+    // Assembly: in order, on the takes' durations, with pauses between them; every chunk has a take, so it is to review (an audition is never complete).
     const asm = r.assembly!;
-    expect(asm).toMatchObject({ version: 1, complete: false, status: 'DRAFT' });
+    expect(asm).toMatchObject({ version: 1, complete: false, status: 'IN_REVIEW' });
+    expect(r.assemblies).toEqual([expect.objectContaining({ id: asm.id, version: 1, status: 'IN_REVIEW', audioUrl: asm.audioUrl })]);
     expect(asm.entries.map((e) => e.chunkIndex)).toEqual(r.chunks.map((c) => c.index));
     expect(asm.totalDurationMs).toBe(asm.entries.at(-1)!.endMs);
     expect(asm.timeline.length).toBeGreaterThanOrEqual(r.chunks.length);
     // An audition is not the narration: QA says so and the gate refuses it.
     expect(r.qa.map((f) => f.kind)).toContain('INCOMPLETE_NARRATION');
     expect(r.qa.filter((f) => f.kind === 'TAKE_UNREVIEWED')).toHaveLength(r.chunks.length);
+    expect(r.qa.map((f) => f.kind)).not.toContain('ASSEMBLY_MISMATCH');
     await expect(s.projects.recordApproval(projectId, { gate: 'VOICE', decision: 'APPROVED' }, 'editor')).rejects.toThrow(/No full narration of script v1/);
     // "What is being said at 00:01?"
     const m = await s.service.moment(projectId, number, 1000);
     expect(m).toMatchObject({ run: number, chunk: 1, generation: 1, between: false });
     expect(m.word).not.toBeNull();
+    // With the timeline's part for that moment: the take's audio file, the word on the assembled clock, the performance, and approval.
+    expect(m.part).toMatchObject({ scriptBlock: { key: m.block, sectionKey: m.section }, audioChunk: { index: 0, generationId: first.id, audioAssetId: first.audioUrl!.split('/').pop() }, startMs: m.startMs, endMs: m.endMs, approved: false });
+    expect(m.part.words).toContainEqual(expect.objectContaining({ word: m.word }));
+    expect(m.part.performance).toMatchObject({ pace: expect.any(String), energy: expect.any(String), emotion: expect.any(String) });
+    // The timeline contract: section, block, chunk, take and its audio file, clock, words, performance, and approval read now.
+    const assetOf = (url: string | null) => url!.split('/').pop()!;
+    let t = await s.service.timeline(projectId, number);
+    expect(t).toMatchObject({ run: number, scriptVersion: 1, assembly: 1, status: 'IN_REVIEW', complete: false, totalDurationMs: asm.totalDurationMs });
+    expect(t.entries.map((e) => e.audioAssetId)).toEqual(r.chunks.map((c) => assetOf(c.current!.audioUrl)));
+    expect(t.timeline.every((e) => e.audioChunk.audioAssetId === assetOf(r.chunks[e.audioChunk.index]!.current!.audioUrl) && !e.approved && e.words.length > 0)).toBe(true);
+    await s.service.decide(first.id, { action: 'APPROVE' }, 'editor');
+    t = await s.service.timeline(projectId, number);
+    expect(t.assembly).toBe(1);
+    expect(t.timeline.map((e) => e.approved)).toEqual(t.timeline.map((e) => e.audioChunk.index === 0));
+    expect((await s.service.moment(projectId, number, 1000)).part.approved).toBe(true);
     // The ledger has one MOCK call per take, linked to it.
     const calls = await db.providerCall.findMany({ where: { projectId, kind: 'VOICE' } });
     expect(calls).toHaveLength(r.chunks.length);
     expect(calls.every((c) => c.costBasis === 'MOCK' && c.status === 'SUCCEEDED')).toBe(true);
-    // The assembled file joins the takes with their pauses.
+    // The assembled file joins the takes with their pauses, each clip where the timeline puts it.
     const joined = await s.service.assemblyAudio(asm.id);
     expect(joined.mimeType).toBe('audio/wav');
+    expect((await view(s, projectId)).run!.qa.map((f) => f.kind)).not.toContain('ASSEMBLY_MISMATCH');
+    // A joined file whose clips land away from the timeline's clock is reported.
+    const shifted = asm.entries.map((e, i) => (i === 1 ? { ...e, startMs: e.startMs + 200, endMs: e.endMs + 200 } : e));
+    await db.voiceAssembly.update({ where: { id: asm.id }, data: { entries: shifted, audioAssetId: null } });
+    await s.service.assemblyAudio(asm.id);
+    expect((await view(s, projectId)).run!.qa).toContainEqual(expect.objectContaining({ kind: 'ASSEMBLY_MISMATCH', severity: 'WARNING', ref: '#2' }));
   });
 
-  it('regenerates one chunk keeping every earlier take, approves, restores and rejects without forcing anything', async () => {
+  it('regenerates one chunk: one new request, every other chunk untouched, the assembly rebuilt around the new take; every take kept and restorable', async () => {
     const s = setup();
     const projectId = await approvedScript(s);
     await s.service.createRun(projectId, { scope: { kind: 'AUDITION', seconds: 60 } }, 'editor');
     await s.runner.drain();
-    let r = (await view(s, projectId)).run!;
-    const target = r.chunks[1]!;
+    const before = (await view(s, projectId)).run!;
+    const target = before.chunks[1]!;
     const firstTake = target.current!;
+    const callsBefore = s.voice.calls.length;
+    const ledgerBefore = await db.providerCall.count({ where: { projectId, kind: 'VOICE' } });
 
-    await s.service.regenerate(r.id, { chunkIds: [target.id], marks: [{ sentence: 0, emotion: 'reflective', delivery: 'intimate' }] }, 'editor');
+    // Regenerating everything asks for confirmation with what would be sent (spoken forms and markup), not the script's text.
+    const sent = before.chunks.reduce((n, c) => n + c.current!.characters!, 0);
+    expect(sent).not.toBe(before.chunks.reduce((n, c) => n + c.text.length, 0));
+    const n = before.chunks.length;
+    await expect(s.service.regenerate(before.id, { all: true }, 'editor')).rejects.toThrow(`Regenerating ${n} chunk(s): ${n} take(s), ${sent} characters (no cost: MOCK voice) — confirm to go ahead`);
+    // Over the job's ceiling it is refused up front, confirmed or not; over the threshold even one chunk is confirmed. Nothing is queued.
+    const configured = (config: { confirmCharacters: number; maxCharacters: number }) => new VoiceService({ db, projects: s.projects, providers: s.providers, config });
+    await expect(configured({ confirmCharacters: 3000, maxCharacters: sent - 1 }).regenerate(before.id, { all: true, confirm: true }, 'editor')).rejects.toThrow(`${n} new take(s) would send ${sent} characters, over the ceiling of ${sent - 1} per job (VOICE_MAX_CHARACTERS)`);
+    const one = firstTake.characters!;
+    await expect(configured({ confirmCharacters: one - 1, maxCharacters: 40_000 }).regenerate(before.id, { chunkIds: [target.id] }, 'editor')).rejects.toThrow(`Regenerating 1 chunk(s): 1 take(s), ${one} characters (no cost: MOCK voice) — confirm to go ahead`);
+    expect(await db.voiceGeneration.count({ where: { runId: before.id } })).toBe(n);
+    expect(await db.job.count({ where: { projectId, type: 'VOICE' } })).toBe(1);
+
+    await s.service.regenerate(before.id, { chunkIds: [target.id], marks: [{ sentence: 0, emotion: 'reflective', delivery: 'intimate' }] }, 'editor');
     await s.runner.drain();
-    r = (await view(s, projectId)).run!;
+    let r = (await view(s, projectId)).run!;
+    // Exactly one new request, for that chunk, with its own ledger row.
+    expect(s.voice.calls.length).toBe(callsBefore + 1);
+    expect(await db.providerCall.count({ where: { projectId, kind: 'VOICE' } })).toBe(ledgerBefore + 1);
     const chunk = r.chunks[1]!;
     expect(chunk.generations.map((g) => [g.generation, g.status, g.current])).toEqual([
-      [2, 'GENERATED', true],
+      [2, 'IN_REVIEW', true],
       [1, 'SUPERSEDED', false],
     ]);
-    expect(chunk.current!.performanceText).toMatch(/^\[reflective, intimate\] /);
-    expect(chunk.current!.directions).toEqual([{ sentence: 0, emotion: 'reflective', delivery: 'intimate' }]);
-    // Unaffected chunks keep their take; the assembly is rebuilt around the new one.
-    expect(r.chunks[0]!.current!.id).toBe((await view(s, projectId)).run!.chunks[0]!.current!.id);
-    expect(r.assembly!.version).toBe(2);
-    expect(r.assembly!.entries[1]!.generation).toBe(2);
+    const second = chunk.current!;
+    expect(second.performanceText).toMatch(/^\[reflective, intimate\] /);
+    expect(s.voice.calls.at(-1)!.text).toBe(second.performanceText);
+    expect(second.directions).toEqual([{ sentence: 0, emotion: 'reflective', delivery: 'intimate' }]);
+    // The new take has its own audio, measured duration and word timings, and its own ledger row.
+    expect(second.audioUrl).not.toBe(firstTake.audioUrl);
+    expect(second.durationMs).toBeGreaterThan(0);
+    expect(second.words.length).toBeGreaterThan(0);
+    expect(second.unmatchedWords).toBe(0);
+    const rows = await db.voiceGeneration.findMany({ where: { id: { in: [firstTake.id, second.id] } }, include: { providerCall: true } });
+    const ledger = rows.map((g) => g.providerCall);
+    expect(ledger.every((c) => c?.status === 'SUCCEEDED' && c.costBasis === 'MOCK')).toBe(true);
+    expect(new Set(ledger.map((c) => c!.id)).size).toBe(2);
+    expect(second.cost).toMatchObject({ basis: 'MOCK', estimatedUsd: 0 });
+    // Every other chunk keeps its current take.
+    const others = (x: typeof r) => x.chunks.filter((c) => c.id !== target.id).map((c) => c.current!.id);
+    expect(others(r)).toEqual(others(before));
+    // The assembly is rebuilt: one version more, holding the current takes, its length the sum of its clips and pauses.
+    expect(r.assembly!.version).toBe(before.assembly!.version + 1);
+    expect(r.assembly!.entries.map((e) => e.generationId)).toEqual(r.chunks.map((c) => c.current!.id));
+    expect(r.assembly!.totalDurationMs).toBe(r.assembly!.entries.reduce((sum, e) => sum + (e.endMs - e.startMs) + e.gapAfterMs, 0));
+    expect(r.assembly!.totalDurationMs - before.assembly!.totalDurationMs).toBe(second.durationMs! - firstTake.durationMs! + (r.assembly!.entries[0]!.gapAfterMs - before.assembly!.entries[0]!.gapAfterMs) + (r.assembly!.entries[1]!.gapAfterMs - before.assembly!.entries[1]!.gapAfterMs));
+    expect(r.assemblies.map((a) => [a.version, a.status])).toEqual([
+      [2, 'IN_REVIEW'],
+      [1, 'SUPERSEDED'],
+    ]);
+    expect(r.qa.map((f) => f.kind)).not.toContain('ASSEMBLY_MISMATCH');
     expect(r.stats.regenerations).toBe(1);
 
     // Approve the new take, then go back to the first: the approval is kept on the superseded take.
-    await s.service.decide(chunk.current!.id, { action: 'APPROVE' }, 'editor');
+    await s.service.decide(second.id, { action: 'APPROVE' }, 'editor');
     await s.service.decide(firstTake.id, { action: 'RESTORE' }, 'editor');
     r = (await view(s, projectId)).run!;
     expect(r.chunks[1]!.generations.map((g) => [g.generation, g.status, g.current])).toEqual([
       [2, 'SUPERSEDED', false],
-      [1, 'GENERATED', true],
+      [1, 'IN_REVIEW', true],
     ]);
     expect(r.assembly!.version).toBe(3);
+    expect(r.assembly!.entries[1]!.generationId).toBe(firstTake.id);
     await s.service.decide(r.chunks[1]!.generations[0]!.id, { action: 'RESTORE' }, 'editor');
     expect((await view(s, projectId)).run!.chunks[1]!.current).toMatchObject({ generation: 2, status: 'APPROVED' });
 
@@ -222,7 +287,7 @@ describe('voice engine (MOCK voice, real database)', () => {
 
   it('records a failed take and goes on; stops the run on an error no take would get past', async () => {
     const voice = new ScriptedVoice();
-    voice.failOn.set(2, new ProviderError('elevenlabs', '/v1/text-to-speech/x/with-timestamps: HTTP 422: text_too_long: too long', false));
+    voice.failOn.set(2, new ProviderError('elevenlabs', '/v1/text-to-speech/x/with-timestamps: HTTP 422: text_too_long: too long', false, { status: 422 }));
     const s = setup(voice, {});
     const projectId = await approvedScript(s);
     await s.service.createRun(projectId, { scope: { kind: 'AUDITION', seconds: 60 } }, 'editor');
@@ -236,7 +301,8 @@ describe('voice engine (MOCK voice, real database)', () => {
 
     // A rejected key: the job fails, the project with it, untried takes stay pending for a retry.
     const fatal = new ScriptedVoice();
-    fatal.failOn.set(1, new ProviderError('elevenlabs', '/v1/text-to-speech/x/with-timestamps: HTTP 401: invalid_api_key: Invalid API key', false));
+    // Fatal by the provider's HTTP status, never by its wording.
+    fatal.failOn.set(1, new ProviderError('elevenlabs', '/v1/text-to-speech/x/with-timestamps: HTTP 401: invalid_api_key: Invalid API key', false, { status: 401 }));
     const s2 = setup(fatal);
     const p2 = await approvedScript(s2);
     await s2.service.createRun(p2, { scope: { kind: 'AUDITION', seconds: 60 } }, 'editor');
@@ -254,7 +320,7 @@ describe('voice engine (MOCK voice, real database)', () => {
     const projectId = await approvedScript(s);
     const { runs } = await s.service.createExperiment(
       projectId,
-      { scope: { kind: 'SECTION', section: 1 }, name: 'Direction (test)', variants: [{ label: 'A plain', strategy: 'PLAIN' }, { label: 'B restrained', strategy: 'RESTRAINED' }, { label: 'C over-directed', strategy: 'DIRECTED' }] },
+      { scope: { kind: 'SECTION', section: 1 }, name: 'Direction (test)', variants: [{ label: 'A plain', strategy: 'PLAIN' }, { label: 'B restrained', strategy: 'RESTRAINED' }, { label: 'C over-directed', strategy: 'DIRECTED' }], confirm: true },
       'editor',
     );
     await s.runner.drain();
@@ -289,10 +355,134 @@ describe('voice engine (MOCK voice, real database)', () => {
     expect(approval.voiceAssemblyId).toBe(r.assembly!.id);
     expect(await statusOf(projectId)).toBe('VOICE_COMPLETE');
     expect((await db.voiceAssembly.findUniqueOrThrow({ where: { id: r.assembly!.id } })).status).toBe('APPROVED');
+    // The approved narration's timeline: the assembly the gate approved, every part's take approved and its audio file named.
+    const approvedTimeline = await s.service.timeline(projectId, r.number);
+    expect(approvedTimeline).toMatchObject({ assembly: r.assembly!.version, status: 'APPROVED', complete: true });
+    expect(approvedTimeline.timeline.every((p) => p.approved && !!p.audioChunk.audioAssetId)).toBe(true);
     // Every timed word of the timeline is on the assembled clock.
     const timeline = (await view(s, projectId)).run!.assembly!.timeline;
     expect(timeline.every((t) => t.words.every((w) => w.startMs >= t.startMs - 1 && w.endMs <= r.assembly!.totalDurationMs))).toBe(true);
     expect(NarrationAlignment.safeParse((await db.voiceGeneration.findFirstOrThrow({ where: { runId: r.id } })).alignment).success).toBe(true);
+  });
+
+  it('counts a full narration complete only when every chunk has a take, also where a block is split over chunks', async () => {
+    const s = setup();
+    const projectId = await approvedScript(s);
+    // The pronunciation list is decided before a full run.
+    await s.service.plan(projectId, { scope: { kind: 'FULL' } });
+    for (const p of await db.voicePronunciation.findMany({ where: { projectId } })) await s.service.updatePronunciation(p.id, { method: 'DEFAULT', status: 'APPROVED' }, 'editor');
+    await s.service.createRun(projectId, { scope: { kind: 'FULL' }, confirm: true }, 'editor');
+    await s.runner.drain();
+    const r = (await view(s, projectId)).run!;
+    expect(r.assembly).toMatchObject({ version: 1, complete: true, status: 'IN_REVIEW' });
+    // A block split over two chunks (the second also narrates the first's block), and the first loses its take: the block is half heard.
+    const [first, second] = r.chunks;
+    await db.voiceChunk.update({ where: { id: second!.id }, data: { blockKeys: [...first!.blockKeys, ...second!.blockKeys] } });
+    await db.voiceChunk.update({ where: { id: first!.id }, data: { currentGenerationId: null } });
+    const script = (await loadScriptForVoice(db, (await db.voiceRun.findUniqueOrThrow({ where: { id: r.id } })).scriptId))!;
+    expect(await rebuildAssembly(db, r.id, script, 'editor')).toMatchObject({ version: 2, changed: true });
+    expect((await view(s, projectId)).run!.assembly).toMatchObject({ version: 2, complete: false, status: 'DRAFT' });
+  });
+
+  it('A/B: one confirmed job makes a take per variant beside the current take, and the editor restores the one to keep', async () => {
+    const s = setup();
+    const projectId = await approvedScript(s);
+    await s.service.createRun(projectId, { scope: { kind: 'AUDITION', seconds: 60 } }, 'editor');
+    await s.runner.drain();
+    const before = (await view(s, projectId)).run!;
+    const target = before.chunks[0]!;
+    const calls = s.voice.calls.length;
+
+    // It buys a take per variant: always confirmed, however small.
+    await expect(s.service.regenerate(before.id, { chunkIds: [target.id], variants: [{ strategy: 'RESTRAINED' }, { strategy: 'EXPRESSIVE' }] }, 'editor')).rejects.toThrow(/^A\/B \(A \/ B\) of 1 chunk\(s\): 2 take\(s\), \d+ characters \(no cost: MOCK voice\) — confirm to go ahead$/);
+    const { takes } = await s.service.regenerate(before.id, { chunkIds: [target.id], variants: [{ label: 'A neutral', strategy: 'RESTRAINED' }, { label: 'B reflective', marks: [{ sentence: 0, emotion: 'reflective' }] }], note: 'A/B (test)', confirm: true }, 'editor');
+    expect(takes).toBe(2);
+    expect(await db.job.count({ where: { projectId, type: 'VOICE' } })).toBe(2);
+    await s.runner.drain();
+    expect(s.voice.calls.length).toBe(calls + 2);
+    let r = (await view(s, projectId)).run!;
+    let chunk = r.chunks[0]!;
+    // Neither variant became current: the chunk keeps its take, the assembly is unchanged.
+    expect(chunk.generations.map((g) => [g.generation, g.variant, g.status, g.current])).toEqual([
+      [3, 'B reflective', 'GENERATED', false],
+      [2, 'A neutral', 'GENERATED', false],
+      [1, null, 'IN_REVIEW', true],
+    ]);
+    expect(chunk.generations[0]!.performanceText).toMatch(/^\[reflective\] /);
+    expect(chunk.generations.slice(0, 2).every((g) => g.audioUrl && g.durationMs && g.words.length && g.note === 'A/B (test)')).toBe(true);
+    expect(r.assembly!.version).toBe(before.assembly!.version);
+    expect(r.chunks.slice(1).map((c) => c.current!.id)).toEqual(before.chunks.slice(1).map((c) => c.current!.id));
+
+    // A take made current with no new assembly is a mismatch, and blocks.
+    await db.voiceChunk.update({ where: { id: chunk.id }, data: { currentGenerationId: chunk.generations[1]!.id } });
+    expect((await view(s, projectId)).run!.qa).toContainEqual(expect.objectContaining({ kind: 'ASSEMBLY_MISMATCH', severity: 'BLOCKING', ref: '#1' }));
+    await db.voiceChunk.update({ where: { id: chunk.id }, data: { currentGenerationId: target.current!.id } });
+
+    // The editor keeps B: it becomes the chunk's take, to review; the first is superseded; the assembly is rebuilt.
+    await s.service.decide(chunk.generations[0]!.id, { action: 'RESTORE' }, 'editor');
+    r = (await view(s, projectId)).run!;
+    chunk = r.chunks[0]!;
+    expect(chunk.generations.map((g) => [g.generation, g.status, g.current])).toEqual([
+      [3, 'IN_REVIEW', true],
+      [2, 'GENERATED', false],
+      [1, 'SUPERSEDED', false],
+    ]);
+    expect(r.assembly!.version).toBe(before.assembly!.version + 1);
+    expect(r.assembly!.entries[0]!.generationId).toBe(chunk.current!.id);
+    expect(r.qa.map((f) => f.kind)).not.toContain('ASSEMBLY_MISMATCH');
+    // The variant not kept can be rejected; neither can be approved before it is current.
+    await expect(s.service.decide(chunk.generations[1]!.id, { action: 'APPROVE' }, 'editor')).rejects.toThrow(/Only the current take/);
+    await s.service.decide(chunk.generations[1]!.id, { action: 'REJECT' }, 'editor');
+    expect((await view(s, projectId)).run!.chunks[0]!.generations[1]).toMatchObject({ status: 'REJECTED', current: false });
+  });
+
+  it('runs the acceptance experiment as one confirmed job: a run and an assembly per variant, each with its own strategy, context and chunking', async () => {
+    const s = setup();
+    const projectId = await approvedScript(s);
+    // A comparison is always confirmed, however small.
+    await expect(s.service.createExperiment(projectId, { scope: { kind: 'AUDITION', seconds: 20 }, name: 'Tiny (test)', variants: [{ strategy: 'PLAIN' }, { strategy: 'RESTRAINED' }] }, 'editor')).rejects.toThrow(
+      /^Comparison: \d+ characters \(no cost: MOCK voice\) across 2 variants — confirm to go ahead$/,
+    );
+    expect(await db.voiceRun.count({ where: { projectId } })).toBe(0);
+
+    const { runs } = await s.service.createExperiment(projectId, { ...VOICE_ACCEPTANCE_EXPERIMENT, confirm: true }, 'editor');
+    expect(runs).toHaveLength(VOICE_ACCEPTANCE_EXPERIMENT.variants.length);
+    expect(await db.job.count({ where: { projectId, type: 'VOICE' } })).toBe(1);
+    await s.runner.drain();
+    expect(await statusOf(projectId)).toBe('VOICE_REVIEW');
+    const views = await Promise.all(runs.map(async (n) => (await view(s, projectId, n)).run!));
+    const byLabel = new Map(views.map((r) => [r.variant, r]));
+    for (const v of VOICE_ACCEPTANCE_EXPERIMENT.variants) {
+      const r = byLabel.get(v.label)!;
+      expect(r).toMatchObject({ experiment: 'Acceptance experiment', strategy: v.strategy, settings: { chunking: v.chunking, context: v.context } });
+      // Each variant is heard whole: its own assembly of every chunk, to review.
+      expect(r.assembly).toMatchObject({ version: 1, status: 'IN_REVIEW' });
+      expect(r.assembly!.entries).toHaveLength(r.chunkCount);
+      expect(r.chunks.every((c) => c.current?.status === 'IN_REVIEW')).toBe(true);
+    }
+    const run = (label: string) => byLabel.get(label)!;
+    // The same passage every time.
+    const words = (r: (typeof views)[number]) => r.chunks.map((c) => c.text).join(' ').split(/\s+/);
+    expect(new Set(views.map((r) => words(r).join(' '))).size).toBe(1);
+    // Direction: no tags plain, more over-directed than restrained.
+    const tags = (r: (typeof views)[number]) => r.chunks.map((c) => c.current!.performanceText!).join(' ').match(/\[[^\]]+\]/g)?.length ?? 0;
+    expect(tags(run('A plain'))).toBe(0);
+    expect(tags(run('D over-directed'))).toBeGreaterThan(tags(run('B restrained')));
+    // Neighbouring context: E sends none, B does.
+    const context = (r: (typeof views)[number]) => r.chunks.filter((c) => c.current!.prepared!.context.previousText).length;
+    expect(context(run('E no context'))).toBe(0);
+    expect(context(run('B restrained'))).toBeGreaterThan(0);
+    // Chunk size: smaller chunks make more of them, larger ones fewer.
+    expect(run('F 5–8 s chunks').chunkCount).toBeGreaterThan(run('B restrained').chunkCount);
+    expect(run('G 12–20 s chunks').chunkCount).toBeLessThan(run('B restrained').chunkCount);
+  });
+
+  it('refuses a profile whose audio format cannot be measured or joined', async () => {
+    const s = setup();
+    const p = await s.projects.createProject(tulipInput, 'test');
+    await expect(s.service.createProfile(p.id, { outputFormat: 'opus_48000_64' }, 'editor')).rejects.toThrow(/Output format "opus_48000_64" cannot be measured or joined here/);
+    expect(await db.voiceProfile.count({ where: { outputFormat: 'opus_48000_64' } })).toBe(0);
+    await expect(s.service.createProfile(p.id, { outputFormat: 'wav_44100' }, 'editor')).resolves.toMatchObject({ outputFormat: 'wav_44100', version: 2 });
   });
 
   it('refuses paid narration without durable storage', async () => {

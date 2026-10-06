@@ -19,6 +19,9 @@ export class ProfileError extends Error {
   }
 }
 
+/** Output formats the engine can measure and join without transcoding: MP3 (rate and bitrate), WAV or PCM (rate). */
+export const OUTPUT_FORMAT = /^(mp3_\d+_\d+|wav_\d+|pcm_\d+)$/;
+
 export const profileConfig = (p: Pick<VoiceProfile, 'config'>): VoiceProfileConfig => {
   const r = VoiceProfileConfig.safeParse(p.config);
   if (r.success) return r.data;
@@ -64,6 +67,8 @@ export async function createProfileVersion(db: Database, provider: VoiceProvider
     if (base && base.provider !== provider.info.name) throw new ProfileError(`Profile ${base.name} v${base.version} is for ${base.provider}; the configured voice provider is ${provider.info.name}`);
     const voiceId = input.voiceId ?? base?.voiceId ?? provider.defaults.voiceId;
     if (!voiceId) throw new ProfileError('A voice id is needed');
+    const outputFormat = input.outputFormat ?? base?.outputFormat ?? provider.defaults.outputFormat;
+    if (!OUTPUT_FORMAT.test(outputFormat)) throw new ProfileError(`Output format "${outputFormat}" cannot be measured or joined here: use an mp3_*, wav_* or pcm_* format (e.g. mp3_44100_128)`);
     const config = base ? profileConfig(base) : DEFAULT_VOICE_PROFILE_CONFIG;
     const next: VoiceProfileConfig = VoiceProfileConfig.parse({
       settings: { ...config.settings, ...(input.settings ?? {}) },
@@ -83,7 +88,7 @@ export async function createProfileVersion(db: Database, provider: VoiceProvider
         voiceId,
         modelId: input.modelId ?? base?.modelId ?? provider.defaults.model,
         language,
-        outputFormat: input.outputFormat ?? base?.outputFormat ?? provider.defaults.outputFormat,
+        outputFormat,
         config: next as unknown as Prisma.InputJsonValue,
         active: true,
         notes: input.notes ?? (base ? `Based on ${base.name} v${base.version}` : null),

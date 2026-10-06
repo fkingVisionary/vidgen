@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { ChunkPauses, ChunkSpan, NarrationAlignment, VoiceQaFinding, type ChunkBoundary, type ChunkPerformance, type Pronunciation, type PronunciationMethod, type PronunciationStatus, type PronunciationTermKind } from '@docengine/core';
+import { AssemblyEntry, ChunkPauses, ChunkSpan, NarrationAlignment, VoiceQaFinding, type ChunkBoundary, type ChunkPerformance, type Pronunciation, type PronunciationMethod, type PronunciationStatus, type PronunciationTermKind, type VoiceGenerationStatus } from '@docengine/core';
 import type { Database, Prisma, Tx, VoiceChunk, VoiceGeneration } from '@docengine/database';
 import { z } from 'zod';
 import { assemble, type AssemblyBlock, type AssemblyChunk } from './assembly.ts';
@@ -19,6 +19,7 @@ type Db = Database | Tx;
 export const readSpans = (v: unknown): ChunkSpan[] => z.array(ChunkSpan).catch([]).parse(v);
 export const readAlignment = (v: unknown): NarrationAlignment | null => NarrationAlignment.nullable().catch(null).parse(v ?? null);
 export const readQa = (v: unknown): VoiceQaFinding[] => z.array(VoiceQaFinding).catch([]).parse(v ?? []);
+export const readEntries = (v: unknown): AssemblyEntry[] => z.array(AssemblyEntry).catch([]).parse(v ?? []);
 export function readPerformance(v: unknown): ChunkPerformance {
   const o = (v ?? {}) as Partial<ChunkPerformance>;
   return {
@@ -92,6 +93,17 @@ export function seedFor(textHash: string, generation: number): number {
   return Number.parseInt(createHash('sha256').update(`${textHash}:${generation}`).digest('hex').slice(0, 8), 16);
 }
 
+// ── Takes ────────────────────────────────────────────────────────────────────
+
+/** A take's status as the editor reads it: a current take made before IN_REVIEW existed (GENERATED) is to review. */
+export const takeStatus = (g: Pick<VoiceGeneration, 'id' | 'status'>, currentId: string | null): VoiceGenerationStatus => (g.status === 'GENERATED' && g.id === currentId ? 'IN_REVIEW' : g.status);
+
+/** Decided or awaiting a decision: a take with audio a chunk can be heard with. */
+const HEARD = new Set<VoiceGenerationStatus>(['IN_REVIEW', 'GENERATED', 'APPROVED', 'REJECTED']);
+
+/** A current take the assembly places: stored audio of a measured length. */
+export const usableTake = (g: VoiceGeneration | null): g is VoiceGeneration => !!g && !!g.audioAssetId && !!g.durationMs && HEARD.has(g.status);
+
 // ── Live QA of a run ─────────────────────────────────────────────────────────
 
 export type RunChunk = VoiceChunk & { current: VoiceGeneration | null };
@@ -125,9 +137,13 @@ export function runQa(input: RunQaInput): VoiceQaFinding[] {
     }
     if (take.textHash !== c.textHash) add({ kind: 'STALE_TEXT', severity: 'BLOCKING', ref, detail: `Take ${take.generation} was made from other text than the chunk's (hash mismatch): it is never reused` });
     if (take.status === 'REJECTED') add({ kind: 'TAKE_REJECTED', severity: 'BLOCKING', ref, detail: `The current take (${take.generation}) was rejected: regenerate it or restore an earlier take` });
-    else if (take.status === 'GENERATED') add({ kind: 'TAKE_UNREVIEWED', severity: 'BLOCKING', ref, detail: `Take ${take.generation} is not approved yet` });
+    else if (take.status === 'IN_REVIEW' || take.status === 'GENERATED') add({ kind: 'TAKE_UNREVIEWED', severity: 'BLOCKING', ref, detail: `Take ${take.generation} is not approved yet` });
     else if (take.status === 'FAILED' || take.status === 'PENDING' || take.status === 'GENERATING') add({ kind: 'GENERATION_FAILED', severity: 'BLOCKING', ref, detail: `Take ${take.generation} is ${take.status.toLowerCase()}` });
-    for (const f of readQa(take.qa)) out.push(f);
+    const recorded = readQa(take.qa);
+    if (HEARD.has(take.status) && (!take.audioAssetId || !take.durationMs) && !recorded.some((f) => f.kind === 'MISSING_AUDIO')) {
+      add({ kind: 'MISSING_AUDIO', severity: 'BLOCKING', ref, detail: `Take ${take.generation} has no stored audio${take.audioAssetId ? ' of a measured length' : ''}: regenerate it` });
+    }
+    for (const f of recorded) out.push(f);
     if (input.approvedBlockText && staleChunk(c, input.approvedBlockText)) {
       add({ kind: 'STALE_TEXT', severity: 'BLOCKING', ref, detail: `The script's text for chunk ${c.chunkIndex + 1} changed in v${input.approved?.version}` });
     }
@@ -152,10 +168,29 @@ export function staleChunk(c: Pick<VoiceChunk, 'blockHashes' | 'blockKeys'>, blo
   });
 }
 
+/**
+ * The latest assembly against the chunks' current takes: a chunk heard with
+ * another take than its current one, or a usable take left out (or no
+ * assembly at all), means the assembled narration is not what was reviewed.
+ */
+export function assemblyMismatch(chunks: readonly RunChunk[], assembly: { version: number; entries: unknown } | null): VoiceQaFinding | null {
+  const entries = new Map(readEntries(assembly?.entries).map((e) => [e.chunkId, e.generationId]));
+  const off = chunks.filter((c) => (usableTake(c.current) ? c.current.id : undefined) !== entries.get(c.id));
+  if (!off.length) return null;
+  const refs = off.map((c) => `#${c.chunkIndex + 1}`);
+  return {
+    kind: 'ASSEMBLY_MISMATCH',
+    severity: 'BLOCKING',
+    ref: off.length === 1 ? refs[0]! : null,
+    detail: assembly
+      ? `Assembly v${assembly.version} does not hold the current take of chunk(s) ${refs.join(', ')}: it is rebuilt when a voice job finishes or a take is restored`
+      : `Chunk(s) ${refs.join(', ')} have takes but the run has no assembly yet: it is built when a voice job finishes or a take is restored`,
+  };
+}
+
 // ── Assembly versions ────────────────────────────────────────────────────────
 
 export function assemblyInput(chunks: readonly RunChunk[], script: VoiceScript): { chunks: AssemblyChunk[]; blocks: Map<string, AssemblyBlock> } {
-  const usable = (g: VoiceGeneration | null) => !!g && !!g.audioAssetId && !!g.durationMs && (g.status === 'GENERATED' || g.status === 'APPROVED' || g.status === 'REJECTED');
   return {
     chunks: chunks.map((c) => ({
       id: c.id,
@@ -166,22 +201,29 @@ export function assemblyInput(chunks: readonly RunChunk[], script: VoiceScript):
       text: c.sourceText,
       boundary: c.boundary as ChunkBoundary,
       pauses: readPerformance(c.performance).pauses,
-      take: usable(c.current) ? { id: c.current!.id, generation: c.current!.generation, durationMs: c.current!.durationMs!, alignment: readAlignment(c.current!.alignment) } : null,
+      take: usableTake(c.current) ? { id: c.current.id, generation: c.current.generation, durationMs: c.current.durationMs!, alignment: readAlignment(c.current.alignment), audioAssetId: c.current.audioAssetId! } : null,
     })),
     blocks: new Map([...script.blocks.values()].map((b) => [b.key, { id: b.id, key: b.key, delivery: b.delivery, visual: b.visual }])),
   };
 }
 
-/** A new assembly version when the run's current takes changed (the latest is returned either way). */
+/**
+ * A new assembly version when the run's current takes changed (the latest
+ * is returned either way). It is to review once every chunk of the run has a
+ * take to hear (a draft until then); `complete` says whether it narrates the
+ * whole script, which only the VOICE gate needs.
+ */
 export async function rebuildAssembly(db: Db, runId: string, script: VoiceScript, actor: string): Promise<{ id: string; version: number; changed: boolean } | null> {
   const run = await db.voiceRun.findUniqueOrThrow({ where: { id: runId }, include: { chunks: { orderBy: { chunkIndex: 'asc' }, include: { current: true } } } });
   const { chunks, blocks } = assemblyInput(run.chunks, script);
   if (!chunks.some((c) => c.take)) return null;
   const result = assemble(chunks, blocks);
   const latest = await db.voiceAssembly.findFirst({ where: { runId }, orderBy: { version: 'desc' } });
-  if (latest && JSON.stringify(latest.entries) === JSON.stringify(result.entries)) return { id: latest.id, version: latest.version, changed: false };
+  if (latest && JSON.stringify(readEntries(latest.entries)) === JSON.stringify(readEntries(result.entries))) return { id: latest.id, version: latest.version, changed: false };
+  const heard = chunks.every((c) => c.take);
   const covered = new Set(chunks.filter((c) => c.take).flatMap((c) => c.blockKeys));
-  const complete = run.kind === 'FULL' && [...script.blocks.keys()].every((k) => covered.has(k));
+  // A block split over chunks is narrated only when each of them is: every chunk needs its take.
+  const complete = run.kind === 'FULL' && heard && [...script.blocks.keys()].every((k) => covered.has(k));
   if (latest) await db.voiceAssembly.updateMany({ where: { runId, status: { in: ['DRAFT', 'IN_REVIEW'] } }, data: { status: 'SUPERSEDED' } });
   const created = await db.voiceAssembly.create({
     data: {
@@ -190,7 +232,7 @@ export async function rebuildAssembly(db: Db, runId: string, script: VoiceScript
       scriptId: run.scriptId,
       profileId: run.profileId,
       version: (latest?.version ?? 0) + 1,
-      status: complete ? 'IN_REVIEW' : 'DRAFT',
+      status: heard ? 'IN_REVIEW' : 'DRAFT',
       entries: result.entries as unknown as Prisma.InputJsonValue,
       timeline: result.timeline as unknown as Prisma.InputJsonValue,
       totalDurationMs: result.totalDurationMs,

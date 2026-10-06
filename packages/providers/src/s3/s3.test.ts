@@ -90,6 +90,28 @@ describe('the S3 storage provider (fake endpoint, no network)', () => {
     await s3.delete(key);
     expect(await s3.head(key)).toBeNull();
     await expect(s3.get(key)).rejects.toThrow(/HTTP 404 NoSuchKey: The specified key does not exist/);
+    // The status is a field, so callers tell a missing object or a refused key from a retryable failure without parsing.
+    await expect(s3.get(key)).rejects.toMatchObject({ status: 404, retryable: false });
+  });
+
+  it('turns a body that breaks off after the headers into a retryable ProviderError, not a raw DOMException', async () => {
+    const broken = () =>
+      new Response(
+        new ReadableStream({
+          pull(c) {
+            c.error(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }));
+          },
+        }),
+        { status: 200 },
+      );
+    const flaky = new S3StorageProvider({ endpoint: 'https://t3.storageapi.dev', region: 'auto', bucket: 'media-abc123', accessKeyId: 'AKID', secretAccessKey: 'SECRET', fetch: async () => broken() });
+    await expect(flaky.get('projects/p1/a.mp3')).rejects.toMatchObject({
+      name: 'ProviderError',
+      message: '[s3] GET projects/p1/a.mp3: HTTP 200, then reading the response failed: The operation was aborted due to timeout',
+      retryable: true,
+      status: 200,
+    });
+    await expect(flaky.list('projects/p1/')).rejects.toMatchObject({ name: 'ProviderError', message: '[s3] LIST projects/p1/: HTTP 200, then reading the response failed: The operation was aborted due to timeout', retryable: true, status: 200 });
   });
 
   it('never puts credentials in a presigned URL, and refuses to start without configuration', async () => {

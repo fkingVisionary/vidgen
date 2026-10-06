@@ -381,11 +381,13 @@ enum VoiceRunKind {
   FULL
 }
 
-/// Lifecycle of one take of one chunk (takes are never deleted).
+/// Lifecycle of one take of one chunk (takes are never deleted). IN_REVIEW: the chunk's current take awaiting a
+/// human decision; GENERATED: stored audio that is not current (an A/B variant).
 enum VoiceGenerationStatus {
   PENDING
   GENERATING
   GENERATED
+  IN_REVIEW
   FAILED
   REJECTED
   APPROVED
@@ -395,6 +397,7 @@ enum VoiceGenerationStatus {
 enum PerformanceStrategy {
   PLAIN
   RESTRAINED
+  EXPRESSIVE
   DIRECTED
 }
 
@@ -1392,48 +1395,52 @@ model VoiceChunk {
 /// One take of one chunk (Generation 1, 2, 3…): exactly what was sent, with what, what came back and what
 /// the editor decided. Never deleted or overwritten; a newer current take supersedes the one before.
 model VoiceGeneration {
-  id                String                @id @default(uuid(7)) @db.Uuid
-  chunkId           String                @map("chunk_id") @db.Uuid
-  runId             String                @map("run_id") @db.Uuid
-  projectId         String                @map("project_id") @db.Uuid
-  jobId             String?               @map("job_id") @db.Uuid
+  id                  String                @id @default(uuid(7)) @db.Uuid
+  chunkId             String                @map("chunk_id") @db.Uuid
+  runId               String                @map("run_id") @db.Uuid
+  projectId           String                @map("project_id") @db.Uuid
+  jobId               String?               @map("job_id") @db.Uuid
   /// 1, 2, 3… per chunk.
-  generation        Int
-  status            VoiceGenerationStatus @default(PENDING)
-  profileId         String                @map("profile_id") @db.Uuid
-  provider          String
-  model             String
-  voiceId           String                @map("voice_id")
-  strategy          PerformanceStrategy
+  generation          Int
+  status              VoiceGenerationStatus @default(PENDING)
+  profileId           String                @map("profile_id") @db.Uuid
+  provider            String
+  model               String
+  voiceId             String                @map("voice_id")
+  strategy            PerformanceStrategy
+  /// An A/B take's variant label: kept beside the current take, never made current by itself.
+  variant             String?
   /// The script's words this take speaks, and their hash at generation time.
-  canonicalText     String                @map("canonical_text")
-  textHash          String                @map("text_hash")
+  canonicalText       String                @map("canonical_text")
+  textHash            String                @map("text_hash")
   /// Derived: numbers, dates and aliases as spoken.
-  spokenText        String?               @map("spoken_text")
+  spokenText          String?               @map("spoken_text")
   /// Derived: the exact text sent to the provider (spoken text plus its performance markup). Never the script.
-  performanceText   String?               @map("performance_text")
+  performanceText     String?               @map("performance_text")
+  /// SHA-256 of performanceText.
+  performanceTextHash String?               @map("performance_text_hash")
   /// PreparedNarration: spoken forms, performance marks, pauses, context, settings, seed, dictionary, checks.
-  prepared          Json?
+  prepared            Json?
   /// The editor's directions for this take (DirectorMark[]), if any.
-  directions        Json?
-  audioAssetId      String?               @unique @map("audio_asset_id") @db.Uuid
-  durationMs        Int?                  @map("duration_ms")
+  directions          Json?
+  audioAssetId        String?               @unique @map("audio_asset_id") @db.Uuid
+  durationMs          Int?                  @map("duration_ms")
   /// NarrationAlignment: word timings in the canonical text, and the provider's character timestamps.
-  alignment         Json?
+  alignment           Json?
   /// VoiceQaFinding[] for this take.
-  qa                Json?
-  providerCallId    String?               @unique @map("provider_call_id") @db.Uuid
-  providerRequestId String?               @map("provider_request_id")
-  characters        Int?
-  error             String?
-  note              String?
-  decidedBy         String?               @map("decided_by")
-  decidedAt         DateTime?             @map("decided_at") @db.Timestamptz(3)
+  qa                  Json?
+  providerCallId      String?               @unique @map("provider_call_id") @db.Uuid
+  providerRequestId   String?               @map("provider_request_id")
+  characters          Int?
+  error               String?
+  note                String?
+  decidedBy           String?               @map("decided_by")
+  decidedAt           DateTime?             @map("decided_at") @db.Timestamptz(3)
   /// Approved at some point (kept when the take is superseded, so restoring it restores the approval).
-  approvedAt        DateTime?             @map("approved_at") @db.Timestamptz(3)
-  createdBy         String?               @map("created_by")
-  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  completedAt       DateTime?             @map("completed_at") @db.Timestamptz(3)
+  approvedAt          DateTime?             @map("approved_at") @db.Timestamptz(3)
+  createdBy           String?               @map("created_by")
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt         DateTime?             @map("completed_at") @db.Timestamptz(3)
 
   chunk        VoiceChunk    @relation("ChunkGenerations", fields: [chunkId], references: [id], onDelete: Cascade)
   currentOf    VoiceChunk?   @relation("ChunkCurrent")

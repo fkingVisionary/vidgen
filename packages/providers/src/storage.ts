@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { AssetKind } from '@docengine/core';
 import type { ProviderInfo } from './types.ts';
 
@@ -69,4 +70,43 @@ export function buildAssetKey(parts: {
   const key = `projects/${parts.projectId}/${scope}/${parts.kind.toLowerCase()}/${parts.assetId}.${parts.ext.replace(/^\./, '')}`;
   assertValidKey(key);
   return key;
+}
+
+/** What a storage probe found. Never contains a secret. */
+export interface StorageProbe {
+  ok: boolean;
+  /** Short and readable: what was written, read back and deleted, or the step that failed and why. */
+  detail: string;
+}
+
+/** Probe objects live here and nowhere else. */
+export const PROBE_PREFIX = 'healthchecks/';
+
+/**
+ * Whether storage really works, end to end, with one tiny object: put, head,
+ * get and compare, delete. Never throws; the object is deleted even when a
+ * step fails.
+ */
+export async function probeStorage(storage: StorageProvider): Promise<StorageProbe> {
+  const key = `${PROBE_PREFIX}probe-${randomUUID()}.txt`;
+  const body = `storage probe ${new Date().toISOString()}`;
+  const started = performance.now();
+  let step = 'put';
+  let deleted = false;
+  try {
+    await storage.put(key, body, { contentType: 'text/plain' });
+    step = 'head';
+    if (!(await storage.head(key))) throw new Error('the object just written is not there');
+    step = 'get';
+    if (new TextDecoder().decode(await storage.get(key)) !== body) throw new Error('read back different bytes');
+    step = 'delete';
+    await storage.delete(key);
+    deleted = true;
+    return { ok: true, detail: `wrote, read back and deleted ${key} in ${Math.round(performance.now() - started)} ms` };
+  } catch (err) {
+    return { ok: false, detail: `${step} failed: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    // A failed put may still have written it (e.g. a timeout after the upload).
+    if (!deleted) await storage.delete(key).catch(() => undefined);
+  }
 }

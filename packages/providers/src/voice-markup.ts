@@ -14,6 +14,9 @@ import type { PerformanceSegment, RenderedNarration, VoiceModelCapabilities } fr
  * - Pauses inside a chunk: `[pause]` / `[long pause]` for tag models,
  *   `<break time="…"/>` for SSML models, a line break otherwise — never SSML
  *   for a model that does not take it.
+ * - Directions are words only: an intensity above low, and stress on a word
+ *   (which a tag model could only give by changing the word, e.g. capitals),
+ *   are reported as not expressed rather than dropped silently.
  */
 
 /** The words of a direction, in order: emotion, then delivery. */
@@ -43,6 +46,7 @@ export function renderSegments(segments: readonly PerformanceSegment[], caps: Pi
     markup.push({ start: text.length, end: text.length + s.length, kind });
     text += s;
   };
+  const intense = new Map<string, number[]>();
   segments.forEach((seg, i) => {
     if (seg.intent) {
       const words = directionWords(seg.intent);
@@ -55,10 +59,12 @@ export function renderSegments(segments: readonly PerformanceSegment[], caps: Pi
           mark(`[${words.join(', ')}]`, 'DIRECTION');
           text += ' ';
         }
+        if (seg.intent.intensity !== 'LOW' && (words.length || seg.intent.vocalAction)) intense.set(seg.intent.intensity, [...(intense.get(seg.intent.intensity) ?? []), i + 1]);
       } else if (words.length || seg.intent.vocalAction) {
         unsupported.push(`sentence ${i + 1}: direction "${[seg.intent.vocalAction, ...words].filter(Boolean).join(', ')}" (the model takes no directions)`);
       }
     }
+    for (const e of seg.emphasis ?? []) unsupported.push(`sentence ${i + 1}: ${e.level.toLowerCase()} stress on "${seg.text.slice(e.start, e.end)}" (not expressed: the words are sent as written)`);
     ranges.push({ start: text.length, end: text.length + seg.text.length });
     text += seg.text;
     if (i < segments.length - 1) {
@@ -70,6 +76,7 @@ export function renderSegments(segments: readonly PerformanceSegment[], caps: Pi
       } else text += p.text;
     }
   });
+  for (const [level, at] of intense) unsupported.push(`${level.toLowerCase()} intensity on sentence${at.length > 1 ? 's' : ''} ${at.join(', ')} (not expressed: only the direction's words are sent)`);
   return { text, segments: ranges, markup, unsupported };
 }
 

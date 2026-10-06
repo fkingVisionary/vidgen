@@ -24,8 +24,14 @@ export interface CallMeta {
   actualCostUsd?: number;
   /** Vendor request id, for support tickets and debugging. */
   providerRequestId?: string;
+  /** Vendor-side id of what the call produced (e.g. a history item), when the vendor returns one. */
+  providerJobId?: string;
   /** How usage/cost was determined when it was not reported directly (recorded in the ledger). */
   costNote?: string;
+  /** Whether `usage` is the vendor's own figure or what was counted as sent. */
+  usageSource?: 'REPORTED' | 'COUNTED';
+  /** HTTP attempts the call took, retries included. */
+  attempts?: number;
 }
 
 /**
@@ -70,17 +76,23 @@ export interface ProviderSettings {
 export class ProviderError extends Error {
   /** Usage already billed before the failure (e.g. a truncated or invalid LLM response), so it is still costed. */
   readonly meta?: CallMeta;
+  /** The vendor's HTTP status, when a response arrived (401 rejected key, 402 no credits, 404 unknown voice…). */
+  readonly status?: number;
+  /** HTTP attempts made before giving up, retries included. */
+  readonly attempts?: number;
 
   constructor(
     readonly provider: string,
     message: string,
     /** Whether retrying the same request may succeed (rate limit, timeout, 5xx). */
     readonly retryable: boolean,
-    options?: { cause?: unknown; meta?: CallMeta },
+    options?: { cause?: unknown; meta?: CallMeta; status?: number; attempts?: number },
   ) {
     super(`[${provider}] ${message}`, options);
     this.name = 'ProviderError';
     if (options?.meta) this.meta = options.meta;
+    if (options?.status !== undefined) this.status = options.status;
+    if (options?.attempts !== undefined) this.attempts = options.attempts;
   }
 }
 

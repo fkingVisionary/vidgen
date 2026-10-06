@@ -12,6 +12,7 @@ import type {
   PronunciationRule,
   RenderedNarration,
   Voice,
+  VoiceCheck,
   VoiceModelCapabilities,
   VoiceProvider,
   WordTiming,
@@ -38,6 +39,9 @@ import type {
  *   The API reports characters, not dollars: every cost is an ESTIMATE =
  *   characters × the configured price (ELEVENLABS_USD_PER_1K_CHARS) or the
  *   documented list price for the model.
+ * - GET /v1/voices/{voice_id} and GET /v1/models cost nothing: `check()`
+ *   uses them to confirm the configured voice and model. GET /v2/voices is
+ *   paged (`next_page_token` while `has_more`).
  *
  * A model this table does not know gets plain text (no tags, no SSML) and
  * only stability and similarity, so nothing it would read aloud or reject
@@ -138,6 +142,29 @@ interface TimestampsResponse {
   alignment?: { characters?: unknown; character_start_times_seconds?: unknown; character_end_times_seconds?: unknown } | null;
 }
 
+interface RequestOptions {
+  signal?: AbortSignal;
+  /** Per attempt; the provider's timeout when omitted. */
+  timeoutMs?: number;
+  /** The provider's maxRetries when omitted. */
+  retries?: number;
+  /** What a 2xx response may already have cost, for an error raised after it arrived (a POST is never sent again). */
+  billed?: (headers: Headers, attempts: number) => CallMeta;
+}
+
+interface PhonemeRuleBody {
+  string_to_replace: string;
+  type: 'phoneme';
+  phoneme: string;
+  alphabet: 'ipa' | 'cmu-arpabet';
+}
+
+/** A connectivity check answers quickly or not at all: one attempt each. */
+const CHECK_TIMEOUT_MS = 10_000;
+/** Paging guards (100 per page). */
+const MAX_VOICE_PAGES = 50;
+const MAX_DICTIONARY_PAGES = 20;
+
 export class ElevenLabsVoiceProvider implements VoiceProvider {
   readonly info: ProviderInfo;
   readonly defaults: { model: string; voiceId: string | null; outputFormat: string };
@@ -146,7 +173,7 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
   private readonly sleep: (ms: number) => Promise<void>;
-  /** Pronunciation dictionaries created in this process, by rule-set hash. */
+  /** Pronunciation dictionaries found or created in this process, by rule-set hash. */
   private readonly dictionaries = new Map<string, Promise<{ id: string; version: string }>>();
 
   constructor(private readonly opts: ElevenLabsOptions) {
@@ -173,15 +200,54 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     return renderSegments(segments, this.capabilities(model));
   }
 
+  /** Every page of the account's voices. */
   async getVoices(): Promise<Voice[]> {
-    const data = await this.request<{ voices?: { voice_id: string; name?: string; description?: string | null; preview_url?: string | null; labels?: Record<string, string> }[] }>('GET', '/v2/voices?page_size=100');
-    return (data.voices ?? []).map((v) => ({
-      id: v.voice_id,
-      name: v.name ?? v.voice_id,
-      ...(v.labels?.language ? { language: v.labels.language } : {}),
-      ...(v.description ? { description: v.description } : {}),
-      ...(v.preview_url ? { previewUrl: v.preview_url } : {}),
-    }));
+    type Page = { voices?: { voice_id: string; name?: string; description?: string | null; preview_url?: string | null; labels?: Record<string, string> }[]; has_more?: boolean; next_page_token?: string | null };
+    const voices = new Map<string, Voice>();
+    let token: string | null = null;
+    for (let page = 0; page < MAX_VOICE_PAGES; page++) {
+      const data: Page = await this.request<Page>('GET', `/v2/voices?page_size=100${token ? `&next_page_token=${encodeURIComponent(token)}` : ''}`);
+      for (const v of data.voices ?? []) {
+        voices.set(v.voice_id, {
+          id: v.voice_id,
+          name: v.name ?? v.voice_id,
+          ...(v.labels?.language ? { language: v.labels.language } : {}),
+          ...(v.description ? { description: v.description } : {}),
+          ...(v.preview_url ? { previewUrl: v.preview_url } : {}),
+        });
+      }
+      token = data.has_more && data.next_page_token ? data.next_page_token : null;
+      if (!token) break;
+    }
+    return [...voices.values()];
+  }
+
+  /** The configured voice and model, looked up without generating anything. Never contains the key. */
+  async check(): Promise<VoiceCheck> {
+    const { voiceId, model } = this.defaults;
+    const quick: RequestOptions = { timeoutMs: CHECK_TIMEOUT_MS, retries: 0 };
+    const [voice, models] = await Promise.allSettled([
+      voiceId ? this.request<{ name?: unknown }>('GET', `/v1/voices/${encodeURIComponent(voiceId)}`, undefined, quick) : Promise.resolve(null),
+      this.request<unknown>('GET', '/v1/models', undefined, quick),
+    ]);
+    const reason = (err: unknown) => (err instanceof Error ? err.message : String(err)).replace(/^\[elevenlabs\] /, '');
+    let voiceName: string | null = null;
+    let voicePart: string;
+    if (!voiceId) voicePart = 'no voice configured (ELEVENLABS_VOICE_ID)';
+    else if (voice.status === 'rejected') voicePart = `voice not confirmed: ${reason(voice.reason)}`;
+    else {
+      voiceName = typeof voice.value?.name === 'string' && voice.value.name ? voice.value.name : voiceId;
+      voicePart = `voice "${voiceName}" found`;
+    }
+    let modelListed: boolean | null = null;
+    let modelPart: string;
+    if (models.status === 'rejected') modelPart = `model ${model} not confirmed: ${reason(models.reason)}`;
+    else if (!Array.isArray(models.value)) modelPart = `model ${model} not confirmed: the model list was not a list`;
+    else {
+      modelListed = models.value.some((m: { model_id?: unknown } | null) => m?.model_id === model);
+      modelPart = `model ${model} ${modelListed ? 'listed' : 'NOT listed for this key'}`;
+    }
+    return { ok: voiceName !== null && modelListed !== false, detail: this.redact(`${voicePart}; ${modelPart}`), voiceName, modelListed };
   }
 
   async generateNarration(req: NarrationRequest): Promise<NarrationResult> {
@@ -189,6 +255,9 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     const caps = this.capabilities(model);
     if (!req.text.trim()) throw new ProviderError('elevenlabs', 'Narration text is empty', false);
     if (req.text.length > caps.maxCharacters) throw new ProviderError('elevenlabs', `${req.text.length} characters exceed ${model}'s limit of ${caps.maxCharacters} per request`, false);
+    if (caps.pauses !== 'BREAKS' && /<break\b/i.test(req.text)) {
+      throw new ProviderError('elevenlabs', `${model} takes no SSML: a <break> tag would be read aloud or rejected (pauses are written as ${caps.pauses === 'TAGS' ? '[pause] tags' : 'punctuation'}); not sent`, false);
+    }
     const format = req.outputFormat ?? this.opts.outputFormat;
     const { mimeType, container, sampleRate } = parseOutputFormat(format);
 
@@ -214,28 +283,41 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     }
 
     const path = `/v1/text-to-speech/${encodeURIComponent(req.settings.voiceId)}/with-timestamps?output_format=${encodeURIComponent(format)}`;
-    const { data, headers } = await this.requestWithHeaders<TimestampsResponse>('POST', path, body, req.signal);
-    if (typeof data.audio_base64 !== 'string' || !data.audio_base64) throw new ProviderError('elevenlabs', 'Response had no audio', true);
+    const sent = req.text.length;
+    // Usage by ElevenLabs' character-cost header, else the characters sent.
+    const metaFrom = (headers: Headers, attempts: number, unusable = false): CallMeta => {
+      const header = Number(headers.get('character-cost') ?? Number.NaN);
+      const reported = Number.isFinite(header) && header >= 0;
+      const requestId = headers.get('request-id') ?? headers.get('x-trace-id') ?? undefined;
+      const historyItemId = headers.get('history-item-id') ?? undefined;
+      const note = reported ? `${header} character(s) reported by ElevenLabs (character-cost)` : `ElevenLabs reported no character cost: ${sent} character(s) counted as sent`;
+      return {
+        provider: 'elevenlabs',
+        model,
+        mock: false,
+        usage: [{ unit: 'CHARACTERS', quantity: reported ? header : sent }],
+        usageSource: reported ? 'REPORTED' : 'COUNTED',
+        attempts,
+        costNote: unusable ? `Response unusable; characters may have been billed. ${note}` : note,
+        ...(requestId ? { providerRequestId: requestId } : {}),
+        ...(historyItemId ? { providerJobId: historyItemId } : {}),
+      };
+    };
+    const { data, headers, status, attempts } = await this.requestWithHeaders<TimestampsResponse>('POST', path, body, { ...(req.signal ? { signal: req.signal } : {}), billed: (h, n) => metaFrom(h, n, true) });
+    // After a 2xx the characters may be billed: these failures keep the usage, so the ledger still costs them.
+    const unusable = (message: string, cause?: unknown) => new ProviderError('elevenlabs', message, true, { ...(cause === undefined ? {} : { cause }), status, attempts, meta: metaFrom(headers, attempts, true) });
+    if (typeof data.audio_base64 !== 'string' || !data.audio_base64) throw unusable('Response had no audio');
     let audio: Uint8Array = new Uint8Array(Buffer.from(data.audio_base64, 'base64'));
     if (container === 'pcm') audio = pcmToWav(audio, sampleRate);
     let durationMs: number;
     try {
       durationMs = audioMetadata(audio, mimeType).durationMs;
     } catch (err) {
-      throw new ProviderError('elevenlabs', `Returned audio could not be read as ${format}: ${err instanceof Error ? err.message : String(err)}`, true, { cause: err });
+      throw unusable(`Returned audio could not be read as ${format}: ${err instanceof Error ? err.message : String(err)}`, err);
     }
     const characters = parseAlignment(data.alignment);
-    const requestId = headers.get('request-id') ?? headers.get('x-trace-id') ?? undefined;
-    const reported = Number(headers.get('character-cost') ?? Number.NaN);
-    const counted = Number.isFinite(reported) && reported >= 0;
-    const meta: CallMeta = {
-      provider: 'elevenlabs',
-      model,
-      mock: false,
-      usage: [{ unit: 'CHARACTERS', quantity: counted ? reported : req.text.length }],
-      costNote: counted ? `${reported} character(s) reported by ElevenLabs (character-cost)` : `ElevenLabs reported no character cost: ${req.text.length} character(s) counted as sent`,
-      ...(requestId ? { providerRequestId: requestId } : {}),
-    };
+    const meta = metaFrom(headers, attempts);
+    const requestId = meta.providerRequestId;
     return { audio, mimeType, durationMs, alignment: characters ? wordTimings(characters) : null, characters, ...(requestId ? { requestId } : {}), dictionary, meta };
   }
 
@@ -247,62 +329,106 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     }
   }
 
-  /** A pronunciation dictionary holding exactly these phoneme rules (created once per rule set and process). */
+  /**
+   * A pronunciation dictionary holding exactly these phoneme rules: the one
+   * an earlier process made (found by its name, which hashes the rules, and
+   * compared rule by rule), else a new one. Looked up once per rule set and
+   * process.
+   */
   private dictionaryFor(rules: readonly PronunciationRule[]): Promise<{ id: string; version: string }> {
     const sorted = [...rules].sort((a, b) => a.term.localeCompare(b.term));
     const hash = createHash('sha256').update(JSON.stringify(sorted)).digest('hex').slice(0, 16);
     let pending = this.dictionaries.get(hash);
     if (!pending) {
-      pending = this.request<{ id?: string; version_id?: string }>('POST', '/v1/pronunciation-dictionaries/add-from-rules', {
-        name: `docengine-${hash}`,
-        description: 'Pronunciations approved in the Documentary Engine review list',
-        rules: sorted.map((r) => ({
-          string_to_replace: r.term,
-          type: 'phoneme',
-          phoneme: r.method === 'IPA' ? `/${r.pronunciation.replace(/^\/|\/$/g, '')}/` : r.pronunciation,
-          alphabet: r.method === 'IPA' ? 'ipa' : 'cmu-arpabet',
-        })),
-      }).then((d) => {
-        if (!d.id || !d.version_id) throw new ProviderError('elevenlabs', 'Pronunciation dictionary response had no id or version', false);
-        return { id: d.id, version: d.version_id };
-      });
+      const name = `docengine-${hash}`;
+      const body: PhonemeRuleBody[] = sorted.map((r) => ({
+        string_to_replace: r.term,
+        type: 'phoneme',
+        phoneme: r.method === 'IPA' ? `/${r.pronunciation.replace(/^\/|\/$/g, '')}/` : r.pronunciation,
+        alphabet: r.method === 'IPA' ? 'ipa' : 'cmu-arpabet',
+      }));
+      pending = this.findDictionary(name, body).then(
+        (found) =>
+          found ??
+          this.request<{ id?: string; version_id?: string }>('POST', '/v1/pronunciation-dictionaries/add-from-rules', {
+            name,
+            description: 'Pronunciations approved in the Documentary Engine review list',
+            rules: body,
+          }).then((d) => {
+            if (!d.id || !d.version_id) throw new ProviderError('elevenlabs', 'Pronunciation dictionary response had no id or version', false);
+            return { id: d.id, version: d.version_id };
+          }),
+      );
       pending.catch(() => this.dictionaries.delete(hash));
       this.dictionaries.set(hash, pending);
     }
     return pending;
   }
 
-  private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-    return (await this.requestWithHeaders<T>(method, path, body, signal)).data;
+  /** The latest version of an unarchived dictionary of this name holding exactly these rules; null when there is none or the list cannot be read. */
+  private async findDictionary(name: string, rules: readonly PhonemeRuleBody[]): Promise<{ id: string; version: string } | null> {
+    type Listed = { id?: string; name?: string; latest_version_id?: string; latest_version_rules_num?: number; archived_time_unix?: number | null };
+    type Page = { pronunciation_dictionaries?: Listed[]; has_more?: boolean; next_cursor?: string | null };
+    try {
+      let cursor: string | null = null;
+      for (let page = 0; page < MAX_DICTIONARY_PAGES; page++) {
+        const data: Page = await this.request<Page>('GET', `/v1/pronunciation-dictionaries?page_size=100&include_archived=false${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+        for (const d of data.pronunciation_dictionaries ?? []) {
+          if (d.name !== name || !d.id || !d.latest_version_id || d.archived_time_unix || d.latest_version_rules_num !== rules.length) continue;
+          const full = await this.request<{ latest_version_id?: string; rules?: unknown }>('GET', `/v1/pronunciation-dictionaries/${encodeURIComponent(d.id)}`);
+          if (full.latest_version_id === d.latest_version_id && sameRules(full.rules, rules)) return { id: d.id, version: d.latest_version_id };
+        }
+        cursor = data.has_more && data.next_cursor ? data.next_cursor : null;
+        if (!cursor) break;
+      }
+    } catch {
+      // Not readable (e.g. a key that may only create dictionaries): a new dictionary is made instead.
+    }
+    return null;
   }
 
-  private async requestWithHeaders<T>(method: 'GET' | 'POST', path: string, body?: unknown, signal?: AbortSignal): Promise<{ data: T; headers: Headers }> {
+  private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, opts: RequestOptions = {}): Promise<T> {
+    return (await this.requestWithHeaders<T>(method, path, body, opts)).data;
+  }
+
+  private async requestWithHeaders<T>(method: 'GET' | 'POST', path: string, body?: unknown, opts: RequestOptions = {}): Promise<{ data: T; headers: Headers; status: number; attempts: number }> {
     const op = path.split('?')[0]!.replace(/\/[A-Za-z0-9]{16,}(?=\/|$)/g, '/{id}');
+    const { signal } = opts;
+    const timeoutMs = opts.timeoutMs ?? this.timeoutMs;
+    const retries = opts.retries ?? this.maxRetries;
     for (let attempt = 0; ; attempt++) {
-      let res: Response;
+      const attempts = attempt + 1;
+      let res: Response | undefined;
+      let text: string;
       try {
-        const timeout = AbortSignal.timeout(this.timeoutMs);
+        const timeout = AbortSignal.timeout(timeoutMs);
         res = await this.fetchImpl(`${this.baseUrl}${path}`, {
           method,
           headers: { 'xi-api-key': this.opts.apiKey!, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         });
+        // A timeout or reset while the body streams in fails the attempt too.
+        text = await res.text();
       } catch (err) {
-        if (signal?.aborted) throw new ProviderError('elevenlabs', `${op}: cancelled`, false, { cause: err });
         const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
-        const failure = new ProviderError('elevenlabs', `${op}: ${timedOut ? `timed out after ${this.timeoutMs} ms` : `request failed: ${err instanceof Error ? err.message : String(err)}`}`, true, { cause: err });
-        if (attempt < this.maxRetries) {
-          await this.sleep(backoff(attempt));
-          continue;
-        }
-        throw failure;
+        const why = timedOut ? `timed out after ${timeoutMs} ms` : `failed: ${err instanceof Error ? err.message : String(err)}`;
+        const served = res?.ok ? opts.billed?.(res.headers, attempts) : undefined;
+        const details = { cause: err, attempts, ...(res ? { status: res.status } : {}), ...(served ? { meta: served } : {}) };
+        if (signal?.aborted) throw new ProviderError('elevenlabs', `${op}: cancelled`, false, details);
+        if (res) {
+          const retryable = res.ok || res.status === 429 || res.status >= 500;
+          const failure = new ProviderError('elevenlabs', `${op}: HTTP ${res.status}, then reading the response ${why}`, retryable, details);
+          // A POST that was served is not sent again here (text to speech is billed; a dictionary would be made twice); a GET is.
+          if ((res.ok && method !== 'GET') || !retryable || attempt >= retries) throw failure;
+        } else if (attempt >= retries) throw new ProviderError('elevenlabs', `${op}: ${timedOut ? why : `request ${why}`}`, true, details);
+        await this.sleep(backoff(attempt));
+        continue;
       }
-      const text = await res.text();
       if (!res.ok) {
         const retryable = res.status === 429 || res.status >= 500;
-        const error = new ProviderError('elevenlabs', `${op}: HTTP ${res.status}: ${errorDetail(text)}`, retryable);
-        if (retryable && attempt < this.maxRetries) {
+        const error = new ProviderError('elevenlabs', `${op}: HTTP ${res.status}: ${errorDetail(text)}`, retryable, { status: res.status, attempts });
+        if (retryable && attempt < retries) {
           const after = Number(res.headers.get('retry-after'));
           await this.sleep(Number.isFinite(after) && after > 0 ? Math.min(after * 1000, 30_000) : backoff(attempt));
           continue;
@@ -310,12 +436,29 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
         throw error;
       }
       try {
-        return { data: JSON.parse(text) as T, headers: res.headers };
+        return { data: JSON.parse(text) as T, headers: res.headers, status: res.status, attempts };
       } catch (err) {
-        throw new ProviderError('elevenlabs', `${op}: response was not valid JSON`, true, { cause: err });
+        const served = opts.billed?.(res.headers, attempts);
+        throw new ProviderError('elevenlabs', `${op}: response was not valid JSON`, true, { cause: err, status: res.status, attempts, ...(served ? { meta: served } : {}) });
       }
     }
   }
+
+  /** The key never appears in what a check reports. */
+  private redact(text: string): string {
+    return this.opts.apiKey ? text.split(this.opts.apiKey).join('[redacted]') : text;
+  }
+}
+
+const ruleKey = (r: Partial<Record<'string_to_replace' | 'type' | 'phoneme' | 'alphabet' | 'case_sensitive' | 'word_boundaries', unknown>>) =>
+  JSON.stringify([r.string_to_replace, r.type, r.phoneme, r.alphabet, r.case_sensitive ?? true, r.word_boundaries ?? true]);
+
+/** Whether a dictionary's rules are exactly these (any order; ElevenLabs' defaults for case and word boundaries). */
+function sameRules(found: unknown, wanted: readonly PhonemeRuleBody[]): boolean {
+  if (!Array.isArray(found) || found.length !== wanted.length) return false;
+  const a = found.map((r: unknown) => (r && typeof r === 'object' ? ruleKey(r) : '')).sort();
+  const b = wanted.map(ruleKey).sort();
+  return a.every((k, i) => k === b[i]);
 }
 
 const backoff = (attempt: number) => 1000 * 3 ** attempt;

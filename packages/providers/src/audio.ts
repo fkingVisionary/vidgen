@@ -174,6 +174,9 @@ function joinMp3(clips: readonly AudioClip[]): JoinedAudio {
   let samples = 0;
   let rate = 0;
   let channels = 0;
+  // Where the next clip belongs (the clips' measured lengths plus the silence asked for): silence is written in whole
+  // frames, so each gap is rounded against this clock rather than on its own, and no clip drifts more than half a frame.
+  let clockMs = 0;
   for (const c of clips) {
     const info = parseMp3(c.audio);
     if (!rate) {
@@ -184,9 +187,10 @@ function joinMp3(clips: readonly AudioClip[]): JoinedAudio {
     for (const r of info.ranges) parts.push(c.audio.subarray(r.start, r.end));
     const perFrame = frameHeader(info.header, 0)!.samples;
     samples += info.frames * perFrame;
+    clockMs += info.durationMs + c.gapAfterMs;
     if (c.gapAfterMs > 0) {
       const frame = silentFrame(info.header);
-      const count = Math.round((c.gapAfterMs / 1000) * (rate / perFrame));
+      const count = Math.max(0, Math.round(((clockMs / 1000) * rate - samples) / perFrame));
       for (let k = 0; k < count; k++) parts.push(frame);
       samples += count * perFrame;
     }

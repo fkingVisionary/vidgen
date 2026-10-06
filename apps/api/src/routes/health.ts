@@ -10,13 +10,17 @@ const withTimeout = <T>(p: Promise<T>, ms: number) =>
 /** Public (no auth): used by Railway's deploy health check. Reveals no secrets. */
 export async function healthRoutes(app: FastifyInstance, c: AppContainer): Promise<void> {
   app.get('/api/health', async (_req, reply) => {
-    let database: HealthView['database'] = 'ok';
-    try {
-      await withTimeout(c.db.$queryRaw`SELECT 1`, 3_000);
-    } catch (err) {
-      database = 'error';
-      app.log.error({ err: err instanceof Error ? err.message : String(err) }, 'health check: database unreachable');
-    }
+    // Connectivity was checked once at startup; a check still running reads as not confirmed. Both waits run together.
+    const [database, connectivity] = await Promise.all([
+      withTimeout(c.db.$queryRaw`SELECT 1`, 3_000).then(
+        (): HealthView['database'] => 'ok',
+        (err: unknown): HealthView['database'] => {
+          app.log.error({ err: err instanceof Error ? err.message : String(err) }, 'health check: database unreachable');
+          return 'error';
+        },
+      ),
+      withTimeout(c.connectivity.done, 3_000).catch(() => c.connectivity.current()),
+    ]);
     const providers = describeProviders(c.providers);
     const body: HealthView = {
       status: database === 'ok' ? 'ok' : 'degraded',
@@ -28,6 +32,7 @@ export async function healthRoutes(app: FastifyInstance, c: AppContainer): Promi
       mockMode: providers.some((p) => p.mock),
       providers,
       realStages: c.realStages,
+      ...connectivity,
     };
     return reply.code(database === 'ok' ? 200 : 503).send(body);
   });

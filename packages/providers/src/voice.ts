@@ -1,4 +1,4 @@
-import type { PauseLength, PerformanceIntent, VoiceSettings } from '@docengine/core';
+import type { EmphasisLevel, PauseLength, PerformanceIntent, VoiceSettings } from '@docengine/core';
 import type { CallMeta, ProviderInfo } from './types.ts';
 
 export interface Voice {
@@ -107,6 +107,8 @@ export interface PerformanceSegment {
   text: string;
   intent: PerformanceIntent | null;
   pauseAfter: PauseLength;
+  /** Stressed words, as character ranges in `text`; a model that cannot stress a word without changing it reports them unsupported. */
+  emphasis?: { start: number; end: number; level: EmphasisLevel }[];
 }
 
 /** A chunk rendered in a provider's markup. Pure: nothing is sent. */
@@ -121,6 +123,17 @@ export interface RenderedNarration {
   unsupported: string[];
 }
 
+/** What a connectivity check found. Never contains a secret. */
+export interface VoiceCheck {
+  ok: boolean;
+  /** Short and readable ("voice found; model listed", or why not). */
+  detail: string;
+  /** The configured voice's name at the provider (null: not found). */
+  voiceName?: string | null;
+  /** Whether the configured model is among the provider's models (null: could not tell). */
+  modelListed?: boolean | null;
+}
+
 /** Text-to-speech narration. Vendor-neutral: implementations translate, the engine never writes vendor markup itself. */
 export interface VoiceProvider {
   readonly info: ProviderInfo;
@@ -132,4 +145,6 @@ export interface VoiceProvider {
   getVoices(): Promise<Voice[]>;
   generateNarration(req: NarrationRequest): Promise<NarrationResult>;
   getAudioMetadata(audio: Uint8Array, mimeType: string): Promise<AudioMetadata>;
+  /** Reach the provider without generating anything (no characters spent): the configured voice and model. */
+  check?(): Promise<VoiceCheck>;
 }

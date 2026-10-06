@@ -1,5 +1,9 @@
 import {
+  CHUNK_SECONDS,
   PAUSE_LENGTHS,
+  SCRIPT_TIMING,
+  spokenWordCount,
+  wordsForSeconds,
   type ChunkBoundary,
   type ChunkPauses,
   type ChunkPerformance,
@@ -9,10 +13,12 @@ import {
   type DeliveryEnergy,
   type DeliveryPace,
   type PauseLength,
+  type PauseReason,
   type ScriptBlockClass,
   type ScriptDelivery,
+  type ScriptPause,
 } from '@docengine/core';
-import { countWords, isQuestion, sentenceSpans } from './text.ts';
+import { isQuestion, sentenceSpans } from './text.ts';
 
 /**
  * Small-bite chunking. A script is never sent to a voice as one request: its
@@ -25,15 +31,21 @@ import { countWords, isQuestion, sentenceSpans } from './text.ts';
  * the same chunks, and every chunk says why it ends where it does.
  *
  * - Never inside a sentence, never across a section or a change of speaker.
- * - Preferred cuts: a paragraph (block) end, a scripted pause, a change in
- *   the script's delivery (pace, energy, emotion) — the stronger the change,
- *   the stronger the preference.
- * - Avoided cuts: between a question and its answer, a setup ("…", "—") and
- *   its payoff, before a very short sentence (usually a payoff), or before a
- *   sentence that continues the last ("And…", "But…").
- * - Size: chunks under the minimum or over the maximum cost more the further
- *   out they are; a fixed cost per chunk keeps a section from shattering into
- *   tiny clips just because the delivery shifts slightly.
+ * - Preferred cuts: a paragraph (block) end, a scripted pause that closes a
+ *   thought (a transition, an emotional turn, rhythm), a change in the
+ *   script's delivery (pace, energy, emotion) or in the information class
+ *   (into or out of fiction above all) — the stronger the change, the
+ *   stronger the preference.
+ * - Avoided cuts: between a question and its answer, a setup ("…", "—", or a
+ *   scripted reveal, impact, question or number pause) and its payoff,
+ *   before a very short sentence (usually a payoff), or before a sentence
+ *   that continues the last ("And…", "But…").
+ * - Size, in spoken words (a figure counts as it is read): chunks under the
+ *   minimum or over the maximum cost more the further out they are, and a
+ *   chunk of several sentences never runs past a natural thought's longest
+ *   (≈ 20 s) unless the maximum itself does; a fixed cost per chunk keeps a
+ *   section from shattering into tiny clips just because the delivery shifts
+ *   slightly.
  */
 
 export interface ChunkBlock {
@@ -68,6 +80,7 @@ export interface PlannedChunk {
   spans: ChunkSpan[];
   /** The canonical text: the spans verbatim, blocks separated by a line break. */
   text: string;
+  /** Spoken words (the unit of the chunk-size settings). */
   words: number;
   sentences: ChunkSentence[];
   boundary: ChunkBoundary;
@@ -89,18 +102,32 @@ interface Gap {
 }
 
 const RANK: Record<PauseLength, number> = Object.fromEntries(PAUSE_LENGTHS.map((p, i) => [p, i])) as Record<PauseLength, number>;
-const longer = (a: PauseLength, b: PauseLength): PauseLength => (RANK[a] >= RANK[b] ? a : b);
+
+/** The pause between two adjacent blocks: the longer of the first's pause after and the second's pause before, with its reason. */
+function pauseBetween(a: ScriptDelivery, b: ScriptDelivery): ScriptPause {
+  const x = a.pauseAfter;
+  const y = b.pauseBefore;
+  if (RANK[x.length] !== RANK[y.length]) return RANK[x.length] > RANK[y.length] ? x : y;
+  return x.reason ? x : y;
+}
+
+/** Pauses that hold a thought open: what follows completes what came before (the reveal, the impact, the answer, what the number means). */
+const HOLDING: ReadonlySet<PauseReason> = new Set(['REVEAL', 'IMPACT', 'QUESTION', 'NUMBER']);
+const holds = (p: ScriptPause) => p.length !== 'NONE' && !!p.reason && HOLDING.has(p.reason);
 
 /** Gap and size costs (tuned on narration; see the chunking tests). */
 export const CHUNK_COSTS = {
   perChunk: 6,
   underMinPerWord: 1.5,
   overMaxPerWord: 3,
-  /** Over max × this, a chunk of several sentences is not allowed at all. */
+  /** Over max × this (and over a natural thought's longest, ≈ 20 s, unless the maximum itself is), a chunk of several sentences is not allowed at all. */
   hardMaxFactor: 1.5,
-  sentenceInsideBlock: 4,
+  /** A cut inside a block rather than at its end (a block is the script's unit of thought): a little over the maximum is better than a paragraph split to join its start to the last one's payoff. */
+  sentenceInsideBlock: 8,
   pause: { NONE: 0, MICRO: -1, SHORT: -2, MEDIUM: -8, LONG: -20 } satisfies Record<PauseLength, number>,
   shift: { NONE: 0, MINOR: -4, MAJOR: -20 },
+  /** A change of information class: into or out of fiction (MAJOR) is cut even at the cost of short chunks; any other change only tips a close call. */
+  purpose: { NONE: 0, MINOR: -4, MAJOR: -30 },
   questionToAnswer: 30,
   questionToQuestion: 6,
   setupToPayoff: 25,
@@ -126,11 +153,17 @@ export function performanceShift(a: ScriptDelivery, b: ScriptDelivery): 'NONE' |
   return Math.max(pace, energy, emotion) === 2 || total >= 3 ? 'MAJOR' : 'MINOR';
 }
 
+/** How much the information class changes between two blocks: into or out of fiction is major, any other change minor. */
+export function purposeShift(a: ScriptBlockClass, b: ScriptBlockClass): 'NONE' | 'MINOR' | 'MAJOR' {
+  if (a === b) return 'NONE';
+  return a === 'FICTION' || b === 'FICTION' ? 'MAJOR' : 'MINOR';
+}
+
 function units(section: ChunkSection): Unit[] {
   return section.blocks.flatMap((block) =>
     sentenceSpans(block.text).map((s) => {
       const text = block.text.slice(s.start, s.end);
-      return { block, start: s.start, end: s.end, text, words: countWords(text) };
+      return { block, start: s.start, end: s.end, text, words: spokenWordCount(text) };
     }),
   );
 }
@@ -141,10 +174,14 @@ function gapBetween(a: Unit, b: Unit): Gap {
   if (a.block !== b.block) {
     if (a.block.speakerId !== b.block.speakerId) return { hard: true, cost: 0, boundary: 'SPEAKER' };
     if (b.block.order !== a.block.order + 1) return { hard: true, cost: 0, boundary: 'PARAGRAPH' };
-    const pause = longer(a.block.delivery.pauseAfter.length, b.block.delivery.pauseBefore.length);
+    const between = pauseBetween(a.block.delivery, b.block.delivery);
+    // A holding pause is part of the thought, not the end of one.
+    const pause = holds(between) ? 'NONE' : between.length;
     const shift = performanceShift(a.block.delivery, b.block.delivery);
-    cost += CHUNK_COSTS.pause[pause] + CHUNK_COSTS.shift[shift];
-    boundary = RANK[pause] >= RANK.MEDIUM ? 'PAUSE' : shift !== 'NONE' ? 'PERFORMANCE' : pause !== 'NONE' ? 'PAUSE' : 'PARAGRAPH';
+    const purpose = purposeShift(a.block.infoClass, b.block.infoClass);
+    cost += (holds(between) ? CHUNK_COSTS.setupToPayoff : CHUNK_COSTS.pause[pause]) + CHUNK_COSTS.shift[shift] + CHUNK_COSTS.purpose[purpose];
+    boundary =
+      purpose === 'MAJOR' ? 'PURPOSE' : RANK[pause] >= RANK.MEDIUM ? 'PAUSE' : shift !== 'NONE' ? 'PERFORMANCE' : purpose !== 'NONE' ? 'PURPOSE' : pause !== 'NONE' ? 'PAUSE' : 'PARAGRAPH';
   } else {
     cost += CHUNK_COSTS.sentenceInsideBlock;
   }
@@ -157,8 +194,11 @@ function gapBetween(a: Unit, b: Unit): Gap {
   return { hard: false, cost, boundary };
 }
 
+/** The most spoken words a chunk of several sentences may have. */
+const hardMax = (s: ChunkingSettings) => Math.max(s.maxWords, Math.min(s.maxWords * CHUNK_COSTS.hardMaxFactor, wordsForSeconds(CHUNK_SECONDS.natural.max)));
+
 function sizeCost(words: number, sentences: number, s: ChunkingSettings): number {
-  if (sentences > 1 && words > s.maxWords * CHUNK_COSTS.hardMaxFactor) return Number.POSITIVE_INFINITY;
+  if (sentences > 1 && words > hardMax(s)) return Number.POSITIVE_INFINITY;
   let cost = CHUNK_COSTS.perChunk;
   if (words < s.minWords) cost += (s.minWords - words) * CHUNK_COSTS.underMinPerWord;
   if (words > s.maxWords) cost += (words - s.maxWords) * CHUNK_COSTS.overMaxPerWord;
@@ -220,9 +260,8 @@ function build(section: ChunkSection, us: readonly Unit[], from: number, to: num
       last.end = u.end;
     } else {
       if (last) {
-        const prev = us[k - 1]!.block;
-        const pause = longer(prev.delivery.pauseAfter.length, u.block.delivery.pauseBefore.length);
-        if (pause !== 'NONE') inside.push({ afterSentence: sentences.length - 1, length: pause });
+        const pause = pauseBetween(us[k - 1]!.block.delivery, u.block.delivery);
+        if (pause.length !== 'NONE') inside.push({ afterSentence: sentences.length - 1, length: pause.length, reason: pause.reason });
         text += '\n';
       }
       spans.push({ blockId: u.block.id, blockKey: u.block.key, start: u.start, end: u.end });
@@ -243,11 +282,23 @@ function build(section: ChunkSection, us: readonly Unit[], from: number, to: num
       inside,
     },
   };
-  return { sectionId: section.id, sectionKey: section.key, spans, text, words: countWords(text), sentences, boundary, performance };
+  return { sectionId: section.id, sectionKey: section.key, spans, text, words: spokenWordCount(text), sentences, boundary, performance };
 }
 
 const firstSentenceStart = (b: ChunkBlock) => sentenceSpans(b.text)[0]?.start ?? 0;
 const lastSentenceEnd = (b: ChunkBlock) => sentenceSpans(b.text).at(-1)?.end ?? b.text.length;
+
+/**
+ * Planned seconds of a chunk: its spoken words at the narration rate and its
+ * pace, plus the pauses between its sentences (the pauses at its edges fall
+ * between takes). An estimate for planning; a take's measured duration is
+ * what counts.
+ */
+export function chunkSeconds(words: number, performance: Pick<ChunkPerformance, 'pace' | 'pauses'>): number {
+  const speech = (words / (SCRIPT_TIMING.wordsPerMinute * SCRIPT_TIMING.paceFactor[performance.pace])) * 60;
+  const pauses = performance.pauses.inside.reduce((n, p) => n + SCRIPT_TIMING.pauseSec[p.length], 0);
+  return Math.round((speech + pauses) * 10) / 10;
+}
 
 /** Chunks for the given sections (in order), numbered across them. */
 export function planChunks(sections: readonly ChunkSection[], settings: ChunkingSettings): PlannedChunk[] {

@@ -1,7 +1,7 @@
 import { audioMetadata } from '../audio.ts';
 import { ProviderError } from '../types.ts';
 import { renderSegments } from '../voice-markup.ts';
-import type { AudioMetadata, CharacterAlignment, NarrationRequest, NarrationResult, PerformanceSegment, RenderedNarration, Voice, VoiceModelCapabilities, VoiceProvider, WordTiming } from '../voice.ts';
+import type { AudioMetadata, CharacterAlignment, NarrationRequest, NarrationResult, PerformanceSegment, RenderedNarration, Voice, VoiceCheck, VoiceModelCapabilities, VoiceProvider, WordTiming } from '../voice.ts';
 import { MOCK_FAIL_MARKER, MOCK_LABEL, mockId, mockInfo, mockMeta } from './common.ts';
 import { synthesizeMockNarration } from './wav.ts';
 
@@ -104,6 +104,11 @@ export class MockVoiceProvider implements VoiceProvider {
       dictionary: null,
       meta: mockMeta([{ unit: 'CHARACTERS', quantity: req.text.length }], req.settings.model),
     };
+  }
+
+  /** Nothing to reach: the answer says so. */
+  async check(): Promise<VoiceCheck> {
+    return { ok: true, detail: `${MOCK_LABEL}: no voice provider to reach`, voiceName: `[${MOCK_LABEL}] Deep documentary narrator`, modelListed: true };
   }
 
   async getAudioMetadata(audio: Uint8Array, mimeType: string): Promise<AudioMetadata> {

@@ -4,6 +4,7 @@ import {
   VoiceScope,
   type CostBasis,
   type JobView,
+  type VoiceAssemblyVersionView,
   type VoiceAssemblyView,
   type VoiceChunkView,
   type VoiceGenerationStatus,
@@ -16,7 +17,7 @@ import type { Database, Project, VoiceGeneration } from '@docengine/database';
 import type { ProviderSet } from '@docengine/providers';
 import { z } from 'zod';
 import { profileConfig, toProfileView } from './profiles.ts';
-import { readAlignment, readPerformance, readQa, readSpans, staleChunk } from './runs.ts';
+import { readAlignment, readPerformance, readQa, readSpans, staleChunk, takeStatus } from './runs.ts';
 import { liveRunQa } from './service.ts';
 import { approvedScript, loadScriptForVoice } from './script.ts';
 
@@ -38,13 +39,14 @@ function toGenerationView(g: TakeRow, currentId: string | null): VoiceGeneration
   return {
     id: g.id,
     generation: g.generation,
-    status: g.status,
+    status: takeStatus(g, currentId),
     current: g.id === currentId,
     provider: g.provider,
     model: g.model,
     voiceId: g.voiceId,
     profile: { id: g.profile.id, name: g.profile.name, version: g.profile.version },
     strategy: g.strategy,
+    variant: g.variant,
     performanceText: g.performanceText,
     spokenText: g.spokenText,
     prepared,
@@ -94,7 +96,11 @@ function runLabel(r: { kind: string; experiment: string | null; variant: string 
 
 function summary(r: RunRow, approved: { id: string } | null): VoiceRunSummaryView {
   const takes: Partial<Record<VoiceGenerationStatus, number>> = {};
-  for (const c of r.chunks) if (c.current) takes[c.current.status] = (takes[c.current.status] ?? 0) + 1;
+  for (const c of r.chunks) {
+    if (!c.current) continue;
+    const status = takeStatus(c.current, c.currentGenerationId);
+    takes[status] = (takes[status] ?? 0) + 1;
+  }
   const pending = r.chunks.filter((c) => !c.current).length;
   if (pending) takes.PENDING = (takes.PENDING ?? 0) + pending;
   const attempts = r.generations.filter((g) => g.providerCall);
@@ -147,7 +153,9 @@ async function runView(db: Database, r: RunRow, approved: { id: string; version:
       generations: takes,
     };
   });
-  const latest = await db.voiceAssembly.findFirst({ where: { runId: r.id }, orderBy: { version: 'desc' } });
+  const versions = await db.voiceAssembly.findMany({ where: { runId: r.id }, orderBy: { version: 'desc' } });
+  const latest = versions[0];
+  const assemblies: VoiceAssemblyVersionView[] = versions.map((a) => ({ id: a.id, version: a.version, status: a.status, totalDurationMs: a.totalDurationMs, complete: a.complete, audioUrl: `/api/voice/assemblies/${a.id}/audio`, createdAt: a.createdAt.toISOString() }));
   const assembly: VoiceAssemblyView | null = latest
     ? {
         id: latest.id,
@@ -173,6 +181,7 @@ async function runView(db: Database, r: RunRow, approved: { id: string; version:
     notes: r.notes,
     chunks,
     assembly,
+    assemblies,
     qa: await liveRunQa(db, r),
     staleNote: approved && approved.id !== r.scriptId ? `Audio generated from Script v${r.script.version} — current script is v${approved.version}` : null,
     stats: {

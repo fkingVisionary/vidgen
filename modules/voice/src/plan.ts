@@ -1,7 +1,7 @@
 import { estimateCost, type AuditionCoverageView, type ContextSettings, type ChunkingSettings, type CostBasis, type PerformanceStrategy, type VoiceEstimateView, type VoicePlanChunkView } from '@docengine/core';
 import type { VoiceProfile } from '@docengine/database';
 import type { VoiceProvider } from '@docengine/providers';
-import { planChunks, type PlannedChunk } from './chunking.ts';
+import { chunkSeconds, planChunks, type PlannedChunk } from './chunking.ts';
 import { isPlainDelivery } from './performance.ts';
 import { prepareTake, type PreparedTake, type TakeBlock } from './prepare.ts';
 import { profileConfig } from './profiles.ts';
@@ -76,6 +76,7 @@ export function planRun(script: VoiceScript, blocks: readonly VoiceScriptBlock[]
       words: c.words,
       boundary: c.boundary,
       performance: c.performance,
+      estimatedSec: chunkSeconds(c.words, c.performance),
       performanceText: takes[i]!.rendered.text,
       characters: takes[i]!.rendered.text.length,
       checksPassed: takes[i]!.passed,

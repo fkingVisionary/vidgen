@@ -4,6 +4,7 @@ import {
   DELIVERY_ENERGIES,
   DELIVERY_PACES,
   PAUSE_LENGTHS,
+  PAUSE_REASONS,
   PERFORMANCE_STRATEGIES,
   PRONUNCIATION_METHODS,
   PRONUNCIATION_STATUSES,
@@ -42,7 +43,14 @@ export const VoiceProfileSettings = z.object({
 });
 export type VoiceProfileSettings = z.infer<typeof VoiceProfileSettings>;
 
-/** Chunk size: the smallest useful regeneration unit that still sounds like one piece of speech. */
+/**
+ * Seconds of speech a chunk is sized for: about 8–12 by default, 5–20 when
+ * that keeps a natural thought whole (a setup and its payoff, a question and
+ * its answer). Natural boundaries come before duration.
+ */
+export const CHUNK_SECONDS = { target: { min: 8, max: 12 }, natural: { min: 5, max: 20 } } as const;
+
+/** Chunk size in spoken words (a figure counts as it is read): the smallest useful regeneration unit that still sounds like one piece of speech. */
 export const ChunkingSettings = z
   .object({ minWords: z.number().int().min(5).max(200), maxWords: z.number().int().min(10).max(300) })
   .refine((c) => c.minWords < c.maxWords, { message: 'minWords must be below maxWords', path: ['minWords'] });
@@ -73,7 +81,8 @@ export type VoiceProfileConfig = z.infer<typeof VoiceProfileConfig>;
 export const DEFAULT_VOICE_PROFILE_CONFIG: VoiceProfileConfig = {
   settings: { stability: 0.5, similarity: 0.75, style: 0, speakerBoost: true, speed: 1 },
   strategy: 'RESTRAINED',
-  chunking: { minWords: 25, maxWords: 80 },
+  /** CHUNK_SECONDS.target at the narration rate: wordsForSeconds(8)–wordsForSeconds(12). */
+  chunking: { minWords: 20, maxWords: 30 },
   context: { previousChars: 200, nextChars: 120, stitch: false },
   numberStyle: 'UK',
 };
@@ -110,7 +119,7 @@ export const PerformanceMark = z.object({
   /** Index of the sentence (within the chunk) the direction precedes. */
   sentence: z.number().int().min(0),
   intent: PerformanceIntent,
-  /** SCRIPT: translated from the script's delivery marks; STRATEGY: added by an over-directed strategy; DIRECTOR: the editor's own. */
+  /** SCRIPT: translated from the script's delivery marks; STRATEGY: added by the strategy (an expressive moment, or over-direction); DIRECTOR: the editor's own. */
   source: z.enum(['SCRIPT', 'STRATEGY', 'DIRECTOR']),
   reason: z.string(),
 });
@@ -146,7 +155,14 @@ export type PerformanceCheck = z.infer<typeof PerformanceCheck>;
 export const ChunkPauses = z.object({
   before: z.enum(PAUSE_LENGTHS),
   after: z.enum(PAUSE_LENGTHS),
-  inside: z.array(z.object({ afterSentence: z.number().int().min(0), length: z.enum(PAUSE_LENGTHS) })),
+  inside: z.array(
+    z.object({
+      afterSentence: z.number().int().min(0),
+      length: z.enum(PAUSE_LENGTHS),
+      /** Why the script pauses there (null: no reason given; absent in chunks planned before it was recorded). */
+      reason: z.enum(PAUSE_REASONS).nullable().optional(),
+    }),
+  ),
 });
 export type ChunkPauses = z.infer<typeof ChunkPauses>;
 
@@ -213,12 +229,16 @@ export const VOICE_QA_KINDS = [
   'MISSING_ALIGNMENT',
   'ALIGNMENT_INCOMPLETE',
   'GENERATION_FAILED',
+  /** The audio came back but could not be stored (the request may still have been billed). */
+  'STORAGE_FAILED',
   'TAKE_REJECTED',
   'TAKE_UNREVIEWED',
   'STALE_TEXT',
   'STALE_SCRIPT',
   'DUPLICATE_CHUNK',
   'MISSING_CHUNK',
+  /** The assembly's clips are not the chunks' current takes, or not where its entries say. */
+  'ASSEMBLY_MISMATCH',
   'INCOMPLETE_NARRATION',
   'DURATION_ANOMALY',
   'EXCESSIVE_SILENCE',
@@ -246,6 +266,8 @@ export const AssemblyEntry = z.object({
   chunkIndex: z.number().int().min(0),
   generationId: z.string(),
   generation: z.number().int().min(1),
+  /** The take's audio file (absent in assemblies made before it was recorded). */
+  audioAssetId: z.string().optional(),
   sectionKey: z.string(),
   blockKeys: z.array(z.string()),
   startMs: z.number().int().min(0),
@@ -263,7 +285,8 @@ export type AssemblyEntry = z.infer<typeof AssemblyEntry>;
  */
 export const NarrationTimelineEntry = z.object({
   scriptBlock: z.object({ id: z.string(), key: z.string(), sectionKey: z.string() }),
-  audioChunk: z.object({ id: z.string(), index: z.number().int(), generationId: z.string(), generation: z.number().int() }),
+  /** The chunk and take heard, and the take's audio file (absent in assemblies made before it was recorded). */
+  audioChunk: z.object({ id: z.string(), index: z.number().int(), generationId: z.string(), generation: z.number().int(), audioAssetId: z.string().optional() }),
   startMs: z.number().int().min(0),
   endMs: z.number().int().min(0),
   durationMs: z.number().int().min(0),
@@ -322,15 +345,78 @@ export const CreateVoiceRunInput = PlanVoiceRunInput.extend({
 });
 export type CreateVoiceRunInput = z.input<typeof CreateVoiceRunInput>;
 
-/** A comparison: the same scope narrated 2–4 ways (each variant is its own run in one experiment). */
+const VariantLabel = z.string().trim().min(1).max(40);
+
+/** Unlabelled variants are named by their place (A, B, C…); labels must differ. */
+const lettered = <T extends { label?: string | undefined }>(variants: T[]) => variants.map((v, i) => ({ ...v, label: v.label ?? String.fromCharCode(65 + i) }));
+const distinctLabels = (variants: readonly { label: string }[]) => new Set(variants.map((v) => v.label.toLowerCase())).size === variants.length;
+
+/** One way of narrating an experiment's scope: the profile's settings, with whatever the variant sets over them. */
+export const VoiceExperimentVariant = VoiceRunOptions.extend({ label: VariantLabel.optional() });
+export type VoiceExperimentVariant = z.input<typeof VoiceExperimentVariant>;
+
+/**
+ * A comparison: the same scope narrated 2–8 ways, generated in one job. Each
+ * variant is its own run with its own assembly (so each can be heard whole).
+ * Always confirmed: the service says what it would send and cost.
+ */
 export const VoiceExperimentInput = z.object({
   scope: VoiceScope,
   profileId: z.uuid().optional(),
   name: z.string().trim().min(1).max(80),
-  variants: z.array(VoiceRunOptions.extend({ label: z.string().trim().min(1).max(40) })).min(2).max(4),
+  variants: z
+    .array(VoiceExperimentVariant)
+    .min(2)
+    .max(8)
+    .transform(lettered)
+    .refine(distinctLabels, { message: 'each variant needs its own label' }),
   confirm: z.boolean().optional(),
 });
 export type VoiceExperimentInput = z.input<typeof VoiceExperimentInput>;
+
+/** A variant spelled out in full (strategy, chunking and context), so the comparison does not depend on the profile. */
+export interface VoiceExperimentPresetVariant extends Required<VoiceRunOptions> {
+  label: string;
+  /** What the variant is there to hear (shown, never sent). */
+  question: string;
+}
+
+/** An experiment ready to queue: a name, a scope and fully specified variants. */
+export interface VoiceExperimentPreset {
+  name: string;
+  scope: VoiceScope;
+  variants: VoiceExperimentPresetVariant[];
+}
+
+const { chunking: HOUSE_CHUNKING, context: HOUSE_CONTEXT } = DEFAULT_VOICE_PROFILE_CONFIG;
+const NO_CONTEXT: ContextSettings = { previousChars: 0, nextChars: 0, stitch: false };
+
+/**
+ * The acceptance experiment, queued as one job on the opening: direction
+ * (A–D), neighbouring context (E against B) and chunk size (F and G against
+ * B). B is the house default the others are heard against.
+ */
+export const VOICE_ACCEPTANCE_EXPERIMENT: VoiceExperimentPreset = {
+  name: 'Acceptance experiment',
+  scope: { kind: 'AUDITION', seconds: 100 },
+  variants: [
+    { label: 'A plain', strategy: 'PLAIN', chunking: HOUSE_CHUNKING, context: HOUSE_CONTEXT, question: 'What does the voice do with no direction?' },
+    { label: 'B restrained', strategy: 'RESTRAINED', chunking: HOUSE_CHUNKING, context: HOUSE_CONTEXT, question: 'Does the house style sound like a documentary narrator?' },
+    { label: 'C expressive', strategy: 'EXPRESSIVE', chunking: HOUSE_CHUNKING, context: HOUSE_CONTEXT, question: 'Do the deliberate moments land, or over-act?' },
+    { label: 'D over-directed', strategy: 'DIRECTED', chunking: HOUSE_CHUNKING, context: HOUSE_CONTEXT, question: 'What does over-direction sound like (the reference to avoid)?' },
+    { label: 'E no context', strategy: 'RESTRAINED', chunking: HOUSE_CHUNKING, context: NO_CONTEXT, question: 'Does neighbouring text help continuity (B without it)?' },
+    { label: 'F 5–8 s chunks', strategy: 'RESTRAINED', chunking: { minWords: 13, maxWords: 20 }, context: HOUSE_CONTEXT, question: 'Are smaller chunks more natural, or choppy (B smaller)?' },
+    { label: 'G 12–20 s chunks', strategy: 'RESTRAINED', chunking: { minWords: 30, maxWords: 50 }, context: HOUSE_CONTEXT, question: 'Do larger chunks stay natural, or flatten (B larger)?' },
+  ],
+};
+
+/** One side of an A/B take of chosen chunks: its strategy and, for a single chunk, a director's directions. */
+export const RegenerateVariant = z.object({
+  label: VariantLabel.optional(),
+  strategy: z.enum(PERFORMANCE_STRATEGIES).optional(),
+  marks: z.array(DirectorMark).max(12).optional(),
+});
+export type RegenerateVariant = z.input<typeof RegenerateVariant>;
 
 /** New takes for some chunks of a run (earlier takes are kept). */
 export const RegenerateVoiceInput = z
@@ -342,13 +428,22 @@ export const RegenerateVoiceInput = z
     strategy: z.enum(PERFORMANCE_STRATEGIES).optional(),
     /** A director's directions — only with exactly one chunk. */
     marks: z.array(DirectorMark).max(12).optional(),
+    /**
+     * A/B: one take per variant per chosen chunk, kept beside the current take
+     * and never made current by itself (the editor picks one). Only with
+     * chunkIds; always confirmed.
+     */
+    variants: z.array(RegenerateVariant).min(2).max(3).transform(lettered).refine(distinctLabels, { message: 'each variant needs its own label' }).optional(),
     note: z.string().trim().max(1000).optional(),
     confirm: z.boolean().optional(),
   })
   .refine((v) => [v.chunkIds?.length ? 1 : 0, v.section ? 1 : 0, v.blockKeys?.length ? 1 : 0, v.all ? 1 : 0].reduce((a, b) => a + b, 0) === 1, {
     message: 'choose exactly one of chunkIds, section, blockKeys or all',
   })
-  .refine((v) => !v.marks || v.chunkIds?.length === 1, { message: 'directions apply to exactly one chunk', path: ['marks'] });
+  .refine((v) => !v.marks || v.chunkIds?.length === 1, { message: 'directions apply to exactly one chunk', path: ['marks'] })
+  .refine((v) => !v.variants || !!v.chunkIds?.length, { message: 'variants apply to chosen chunks', path: ['variants'] })
+  .refine((v) => !v.variants || (!v.strategy && !v.marks), { message: 'with variants, each variant sets its own strategy and directions', path: ['variants'] })
+  .refine((v) => !v.variants?.some((x) => x.marks?.length) || v.chunkIds?.length === 1, { message: 'directions apply to exactly one chunk', path: ['variants'] });
 export type RegenerateVoiceInput = z.input<typeof RegenerateVoiceInput>;
 
 /** The editor's decision on one take: approve it, reject it (no regeneration is forced), or make it current again. */

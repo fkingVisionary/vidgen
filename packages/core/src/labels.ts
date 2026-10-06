@@ -428,19 +428,34 @@ export const VOICE_RUN_KIND_LABELS: Record<VoiceRunKind, string> = { AUDITION: '
 export const VOICE_GENERATION_STATUS_LABELS: Record<VoiceGenerationStatus, string> = {
   PENDING: 'Pending',
   GENERATING: 'Generating',
-  GENERATED: 'To review',
+  GENERATED: 'Generated',
+  IN_REVIEW: 'To review',
   FAILED: 'Failed',
   REJECTED: 'Rejected',
   APPROVED: 'Approved',
   SUPERSEDED: 'Superseded',
 };
-export const PERFORMANCE_STRATEGY_LABELS: Record<PerformanceStrategy, string> = { PLAIN: 'Plain text', RESTRAINED: 'Restrained (house style)', DIRECTED: 'Over-directed (comparison only)' };
+export const PERFORMANCE_STRATEGY_LABELS: Record<PerformanceStrategy, string> = {
+  PLAIN: 'Plain text',
+  RESTRAINED: 'Restrained (house style)',
+  EXPRESSIVE: 'Expressive moments',
+  DIRECTED: 'Over-directed (comparison only)',
+};
 export const PERFORMANCE_STRATEGY_HELP: Record<PerformanceStrategy, string> = {
   PLAIN: 'No performance directions: the voice reads the words as written.',
   RESTRAINED: "A few directions, only where the script's delivery changes — a documentary narrator, not an audiobook character.",
+  EXPRESSIVE: 'The house style plus at most one deliberate moment per chunk, only where the script turns (a reveal, an impact, an emotional turn).',
   DIRECTED: 'A direction on every sentence — kept to hear what over-direction sounds like, never the default.',
 };
-export const CHUNK_BOUNDARY_LABELS: Record<ChunkBoundary, string> = { SECTION_END: 'section end', SPEAKER: 'change of speaker', PAUSE: 'scripted pause', PERFORMANCE: 'change of delivery', PARAGRAPH: 'paragraph end', SENTENCE: 'sentence end' };
+export const CHUNK_BOUNDARY_LABELS: Record<ChunkBoundary, string> = {
+  SECTION_END: 'section end',
+  SPEAKER: 'change of speaker',
+  PURPOSE: 'change of information class',
+  PAUSE: 'scripted pause',
+  PERFORMANCE: 'change of delivery',
+  PARAGRAPH: 'paragraph end',
+  SENTENCE: 'sentence end',
+};
 export const PRONUNCIATION_STATUS_LABELS: Record<PronunciationStatus, string> = { PENDING: 'To check', APPROVED: 'Approved', FLAGGED: 'Heard wrong' };
 export const PRONUNCIATION_METHOD_LABELS: Record<PronunciationMethod, string> = { DEFAULT: "The voice's own reading", ALIAS: 'Say it as (alias)', IPA: 'Phonemes (IPA)', CMU: 'Phonemes (CMU Arpabet)' };
 export const PRONUNCIATION_TERM_KIND_LABELS: Record<PronunciationTermKind, string> = { NAME: 'Name', PLACE: 'Place', ORGANISATION: 'Organisation', FOREIGN: 'Foreign word', TERM: 'Term', ABBREVIATION: 'Abbreviation' };

@@ -439,20 +439,26 @@ export type PronunciationConfidence = (typeof PRONUNCIATION_CONFIDENCES)[number]
 export const VOICE_RUN_KINDS = ['AUDITION', 'SECTION', 'BLOCKS', 'RANGE', 'FULL'] as const;
 export type VoiceRunKind = (typeof VOICE_RUN_KINDS)[number];
 
-/** Lifecycle of one take of one chunk. Takes are never deleted: a newer current take supersedes the one before. */
-export const VOICE_GENERATION_STATUSES = ['PENDING', 'GENERATING', 'GENERATED', 'FAILED', 'REJECTED', 'APPROVED', 'SUPERSEDED'] as const;
+/**
+ * Lifecycle of one take of one chunk. Takes are never deleted: a newer current take supersedes the one before.
+ * IN_REVIEW is a chunk's current take awaiting a human decision; GENERATED is stored audio that is not
+ * current (an A/B variant). A current GENERATED take (made before IN_REVIEW existed) reads as IN_REVIEW.
+ */
+export const VOICE_GENERATION_STATUSES = ['PENDING', 'GENERATING', 'GENERATED', 'IN_REVIEW', 'FAILED', 'REJECTED', 'APPROVED', 'SUPERSEDED'] as const;
 export type VoiceGenerationStatus = (typeof VOICE_GENERATION_STATUSES)[number];
 
 /**
  * How much performance direction goes to the voice: none (plain text), the
- * house style (a few marks where the script's delivery changes), or
- * over-directed (a mark on every sentence — for comparison only).
+ * house style (a few marks where the script's delivery changes), the house
+ * style plus at most one deliberate moment per chunk where the script turns
+ * (a reveal, an impact, an emotional turn), or over-directed (a mark on every
+ * sentence — for comparison only).
  */
-export const PERFORMANCE_STRATEGIES = ['PLAIN', 'RESTRAINED', 'DIRECTED'] as const;
+export const PERFORMANCE_STRATEGIES = ['PLAIN', 'RESTRAINED', 'EXPRESSIVE', 'DIRECTED'] as const;
 export type PerformanceStrategy = (typeof PERFORMANCE_STRATEGIES)[number];
 
-/** Why a chunk ends where it does. */
-export const CHUNK_BOUNDARIES = ['SECTION_END', 'SPEAKER', 'PAUSE', 'PERFORMANCE', 'PARAGRAPH', 'SENTENCE'] as const;
+/** Why a chunk ends where it does. PURPOSE: the information class changes (into or out of fiction above all). */
+export const CHUNK_BOUNDARIES = ['SECTION_END', 'SPEAKER', 'PURPOSE', 'PAUSE', 'PERFORMANCE', 'PARAGRAPH', 'SENTENCE'] as const;
 export type ChunkBoundary = (typeof CHUNK_BOUNDARIES)[number];
 
 /** A term in the pronunciation review list: still to check, confirmed, or heard wrong in an audition. */

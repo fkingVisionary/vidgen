@@ -149,7 +149,7 @@ function Header({ view: v }: { view: ScriptView }) {
           {s.cost.includesEstimates && ' (estimated)'} · {s.cost.calls} model call(s)
         </p>
         <p className="text-stone-600">
-          Voice: {s.voice.characters.toLocaleString()} characters for {s.voice.provider}
+          Voice estimate (legacy): about {s.voice.characters.toLocaleString()} characters of script text for {s.voice.provider}, as written, before spoken forms and markup; the Voice page plans the real chunks
         </p>
       </div>
     </div>

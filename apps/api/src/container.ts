@@ -1,7 +1,7 @@
 import { createDatabase, type Database } from '@docengine/database';
 import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers, type JobQueue } from '@docengine/pipeline';
-import type { JobType } from '@docengine/core';
-import { createProviders, describeProviders, type ProviderSet } from '@docengine/providers';
+import type { HealthView, JobType } from '@docengine/core';
+import { createProviders, describeProviders, probeStorage, type ProviderSet } from '@docengine/providers';
 import { createResearchStage, type ResearchConfig } from '@docengine/research';
 import { ScriptEditing, createScriptStage, parseNarrationModes, parseScriptModels, type ScriptConfig } from '@docengine/script';
 import { createStoryAnglesStage, createStoryArchitectureStage, createStoryMiningStage, type StoryConfig } from '@docengine/story';
@@ -27,7 +27,72 @@ export interface AppContainer {
   voice: VoiceService;
   /** Stages backed by real implementations (all others are MOCK placeholders). */
   realStages: JobType[];
+  /** Whether real storage and the real voice provider were reachable at startup (checked once, in the background). */
+  connectivity: ConnectivityCheck;
   close(): Promise<void>;
+}
+
+/** What the startup connectivity checks found, as /api/health reports it. */
+export type Connectivity = Pick<HealthView, 'storage' | 'storageDetail' | 'voice' | 'voiceDetail'>;
+
+export interface ConnectivityCheck {
+  /** Settles when the checks have finished; never rejects. */
+  readonly done: Promise<Connectivity>;
+  /** The result so far: a real provider reads 'error' ("still running") until its check finishes. */
+  current(): Connectivity;
+}
+
+/** A startup check that has not answered by then counts as failed. */
+export const CONNECTIVITY_TIMEOUT_MS = 15_000;
+
+/**
+ * Reaches real storage and the real voice provider once, spending nothing:
+ * a tiny object written, read back and deleted; the configured voice and
+ * model looked up. Never throws and never blocks startup; MOCK providers are
+ * not checked. The result is logged once, without secrets.
+ */
+export function startConnectivityCheck(providers: ProviderSet, logger: Logger, secrets: readonly string[] = []): ConnectivityCheck {
+  const { storage, voice } = providers;
+  let result: Connectivity = {
+    storage: storage.info.mock ? 'mock' : 'error',
+    storageDetail: storage.info.mock ? null : 'Startup check still running',
+    voice: voice.info.mock ? 'mock' : 'error',
+    voiceDetail: voice.info.mock ? null : 'Startup check still running',
+  };
+  const clean = (detail: string) => secrets.filter((x) => x.length >= 4).reduce((d, x) => d.split(x).join('[redacted]'), detail).slice(0, 300);
+  const bounded = async (check: () => Promise<{ ok: boolean; detail: string }>) => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`no answer within ${CONNECTIVITY_TIMEOUT_MS / 1000} s`)), CONNECTIVITY_TIMEOUT_MS);
+        timer.unref();
+      });
+      return await Promise.race([check(), timeout]);
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const done = (async (): Promise<Connectivity> => {
+    const [s, v] = await Promise.all([
+      storage.info.mock ? null : bounded(() => probeStorage(storage)),
+      voice.info.mock ? null : voice.check ? bounded(() => voice.check!()) : { ok: false, detail: `Not checked: the ${voice.info.name} voice provider has no connectivity check` },
+    ]);
+    result = {
+      storage: s ? (s.ok ? 'ok' : 'error') : 'mock',
+      storageDetail: s ? clean(s.detail) : null,
+      voice: v ? (v.ok ? 'ok' : 'error') : 'mock',
+      voiceDetail: v ? clean(v.detail) : null,
+    };
+    if (s || v) {
+      const entry = { storageProvider: storage.info.name, voiceProvider: voice.info.name, voiceModel: voice.defaults.model, ...result };
+      if (result.storage === 'error' || result.voice === 'error') logger.warn(entry, 'connectivity check: a provider is not reachable as configured');
+      else logger.info(entry, 'connectivity check passed');
+    }
+    return result;
+  })();
+  return { done, current: () => result };
 }
 
 export function createContainer(
@@ -76,6 +141,8 @@ export function createContainer(
   const mocks = describeProviders(providers).filter((p) => p.mock).map((p) => p.kind);
   if (mocks.length > 0) logger.warn({ mockProviders: mocks }, 'MOCK providers active: outputs are placeholders, not real work');
   logger.info({ realStages, mockStages: Object.values(handlers).filter((h) => h.mock).map((h) => h.type) }, 'stage handlers');
+  // Only the credentials these vendors receive and could echo back; redacting anything else in a public reply would only hint at it.
+  const connectivity = startConnectivityCheck(providers, logger, [env.ELEVENLABS_API_KEY, env.S3_SECRET_ACCESS_KEY, env.S3_ACCESS_KEY_ID].filter((x): x is string => !!x));
 
   return {
     env,
@@ -88,6 +155,7 @@ export function createContainer(
     scripts: new ScriptEditing(db),
     voice: new VoiceService({ db, projects, providers, config: { confirmCharacters: env.VOICE_CONFIRM_CHARACTERS, maxCharacters: env.VOICE_MAX_CHARACTERS } }),
     realStages,
+    connectivity,
     async close() {
       await runner.stop();
       if (!overrides.db) await db.$disconnect();

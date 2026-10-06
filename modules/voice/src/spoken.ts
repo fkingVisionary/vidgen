@@ -67,6 +67,12 @@ export function ordinalWords(n: number, style: NumberStyle = 'UK'): string {
   return words.slice(0, m.index) + ord;
 }
 
+/** A proper fraction's denominator in words: "half", "quarter", else the ordinal ("third", "eighth", "hundredth"); plural for more than one part. */
+function fractionWords(num: number, den: number, style: NumberStyle): string {
+  const one = den === 2 ? 'half' : den === 4 ? 'quarter' : ordinalWords(den, style).replace(/^one (?=hundred)/, '');
+  return `${numberToWords(num, style)} ${num === 1 ? one : den === 2 ? 'halves' : `${one}s`}`;
+}
+
 /** "1630s" → "sixteen thirties", "1600s" → "sixteen hundreds". */
 function decadeWords(y: number, style: NumberStyle): string {
   const w = yearToWords(y, style);
@@ -124,6 +130,25 @@ export function findSpokenForms(text: string, style: NumberStyle = 'UK'): Found[
       if (cents) spoken += ` and ${numberToWords(cents, style)} ${cents === 1 ? unit.sub.one : unit.sub.many}`;
     } else if (m[3]) spoken = `${numberToWords(whole, style)} point ${[...m[3]].map((d) => ONES[Number(d)]).join(' ')} ${unit.many}`;
     add({ kind: 'CURRENCY', start: m.index, end, spoken, confidence: 'HIGH' });
+  }
+
+  // Fractions, never sent with a slash (a model may read text between slashes as phonemes): "1/3" → "one third", "2 1/2" → "two and a half".
+  // A bare "3/4" may be a date or a name ("9/11"): a guess worth hearing, unless it is a mixed number or a share ("1/3 of").
+  for (const m of text.matchAll(/(?<![\d/.,])\b(?:(\d{1,3})\s)?(\d{1,2})\/(\d{1,3})\b(?![/\d]|[.,]\d)/g)) {
+    const num = Number(m[2]);
+    const den = Number(m[3]);
+    if (!num || num >= den) continue;
+    const end = m.index + m[0].length;
+    const part = m[1] && num === 1 ? `a ${fractionWords(1, den, style).replace(/^one /, '')}` : fractionWords(num, den, style);
+    add({ kind: 'NUMBER', start: m.index, end, spoken: m[1] ? `${numberToWords(Number(m[1]), style)} and ${part}` : part, confidence: m[1] || /^\s+of\b/i.test(text.slice(end)) ? 'HIGH' : 'MEDIUM' });
+  }
+
+  // A season across two years: "1636/37", "1636/1637" (a guess worth hearing: read as a range).
+  for (const m of text.matchAll(/(?<![\d/])\b(\d{4})\/(\d{2}|\d{4})\b(?![/\d])/g)) {
+    const a = Number(m[1]);
+    const b = m[2]!.length === 2 ? Math.floor(a / 100) * 100 + Number(m[2]) : Number(m[2]);
+    if (b !== a + 1) continue;
+    add({ kind: 'RANGE', start: m.index, end: m.index + m[0].length, spoken: `${yearToWords(a, style)} to ${yearToWords(b, style)}`, confidence: 'MEDIUM' });
   }
 
   // "c. 1637", "ca. 1637": about a year.

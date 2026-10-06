@@ -14,7 +14,7 @@ import { ALL_MOCK, createProviders } from '@docengine/providers';
 import { FAKE_CORPUS_GATE, FakeResearchAI, FakeResearchProvider } from '@docengine/research/testing';
 import { FakeStoryAI, seedFakeDossier } from '@docengine/story/testing';
 import { FakeScriptAI } from '@docengine/script/testing';
-import { StoryArchitectureContent, type ResearchView, type ScriptBlockView, type ScriptChangeReport, type ScriptCompareView, type ScriptEditorialView, type ScriptView, type StoryView, type VoiceMomentView, type VoicePlanView, type VoiceRenderPlan, type VoiceView, type WritingCorpusView, type WritingExampleView } from '@docengine/core';
+import { StoryArchitectureContent, type NarrationTimelineView, type ResearchView, type ScriptBlockView, type ScriptChangeReport, type ScriptCompareView, type ScriptEditorialView, type ScriptView, type StoryView, type VoiceMomentView, type VoicePlanView, type VoiceRenderPlan, type VoiceView, type WritingCorpusView, type WritingExampleView } from '@docengine/core';
 import { Prisma } from '@docengine/database';
 
 const db = useTestDatabase();
@@ -947,20 +947,49 @@ describe('voice API', () => {
 
     // "What is being said at 00:01?" and the timeline contract.
     const moment = await app.inject({ method: 'GET', url: `/api/projects/${id}/voice/moment?run=1&at=00:01` });
-    expect(moment.json<VoiceMomentView>()).toMatchObject({ run: 1, chunk: 1, between: false });
+    expect(moment.json<VoiceMomentView>()).toMatchObject({ run: 1, chunk: 1, between: false, part: { audioChunk: { index: 0, audioAssetId: run.chunks[0]!.current!.audioUrl!.split('/').pop() }, approved: false } });
     expect((await app.inject({ method: 'GET', url: `/api/projects/${id}/voice/moment?run=1&at=later` })).statusCode).toBe(409);
-    const timeline = (await app.inject({ method: 'GET', url: `/api/projects/${id}/voice/timeline?run=1` })).json<{ entries: unknown[]; timeline: { scriptBlock: { key: string }; visualHints: unknown }[] }>();
+    const timelineOf = async () => (await app.inject({ method: 'GET', url: `/api/projects/${id}/voice/timeline?run=1` })).json<NarrationTimelineView>();
+    let timeline = await timelineOf();
+    expect(timeline).toMatchObject({ run: 1, scriptVersion: 1, assembly: 1, status: 'IN_REVIEW', complete: false });
     expect(timeline.entries).toHaveLength(run.chunkCount);
-    expect(timeline.timeline[0]).toMatchObject({ scriptBlock: { key: run.chunks[0]!.blockKeys[0] } });
+    // Section, block, chunk, the take's audio file, clock, words, performance and approval: what the storyboard reads.
+    expect(timeline.timeline[0]).toMatchObject({ scriptBlock: { key: run.chunks[0]!.blockKeys[0], sectionKey: run.chunks[0]!.sectionKey }, audioChunk: { index: 0, generationId: run.chunks[0]!.current!.id }, approved: false });
+    expect(timeline.timeline.every((t) => `/api/voice/audio/${t.audioChunk.audioAssetId}` === run.chunks[t.audioChunk.index]!.current!.audioUrl && t.words.length > 0 && t.performance && t.endMs > t.startMs)).toBe(true);
+    expect(timeline.entries.map((e) => `/api/voice/audio/${e.audioAssetId}`)).toEqual(run.chunks.map((ch) => ch.current!.audioUrl));
 
-    // Decisions: approve one take, regenerate another (the first take is kept).
+    // Decisions: approve one take (the timeline says so at once), regenerate another (the first take is kept).
     const take = run.chunks[0]!.current!;
     expect((await app.inject({ method: 'POST', url: `/api/voice/generations/${take.id}/decision`, payload: { action: 'APPROVE' } })).statusCode).toBe(200);
+    timeline = await timelineOf();
+    expect(timeline.timeline.map((t) => t.approved)).toEqual(timeline.timeline.map((t) => t.audioChunk.index === 0));
     expect((await app.inject({ method: 'POST', url: `/api/voice/runs/${run.id}/regenerate`, payload: { chunkIds: [run.chunks[1]!.id] } })).statusCode).toBe(202);
     await c.runner.drain();
     v = await voice(app, id);
     expect(v.run!.chunks[0]!.current).toMatchObject({ status: 'APPROVED' });
-    expect(v.run!.chunks[1]!.generations.map((g) => g.generation)).toEqual([2, 1]);
+    expect(v.run!.chunks[1]!.generations.map((g) => [g.generation, g.status])).toEqual([
+      [2, 'IN_REVIEW'],
+      [1, 'SUPERSEDED'],
+    ]);
+    expect(v.run!.assemblies.map((a) => a.version)).toEqual([2, 1]);
+    expect((await timelineOf()).assembly).toBe(2);
+
+    // Comparisons and A/B takes buy several narrations of the same words: always confirmed.
+    const experiment = await app.inject({ method: 'POST', url: `/api/projects/${id}/voice/experiments`, payload: { scope: { kind: 'AUDITION', seconds: 20 }, name: 'Tiny (test)', variants: [{ strategy: 'PLAIN' }, { strategy: 'RESTRAINED' }] } });
+    expect(experiment.statusCode).toBe(409);
+    expect(experiment.json<{ message: string }>().message).toMatch(/^Comparison: \d+ characters .* across 2 variants — confirm to go ahead$/);
+    const ab = { chunkIds: [run.chunks[2]!.id], variants: [{ label: 'A neutral' }, { label: 'B expressive', strategy: 'EXPRESSIVE' }] };
+    expect((await app.inject({ method: 'POST', url: `/api/voice/runs/${run.id}/regenerate`, payload: ab })).statusCode).toBe(409);
+    const queued = await app.inject({ method: 'POST', url: `/api/voice/runs/${run.id}/regenerate`, payload: { ...ab, confirm: true } });
+    expect(queued.statusCode).toBe(202);
+    expect(queued.json<{ takes: number }>().takes).toBe(2);
+    await c.runner.drain();
+    v = await voice(app, id);
+    expect(v.run!.chunks[2]!.generations.map((g) => [g.variant, g.status, g.current])).toEqual([
+      ['B expressive', 'GENERATED', false],
+      ['A neutral', 'GENERATED', false],
+      [null, 'IN_REVIEW', true],
+    ]);
 
     // An audition is not the narration.
     const gate = await app.inject({ method: 'POST', url: `/api/projects/${id}/approvals`, payload: { gate: 'VOICE', decision: 'APPROVED' } });

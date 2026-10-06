@@ -34,6 +34,8 @@ export function takeQa(t: TakeQaInput): VoiceQaFinding[] {
   if (t.mock) add('MOCK_AUDIO', 'WARNING', 'MOCK audio (a beep and silence): no speech was synthesised');
 
   const words = countWords(t.canonical);
+  // The rate is of what the voice says: "1637" is two spoken words ("sixteen thirty-seven"), "ƒ3,000" three.
+  const spoken = countWords(t.spokenText) || words;
   if (!t.alignment) add('MISSING_ALIGNMENT', 'BLOCKING', 'No timestamps came back: the take cannot be placed on the narration timeline');
   else if (t.alignment.unmatchedWords > 0) {
     const share = t.alignment.unmatchedWords / Math.max(1, words);
@@ -44,7 +46,7 @@ export function takeQa(t: TakeQaInput): VoiceQaFinding[] {
     const first = t.alignment.words[0]!;
     const last = t.alignment.words.at(-1)!;
     const speechMs = Math.max(1, last.endMs - first.startMs);
-    const wpm = Math.round((words / speechMs) * 60_000);
+    const wpm = Math.round((spoken / speechMs) * 60_000);
     if (wpm < RATE_LIMITS.blockBelow || wpm > RATE_LIMITS.blockAbove) add('DURATION_ANOMALY', 'BLOCKING', `${wpm} words a minute over ${(speechMs / 1000).toFixed(1)} s: far outside narration pace — listen for missing, repeated or garbled words`);
     else if (wpm < RATE_LIMITS.warnBelow || wpm > RATE_LIMITS.warnAbove) add('DURATION_ANOMALY', 'WARNING', `${wpm} words a minute: ${wpm < RATE_LIMITS.warnBelow ? 'slow' : 'fast'} for documentary narration`);
     if (first.startMs > SILENCE_LIMITS.leadingMs) add('EXCESSIVE_SILENCE', 'WARNING', `${(first.startMs / 1000).toFixed(1)} s of silence before the first word`);
@@ -54,8 +56,8 @@ export function takeQa(t: TakeQaInput): VoiceQaFinding[] {
       const gap = t.alignment.words[i]!.startMs - t.alignment.words[i - 1]!.endMs;
       if (gap > SILENCE_LIMITS.insideMs) add('EXCESSIVE_SILENCE', 'WARNING', `${(gap / 1000).toFixed(1)} s of silence before "${t.alignment.words[i]!.word}"`);
     }
-  } else if (t.durationMs && words) {
-    const wpm = Math.round((words / t.durationMs) * 60_000);
+  } else if (t.durationMs && spoken) {
+    const wpm = Math.round((spoken / t.durationMs) * 60_000);
     if (wpm < RATE_LIMITS.blockBelow || wpm > RATE_LIMITS.blockAbove) add('DURATION_ANOMALY', 'BLOCKING', `${wpm} words a minute (whole clip): far outside narration pace`);
   }
 

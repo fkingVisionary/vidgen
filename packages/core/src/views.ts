@@ -491,6 +491,17 @@ export interface HealthView {
   providers: ProviderStatusView[];
   /** Pipeline stages backed by real implementations; the rest are MOCK placeholders. */
   realStages: JobType[];
+  /**
+   * Connectivity, checked at startup without spending anything (the HTTP
+   * status stays tied to the database). Storage writes, reads back and
+   * deletes a tiny object; the voice provider looks up the configured voice
+   * and model. 'mock': nothing real to check.
+   */
+  storage: 'ok' | 'error' | 'mock';
+  voice: 'ok' | 'error' | 'mock';
+  /** What each check found, or why it failed (short; never a secret); null when not checked. */
+  storageDetail: string | null;
+  voiceDetail: string | null;
 }
 
 // ---------------------------------------------------------------------------

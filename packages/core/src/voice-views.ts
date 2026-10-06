@@ -69,6 +69,8 @@ export interface VoicePlanChunkView {
   words: number;
   boundary: ChunkBoundary;
   performance: ChunkPerformance;
+  /** Planned seconds: spoken words at the narration rate and the chunk's pace, plus its inside pauses (outside CHUNK_SECONDS.natural is worth a look). */
+  estimatedSec: number;
   /** What would be sent, and the checks it would pass. */
   performanceText: string;
   characters: number;
@@ -101,6 +103,8 @@ export interface VoiceGenerationView {
   voiceId: string;
   profile: { id: string; name: string; version: number };
   strategy: PerformanceStrategy;
+  /** The A/B variant this take was made as (never made current by itself), or null. */
+  variant: string | null;
   /** The text sent (derived; never the script). */
   performanceText: string | null;
   spokenText: string | null;
@@ -156,6 +160,17 @@ export interface VoiceAssemblyView {
   createdAt: string;
 }
 
+/** One assembly version of a run (a new one whenever a current take changes); every version stays playable. */
+export interface VoiceAssemblyVersionView {
+  id: string;
+  version: number;
+  status: ArtifactStatus;
+  totalDurationMs: number;
+  complete: boolean;
+  audioUrl: string;
+  createdAt: string;
+}
+
 export interface VoiceRunSummaryView {
   id: string;
   number: number;
@@ -182,7 +197,10 @@ export interface VoiceRunView extends VoiceRunSummaryView {
   settings: { chunking: ChunkingSettings; context: ContextSettings };
   notes: string | null;
   chunks: VoiceChunkView[];
+  /** The latest assembly. */
   assembly: VoiceAssemblyView | null;
+  /** Every assembly version, newest first. */
+  assemblies: VoiceAssemblyVersionView[];
   qa: VoiceQaFinding[];
   /** "Audio generated from Script v4 — current script is v5." */
   staleNote: string | null;
@@ -221,6 +239,23 @@ export interface VoiceView {
   activeJob: JobView | null;
 }
 
+/**
+ * The narration timeline of a run's latest assembly, as the storyboard reads
+ * it: once real narration exists, this clock is authoritative, not the
+ * script's estimated runtime.
+ */
+export interface NarrationTimelineView {
+  run: number;
+  scriptVersion: number;
+  assembly: number;
+  status: ArtifactStatus;
+  complete: boolean;
+  totalDurationMs: number;
+  entries: AssemblyEntry[];
+  /** Each block part, with whether its take is approved now (read when asked, not when assembled). */
+  timeline: (NarrationTimelineEntry & { approved: boolean })[];
+}
+
 /** "What is being said at 02:43?" */
 export interface VoiceMomentView {
   atMs: number;
@@ -234,4 +269,6 @@ export interface VoiceMomentView {
   between: boolean;
   startMs: number;
   endMs: number;
+  /** The block part heard, as the timeline gives it: the take's audio file, timed words, performance, visual hints and approval. */
+  part: NarrationTimelineView['timeline'][number];
 }

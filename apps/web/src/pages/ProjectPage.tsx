@@ -246,9 +246,12 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
   // The architecture is generated from the Story page, where the selection it is built from is visible;
   // the real script is written from the Script page, where the approved architecture and every version are.
   const scriptOnItsPage = realStages.includes('SCRIPT');
-  const runnableJobs = p.actions.runnableJobs.filter((t) => !(p.status === 'STORY_SELECTION' && t === 'STORY_ARCHITECTURE') && !(scriptOnItsPage && t === 'SCRIPT'));
+  // Real narration is planned, confirmed and reviewed chunk by chunk on the Voice page.
+  const voiceOnItsPage = realStages.includes('VOICE');
+  const runnableJobs = p.actions.runnableJobs.filter((t) => !(p.status === 'STORY_SELECTION' && t === 'STORY_ARCHITECTURE') && !(scriptOnItsPage && t === 'SCRIPT') && !(voiceOnItsPage && t === 'VOICE'));
   const storyPage = `/projects/${p.slug}/story`;
   const scriptPage = `/projects/${p.slug}/script`;
+  const voicePage = `/projects/${p.slug}/voice`;
 
   return (
     <Card title="Next actions">
@@ -287,6 +290,16 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
             <p className="mt-1 text-sm text-sky-900">The Script Engine turns the approved story architecture into narration, section by section, and stops for your review. No voice is generated.</p>
             <Link to={scriptPage} className={`${button} mt-2 inline-block bg-sky-700 text-white hover:bg-sky-600`}>
               Open the Script page →
+            </Link>
+          </div>
+        )}
+
+        {voiceOnItsPage && (p.status === 'SCRIPT_APPROVED' || p.status === 'VOICE_GENERATING' || p.status === 'VOICE_REVIEW') && (
+          <div className="rounded-md border border-sky-200 bg-sky-50 p-3">
+            <p className="text-sm font-medium text-sky-950">{p.status === 'SCRIPT_APPROVED' ? 'Your turn: narrate the approved script' : p.status === 'VOICE_GENERATING' ? 'Narration is being generated' : 'Your turn: review the narration'}</p>
+            <p className="mt-1 text-sm text-sky-900">The Voice page plans small natural chunks, shows what each would send and cost before anything is generated, and keeps every take for your review.</p>
+            <Link to={voicePage} className={`${button} mt-2 inline-block bg-sky-700 text-white hover:bg-sky-600`}>
+              Open the Voice page →
             </Link>
           </div>
         )}

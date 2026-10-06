@@ -50,6 +50,27 @@ describe('spoken forms', () => {
     expect(say('The 14th buyer.')).toBe('The fourteenth buyer.');
   });
 
+  it('speaks fractions and two-year seasons as words, never with a slash (a model may read text between slashes as phonemes)', () => {
+    const say = (t: string) => toSpoken(t).text;
+    expect(say('About 1/3 of the buyers, then 2/3, then 3/4 of them.')).toBe('About one third of the buyers, then two thirds, then three quarters of them.');
+    expect(say('It took 2 1/2 weeks and 1 1/4 more; 5/8 and 7/10 were left.')).toBe('It took two and a half weeks and one and a quarter more; five eighths and seven tenths were left.');
+    const season = toSpoken('In the winter of 1636/37 the price peaked.');
+    expect(season.text).toBe('In the winter of sixteen thirty-six to sixteen thirty-seven the price peaked.');
+    expect(season.forms.map((f) => [f.kind, f.display, f.confidence])).toEqual([['RANGE', '1636/37', 'MEDIUM']]);
+    expect(unspokenLeft(say('About 1/3 of them, in 1636/1637.'))).toEqual([]);
+    expect(say('In 1637 1/3 of them sold.')).toBe('In sixteen thirty-seven one third of them sold.');
+    // Not a fraction: left as written, and the take's checks warn about the slash.
+    expect(say('Open 24/7, they said.')).toBe('Open twenty-four/seven, they said.');
+    expect(say('About 1/100 of them, then 3/100, then 1 1/100.')).toBe('About one hundredth of them, then three hundredths, then one and a hundredth.');
+    // A share or a mixed number is a fraction; a bare one may be a date or a name, so it is marked for review.
+    const confidence = (t: string) => toSpoken(t).forms.map((f) => [f.display, f.spoken, f.confidence]);
+    expect(confidence('About 1/3 of the buyers, for 2 1/2 weeks.')).toEqual([
+      ['1/3', 'one third', 'HIGH'],
+      ['2 1/2', 'two and a half', 'HIGH'],
+    ]);
+    expect(confidence('After 9/11 nothing was the same.')).toEqual([['9/11', 'nine elevenths', 'MEDIUM']]);
+  });
+
   it('marks a guess for review: a four-digit number with nothing saying it is a year', () => {
     const forms = findSpokenForms('He kept 1637 bulbs in the cellar, and sold them in 1638.');
     expect(forms.map((f) => [f.display, f.kind, f.spoken, f.confidence])).toEqual([

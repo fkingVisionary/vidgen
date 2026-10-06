@@ -1,4 +1,9 @@
 import {
+  CHUNK_BOUNDARY_LABELS,
+  CHUNK_SECONDS,
+  ChunkingSettings,
+  ContextSettings,
+  DEFAULT_VOICE_PROFILE_CONFIG,
   PERFORMANCE_STRATEGIES,
   PERFORMANCE_STRATEGY_HELP,
   PERFORMANCE_STRATEGY_LABELS,
@@ -7,26 +12,29 @@ import {
   PRONUNCIATION_STATUSES,
   PRONUNCIATION_STATUS_LABELS,
   PRONUNCIATION_TERM_KIND_LABELS,
+  VOICE_ACCEPTANCE_EXPERIMENT,
   VOICE_RUN_KIND_LABELS,
-  type ContextSettings,
   type PerformanceStrategy,
   type PronunciationMethod,
   type PronunciationStatus,
+  type VoicePlanChunkView,
   type VoicePlanView,
   type VoicePronunciationView,
+  type VoiceRunOptions,
   type VoiceRunView,
   type VoiceScope,
   type VoiceView,
 } from '@docengine/core';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { api } from '../api.ts';
 import { StatusBadge } from '../components/badges.tsx';
 import { Section } from '../components/evidence.tsx';
 import { ProjectNav } from '../components/ProjectNav.tsx';
-import { ChunkCard, Findings, Player, button, clock, pill, secondary, seconds, useVoiceRequest } from '../components/voice.tsx';
+import { AssemblyStatus, ChunkCard, Findings, Length, NumberedText, Player, button, clock, link, pill, secondary, seconds, useVoiceRequest } from '../components/voice.tsx';
 import { formatDate, formatUsd } from '../format.ts';
+import { CHUNK_SIZES, CONTEXTS, NO_CONTEXT, contextLabel, costWords, experimentRuns, outsideNatural, plansEstimate, sizeLabel, takesEstimate } from '../voice-plan.ts';
 
 type Tab = 'run' | 'generate' | 'pronunciation' | 'profile';
 
@@ -48,11 +56,13 @@ export function VoicePage() {
   const voice = useQuery({ queryKey: ['voice', id, runNumber], queryFn: () => api.voice(id, runNumber), refetchInterval: running ? 2_000 : false });
   const [tab, setTab] = useState<Tab>('run');
   const stamp = project.data ? `${project.data.status}|${project.data.jobs.filter((j) => j.type === 'VOICE').map((j) => `${j.id}:${j.status}`).join(',')}` : null;
+  const queryClient = useQueryClient();
   const last = useRef<string | null>(null);
+  // A voice job started or finished: read every run shown again (a comparison shows several).
   useEffect(() => {
-    if (stamp !== null && last.current !== null && last.current !== stamp) void voice.refetch();
+    if (stamp !== null && last.current !== null && last.current !== stamp) void queryClient.invalidateQueries({ queryKey: ['voice'] });
     last.current = stamp;
-  }, [stamp, voice]);
+  }, [stamp, queryClient]);
 
   if (project.isPending || voice.isPending) return <p className="text-sm text-stone-500">Loading…</p>;
   if (project.isError) return <p className="text-sm text-red-700">Could not load the project: {project.error.message}</p>;
@@ -99,20 +109,34 @@ export function VoicePage() {
       </div>
 
       <ProviderStrip view={v} />
-      {running && <p className="rounded-md bg-sky-50 p-3 text-sm text-sky-900">Generating takes… this page updates as each chunk is done.</p>}
+      {running && (
+        <p className="rounded-md bg-sky-50 p-3 text-sm text-sky-900" role="status">
+          Generating takes… this page updates as each chunk is done.
+        </p>
+      )}
       <Gate view={v} projectId={p.id} />
 
-      <div className="flex flex-wrap gap-1 border-b border-stone-200">
+      <div role="tablist" aria-label="Voice" className="flex flex-wrap gap-1 border-b border-stone-200">
         {tabs.map(([t, label]) => (
-          <button key={t} onClick={() => setTab(t)} className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === t ? 'border-stone-900 font-medium text-stone-900' : 'border-transparent text-stone-500 hover:text-stone-800'}`}>
+          <button
+            key={t}
+            role="tab"
+            id={`voice-tab-${t}`}
+            aria-selected={tab === t}
+            aria-controls="voice-panel"
+            onClick={() => setTab(t)}
+            className={`-mb-px min-h-6 border-b-2 px-3 py-2 text-sm ${tab === t ? 'border-stone-900 font-medium text-stone-900' : 'border-transparent text-stone-500 hover:text-stone-800'}`}
+          >
             {label}
           </button>
         ))}
       </div>
-      {tab === 'run' && (v.run ? <RunTab view={v} run={v.run} projectId={p.id} /> : <p className="text-sm text-stone-500">No voice run yet: start with an audition of the opening.</p>)}
-      {tab === 'generate' && <GenerateTab view={v} projectId={p.id} onQueued={(n) => showRun(n)} />}
-      {tab === 'pronunciation' && <PronunciationTab items={v.pronunciations} />}
-      {tab === 'profile' && <ProfileTab view={v} projectId={p.id} />}
+      <div role="tabpanel" id="voice-panel" aria-labelledby={`voice-tab-${tab}`}>
+        {tab === 'run' && (v.run ? <RunTab key={v.run.id} view={v} run={v.run} projectId={p.id} projectRef={id} running={running} onOpen={showRun} /> : <p className="text-sm text-stone-500">No voice run yet: start with an audition of the opening.</p>)}
+        {tab === 'generate' && <GenerateTab view={v} projectId={p.id} onQueued={showRun} />}
+        {tab === 'pronunciation' && <PronunciationTab items={v.pronunciations} />}
+        {tab === 'profile' && <ProfileTab view={v} projectId={p.id} />}
+      </div>
     </div>
   );
 }
@@ -164,12 +188,15 @@ function Gate({ view: v, projectId }: { view: VoiceView; projectId: string }) {
   );
 }
 
-function RunTab({ view: v, run: r, projectId }: { view: VoiceView; run: VoiceRunView; projectId: string }) {
+function RunTab({ view: v, run: r, projectId, projectRef, running, onOpen }: { view: VoiceView; run: VoiceRunView; projectId: string; projectRef: string; running: boolean; onOpen: (run: number) => void }) {
   const approveAll = useVoiceRequest(() => api.approveAllTakes(r.id));
   const blocking = r.qa.filter((f) => f.severity === 'BLOCKING');
   const canGenerate = v.editorial.generate.allowed && !r.stale;
   const [at, setAt] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [versions, setVersions] = useState(false);
   const moment = useQuery({ queryKey: ['voice', 'moment', projectId, r.number, at], queryFn: () => api.voiceMoment(projectId, r.number, at), enabled: false, retry: false });
+  const earlier = r.assemblies.filter((a) => a.id !== r.assembly?.id);
   return (
     <div className="space-y-4">
       {r.staleNote && <p className="rounded-md bg-red-50 p-3 text-sm text-red-900">{r.staleNote}. Stale audio is never reused: start a new run for the current script.</p>}
@@ -177,7 +204,7 @@ function RunTab({ view: v, run: r, projectId }: { view: VoiceView; run: VoiceRun
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
           <Stat label="Script" value={`v${r.scriptVersion}`} />
           <Stat label="Performance" value={PERFORMANCE_STRATEGY_LABELS[r.strategy]} />
-          <Stat label="Chunks" value={`${r.chunkCount} (${r.settings.chunking.minWords}–${r.settings.chunking.maxWords} words)`} />
+          <Stat label="Chunks" value={`${r.chunkCount} · ${sizeLabel(r.settings.chunking)}`} />
           <Stat label="Characters" value={r.characters.toLocaleString()} />
           <Stat label="Cost" value={`${formatUsd(r.cost.totalUsd)}${r.cost.basis ? ` (${r.cost.basis.toLowerCase()})` : ''}`} />
           <Stat label="Generated audio" value={seconds(r.durationMs)} />
@@ -186,18 +213,43 @@ function RunTab({ view: v, run: r, projectId }: { view: VoiceView; run: VoiceRun
           <Stat label="Regenerations" value={String(r.stats.regenerations)} />
           <Stat label="Failures" value={String(r.stats.failures)} />
           <Stat label="Voice" value={`${r.profile.name} v${r.profile.version} · ${r.profile.modelId}`} />
-          <Stat label="Context" value={r.settings.context.stitch ? 'stitched to the previous take' : r.settings.context.previousChars || r.settings.context.nextChars ? `neighbouring text (${r.settings.context.previousChars}/${r.settings.context.nextChars} chars)` : 'none'} />
+          <Stat label="Context" value={contextLabel(r.settings.context)} />
         </dl>
         <p className="mt-2 text-xs text-stone-500">
           {r.label} · created {formatDate(r.createdAt)}
         </p>
       </Section>
+      {r.experiment && <ExperimentComparison view={v} run={r} projectRef={projectRef} running={running} onOpen={onOpen} />}
       {r.assembly && (
         <Section title={`Assembled narration v${r.assembly.version} — ${clock(r.assembly.totalDurationMs)}`}>
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-stone-500">
+            <AssemblyStatus status={r.assembly.status} />
+            <span>assembled {formatDate(r.assembly.createdAt)}</span>
+          </div>
           <Player src={r.assembly.audioUrl} label={`Voice run ${r.number}, assembled`} />
           <p className="mt-1 text-xs text-stone-500">
-            {r.assembly.entries.length} takes in order on their measured durations, with the scripted pauses between them{r.assembly.complete ? ' · the whole script' : ''}.
+            {r.assembly.entries.length} takes in order on their measured durations, with the scripted pauses between them{r.assembly.complete ? ' · the whole script' : ''}. A new version is assembled whenever a current take changes; nothing is approved by assembling.
           </p>
+          {earlier.length > 0 && (
+            <button onClick={() => setVersions((x) => !x)} aria-expanded={versions} className={`${link} mt-1`}>
+              {versions ? 'Hide earlier versions' : `Earlier versions (${earlier.length})`}
+            </button>
+          )}
+          {versions && (
+            <ul className="mt-1 space-y-2">
+              {earlier.map((a) => (
+                <li key={a.id} className="rounded-md border border-stone-200 p-2 text-xs text-stone-600">
+                  <p className="mb-1 flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-stone-800">v{a.version}</span>
+                    <span>{clock(a.totalDurationMs)}</span>
+                    <AssemblyStatus status={a.status} />
+                    <span>{formatDate(a.createdAt)}</span>
+                  </p>
+                  <Player src={a.audioUrl} label={`Voice run ${r.number}, assembly v${a.version}`} />
+                </li>
+              ))}
+            </ul>
+          )}
           <form
             className="mt-2 flex flex-wrap items-center gap-2"
             onSubmit={(e) => {
@@ -237,9 +289,16 @@ function RunTab({ view: v, run: r, projectId }: { view: VoiceView; run: VoiceRun
           )}
         </div>
       </Section>
+      {canGenerate && <RegeneratePanel run={r} selected={selected} mock={v.provider.mock} onDone={() => setSelected([])} />}
       <div className="space-y-3">
         {r.chunks.map((c) => (
-          <ChunkCard key={c.id} chunk={c} runId={r.id} canGenerate={canGenerate} />
+          <ChunkCard
+            key={c.id}
+            chunk={c}
+            runId={r.id}
+            canGenerate={canGenerate}
+            {...(canGenerate ? { selected: selected.includes(c.id), onSelect: (on: boolean) => setSelected((s) => (on ? [...s, c.id] : s.filter((x) => x !== c.id))) } : {})}
+          />
         ))}
       </div>
     </div>
@@ -255,62 +314,258 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-const SIZES: { label: string; minWords: number; maxWords: number }[] = [
-  { label: 'House default (25–80 words)', minWords: 25, maxWords: 80 },
-  { label: 'Small (20–40 words)', minWords: 20, maxWords: 40 },
-  { label: 'Medium (40–80 words)', minWords: 40, maxWords: 80 },
-  { label: 'Large (80–120 words)', minWords: 80, maxWords: 120 },
-];
-const CONTEXTS: { label: string; context: ContextSettings }[] = [
-  { label: 'Neighbouring text (a sentence or two)', context: { previousChars: 200, nextChars: 120, stitch: false } },
-  { label: 'No context', context: { previousChars: 0, nextChars: 0, stitch: false } },
-  { label: 'Stitched to the previous take (request ids)', context: { previousChars: 200, nextChars: 120, stitch: true } },
-];
+/**
+ * Every run of the selected run's comparison side by side: what each variant
+ * changed, what it measured, and its assembled audio to hear whole.
+ */
+function ExperimentComparison({ view: v, run: r, projectRef, running, onOpen }: { view: VoiceView; run: VoiceRunView; projectRef: string; running: boolean; onOpen: (run: number) => void }) {
+  const group = experimentRuns(v.runs, r.number);
+  const views = useQueries({ queries: group.map((g) => ({ queryKey: ['voice', projectRef, g.number], queryFn: () => api.voice(projectRef, g.number), refetchInterval: running ? 4_000 : (false as const) })) });
+  const questions = new Map(r.experiment === VOICE_ACCEPTANCE_EXPERIMENT.name ? VOICE_ACCEPTANCE_EXPERIMENT.variants.map((x) => [x.label, x.question]) : []);
+  if (group.length < 2) return null;
+  return (
+    <Section title={`Comparison “${r.experiment}” — ${group.length} variants`}>
+      <p className="mb-2 text-xs text-stone-500">The same passage narrated {group.length} ways in one job. Hear each variant whole, then open one to review its chunks. Lengths are measured from the audio.</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {group.map((g, i) => {
+          const full = views[i]?.data?.run ?? (g.number === r.number ? r : null);
+          const meanMs = g.durationMs !== null && g.chunkCount ? g.durationMs / g.chunkCount : null;
+          return (
+            <div key={g.id} className={`min-w-0 rounded-md border p-2 text-xs ${g.number === r.number ? 'border-stone-900' : 'border-stone-200'}`} data-variant={g.variant ?? ''} aria-current={g.number === r.number ? 'true' : undefined}>
+              <p className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-stone-900">{g.variant}</span>
+                <span className="text-stone-500">run {g.number}</span>
+                {g.number === r.number && <span className={`${pill} bg-stone-900 text-white`}>shown</span>}
+              </p>
+              {questions.get(g.variant ?? '') && <p className="text-stone-500">{questions.get(g.variant ?? '')}</p>}
+              <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
+                <Stat label="Performance" value={PERFORMANCE_STRATEGY_LABELS[g.strategy]} />
+                <Stat label="Chunk size" value={full ? sizeLabel(full.settings.chunking) : '…'} />
+                <Stat label="Context" value={full ? contextLabel(full.settings.context) : '…'} />
+                <Stat label="Chunks" value={String(g.chunkCount)} />
+                <Stat label="Measured length" value={g.durationMs !== null ? clock(g.durationMs) : 'not all generated'} />
+                <Stat label="Mean chunk" value={meanMs !== null ? seconds(meanMs) : '—'} />
+                <Stat label="Characters" value={g.characters.toLocaleString()} />
+                <Stat label="Cost" value={`${formatUsd(g.cost.totalUsd)}${g.cost.basis ? ` (${g.cost.basis.toLowerCase()})` : ''}`} />
+              </dl>
+              <div className="mt-1">{full?.assembly ? <Player src={full.assembly.audioUrl} label={`${g.variant ?? `Run ${g.number}`}, assembled`} /> : <p className="text-stone-500">{full ? 'Not assembled yet.' : 'Loading…'}</p>}</div>
+              {g.number !== r.number && (
+                <button onClick={() => onOpen(g.number)} className={`${link} mt-1`}>
+                  Open run {g.number} to review its chunks
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * New takes for several chunks in one job — the chosen ones, a section or
+ * every chunk — or an A/B of the chosen ones kept beside their current
+ * takes. Always confirmed against what it would send and cost.
+ */
+function RegeneratePanel({ run: r, selected, mock, onDone }: { run: VoiceRunView; selected: string[]; mock: boolean; onDone: () => void }) {
+  const sections = [...new Set(r.chunks.map((c) => c.sectionKey))];
+  const [what, setWhat] = useState<'selected' | 'section' | 'all'>('selected');
+  const [section, setSection] = useState(sections[0] ?? '');
+  const [ab, setAb] = useState(false);
+  const [strategy, setStrategy] = useState<PerformanceStrategy | ''>('');
+  const [a, setA] = useState<PerformanceStrategy>('RESTRAINED');
+  const [b, setB] = useState<PerformanceStrategy>('EXPRESSIVE');
+  const [note, setNote] = useState('');
+  const [confirmed, setConfirmed] = useState<string | null>(null);
+  const chunks = what === 'selected' ? r.chunks.filter((c) => selected.includes(c.id)) : what === 'section' ? r.chunks.filter((c) => c.sectionKey === section) : r.chunks;
+  const variants = what === 'selected' && ab ? [a, b] : null;
+  const estimate = takesEstimate(chunks, variants?.length ?? 1, r, mock);
+  // The tick belongs to exactly this request and the estimate it was given: any change asks again.
+  const key = JSON.stringify({ what, chunks: chunks.map((c) => c.id), variants, strategy, estimate });
+  const send = useVoiceRequest(
+    () =>
+      api.regenerateVoice(r.id, {
+        ...(what === 'selected' ? { chunkIds: chunks.map((c) => c.id) } : what === 'section' ? { section: Number(section.replace(/\D/g, '')) } : { all: true }),
+        ...(variants ? { variants: variants.map((s, i) => ({ label: `${'AB'[i]} ${s.toLowerCase()}`, strategy: s })) } : strategy ? { strategy } : {}),
+        ...(note.trim() ? { note: note.trim() } : {}),
+        confirm: true,
+      }),
+    () => {
+      setConfirmed(null);
+      setNote('');
+      onDone();
+    },
+  );
+  const pick = (letter: string, value: PerformanceStrategy, set: (s: PerformanceStrategy) => void) => (
+    <label className="min-w-0 flex-1">
+      <span className="block text-xs text-stone-500">Take {letter}</span>
+      <select value={value} onChange={(e) => set(e.target.value as PerformanceStrategy)} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
+        {PERFORMANCE_STRATEGIES.map((x) => (
+          <option key={x} value={x}>
+            {PERFORMANCE_STRATEGY_LABELS[x]}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+  const label = what === 'selected' ? (variants ? `Generate the A/B takes (${chunks.length} chunk${chunks.length === 1 ? '' : 's'})` : `Regenerate selected (${chunks.length})`) : what === 'section' ? `Regenerate section ${section}` : `Regenerate every chunk (${chunks.length})`;
+  return (
+    <Section title="Regenerate several chunks">
+      <p className="mb-2 text-xs text-stone-500">One job, new takes only for these chunks; earlier takes are kept and the others are untouched. A/B takes stay beside the current take until you pick one with “Use this take”.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="text-sm">
+          <span className="block text-xs text-stone-500">Which chunks</span>
+          <select value={what} onChange={(e) => setWhat(e.target.value as typeof what)} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
+            <option value="selected">The chunks selected below ({selected.length})</option>
+            <option value="section">One section</option>
+            <option value="all">Every chunk of this run ({r.chunks.length})</option>
+          </select>
+        </label>
+        {what === 'section' && (
+          <label className="text-sm">
+            <span className="block text-xs text-stone-500">Section</span>
+            <select value={section} onChange={(e) => setSection(e.target.value)} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
+              {sections.map((s) => (
+                <option key={s} value={s}>
+                  {s} ({r.chunks.filter((c) => c.sectionKey === s).length} chunks)
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {what === 'selected' && (
+          <label className="flex min-h-6 items-center gap-2 text-sm sm:self-end">
+            <input type="checkbox" checked={ab} onChange={(e) => setAb(e.target.checked)} /> As an A/B comparison
+          </label>
+        )}
+        {variants ? (
+          <div className="flex gap-2 text-sm sm:col-span-2">
+            {pick('A', a, setA)}
+            {pick('B', b, setB)}
+          </div>
+        ) : (
+          <label className="text-sm">
+            <span className="block text-xs text-stone-500">Performance of the new takes</span>
+            <select value={strategy} onChange={(e) => setStrategy(e.target.value as PerformanceStrategy | '')} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
+              <option value="">As this run ({PERFORMANCE_STRATEGY_LABELS[r.strategy]})</option>
+              {PERFORMANCE_STRATEGIES.map((x) => (
+                <option key={x} value={x}>
+                  {PERFORMANCE_STRATEGY_LABELS[x]}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label className="text-sm sm:col-span-2">
+          <span className="block text-xs text-stone-500">Note (kept with each new take)</span>
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={1000} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" />
+        </label>
+      </div>
+      {chunks.length ? (
+        <div className="mt-3 space-y-2">
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={confirmed === key} onChange={(e) => setConfirmed(e.target.checked ? key : null)} />
+            <span>
+              I confirm {estimate.takes} new take{estimate.takes === 1 ? '' : 's'} of {chunks.length} chunk{chunks.length === 1 ? '' : 's'}: about {estimate.characters.toLocaleString()} characters, {costWords(estimate)} (from what these chunks sent last time).
+            </span>
+          </label>
+          <button disabled={send.isPending || confirmed !== key} onClick={() => send.mutate(undefined)} className={`${button} bg-stone-900 text-white hover:bg-stone-800`}>
+            {label}
+          </button>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-stone-500">Select chunks with their “Select” box below.</p>
+      )}
+      {send.error && <p className="mt-2 text-sm text-red-700">{send.error.message}</p>}
+    </Section>
+  );
+}
+
+// ── Planning and generating ─────────────────────────────────────────────────
+
+interface VariantRequest {
+  label: string;
+  options: VoiceRunOptions;
+  question?: string;
+}
+interface VariantPlan extends VariantRequest {
+  plan: VoicePlanView;
+}
+
+/**
+ * Plans and a confirmation that belong to one exact request: when the
+ * request changes they are dropped before the next render, so a plan or a
+ * tick made for other inputs can never queue them. Every plan is made on
+ * one profile and the run is generated on it (`profileId`): a profile
+ * version made since, in another tab, cannot change what was confirmed.
+ */
+function usePlans(projectId: string, key: string, scope: VoiceScope, variants: readonly VariantRequest[]) {
+  const [state, setState] = useState<{ key: string; plans: VariantPlan[] | null; confirmed: boolean }>({ key, plans: null, confirmed: false });
+  if (state.key !== key) setState({ key, plans: null, confirmed: false });
+  const current = state.key === key ? state : { key, plans: null, confirmed: false };
+  const plan = useVoiceRequest(async () => {
+    const plans: VariantPlan[] = [];
+    // One after another: each plan brings the pronunciation list up to date, and the first fixes the profile.
+    for (const v of variants) {
+      const profileId = plans[0]?.plan.profile.id;
+      plans.push({ ...v, plan: await api.voiceRunPlan(projectId, { scope, options: v.options, ...(profileId ? { profileId } : {}) }) });
+    }
+    setState((s) => (s.key === key ? { ...s, plans } : s));
+  });
+  const setConfirmed = (confirmed: boolean) => setState((s) => (s.key === key ? { ...s, confirmed } : s));
+  return { plans: current.plans, profileId: current.plans?.[0]?.plan.profile.id, confirmed: current.confirmed, setConfirmed, plan };
+}
+
+type Compare = 'none' | 'direction' | 'context' | 'size';
+
+/** The variants of a comparison: the options chosen above, with the compared setting spelled out per variant. */
+function comparison(compare: Compare, options: VoiceRunOptions, overDirected: boolean): { name: string; variants: VariantRequest[] } | null {
+  if (compare === 'direction') {
+    const arms: [string, PerformanceStrategy][] = [
+      ['A plain', 'PLAIN'],
+      ['B restrained', 'RESTRAINED'],
+      ['C expressive', 'EXPRESSIVE'],
+      ...(overDirected ? ([['D over-directed', 'DIRECTED']] as [string, PerformanceStrategy][]) : []),
+    ];
+    return { name: 'Performance direction', variants: arms.map(([label, strategy]) => ({ label, options: { ...options, strategy } })) };
+  }
+  if (compare === 'context') return { name: 'Continuity', variants: [{ label: 'A no context', options: { ...options, context: NO_CONTEXT } }, { label: 'B neighbouring text', options: { ...options, context: CONTEXTS[0]!.context } }] };
+  if (compare === 'size') return { name: 'Chunk size', variants: CHUNK_SIZES.map((s, i) => ({ label: `${'ABC'[i]} ${s.label}`, options: { ...options, chunking: s.chunking } })) };
+  return null;
+}
 
 function GenerateTab({ view: v, projectId, onQueued }: { view: VoiceView; projectId: string; onQueued: (run: number) => void }) {
+  const config = v.profiles.find((x) => x.id === v.activeProfileId)?.config ?? DEFAULT_VOICE_PROFILE_CONFIG;
   const [kind, setKind] = useState<VoiceScope['kind']>('AUDITION');
   const [secondsWanted, setSeconds] = useState(100);
   const [section, setSection] = useState(1);
   const [blocks, setBlocks] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const [strategy, setStrategy] = useState<PerformanceStrategy>('RESTRAINED');
-  const [size, setSize] = useState(0);
-  const [context, setContext] = useState(0);
-  const [confirm, setConfirm] = useState(false);
-  const [compare, setCompare] = useState<'none' | 'direction' | 'size'>('none');
+  // '' and -1: the profile's own setting (nothing is sent over it).
+  const [strategy, setStrategy] = useState<PerformanceStrategy | ''>('');
+  const [size, setSize] = useState(-1);
+  const [context, setContext] = useState(-1);
+  const [compare, setCompare] = useState<Compare>('none');
+  const [overDirected, setOverDirected] = useState(false);
   const scope: VoiceScope =
     kind === 'AUDITION' ? { kind, seconds: secondsWanted } : kind === 'SECTION' ? { kind, section } : kind === 'BLOCKS' ? { kind, blockKeys: blocks.split(/[\s,]+/).filter(Boolean) } : kind === 'RANGE' ? { kind, from, to } : { kind: 'FULL' };
-  const options = { strategy, chunking: { minWords: SIZES[size]!.minWords, maxWords: SIZES[size]!.maxWords }, context: CONTEXTS[context]!.context };
-  const [plan, setPlan] = useState<VoicePlanView | null>(null);
-  const planReq = useVoiceRequest(() => api.voiceRunPlan(projectId, { scope, options }).then(setPlan));
-  const create = useVoiceRequest(
-    () =>
-      compare === 'none'
-        ? api.createVoiceRun(projectId, { scope, options, confirm }).then((r) => r.run)
-        : api
-            .createVoiceExperiment(projectId, {
-              scope,
-              name: compare === 'direction' ? 'Performance direction' : 'Chunk size',
-              variants:
-                compare === 'direction'
-                  ? [
-                      { label: 'A plain', ...options, strategy: 'PLAIN' },
-                      { label: 'B restrained', ...options, strategy: 'RESTRAINED' },
-                      { label: 'C over-directed', ...options, strategy: 'DIRECTED' },
-                    ]
-                  : SIZES.slice(1).map((s, i) => ({ label: `${'ABC'[i]} ${s.minWords}–${s.maxWords} words`, ...options, chunking: { minWords: s.minWords, maxWords: s.maxWords } })),
-              confirm,
-            })
-            .then((r) => r.runs[0]!),
-    undefined,
-  );
-  useEffect(() => {
-    if (create.data !== undefined) onQueued(create.data as number);
-  }, [create.data, onQueued]);
+  const options: VoiceRunOptions = { ...(strategy ? { strategy } : {}), ...(size >= 0 ? { chunking: CHUNK_SIZES[size]!.chunking } : {}), ...(context >= 0 ? { context: CONTEXTS[context]!.context } : {}) };
+  const compared = comparison(compare, options, overDirected);
+  const variants = compared?.variants ?? [{ label: 'run', options }];
+  const p = usePlans(projectId, JSON.stringify({ scope, variants }), scope, variants);
+  const create = useVoiceRequest(async () => {
+    const pinned = p.profileId ? { profileId: p.profileId } : {};
+    const run = compared
+      ? (await api.createVoiceExperiment(projectId, { scope, ...pinned, name: compared.name, variants: compared.variants.map((x) => ({ label: x.label, ...x.options })), confirm: p.confirmed })).runs[0]!
+      : (await api.createVoiceRun(projectId, { scope, ...pinned, options, confirm: p.confirmed })).run;
+    onQueued(run);
+  });
   if (!v.editorial.generate.allowed) return <p className="text-sm text-stone-600">{v.editorial.generate.reason}</p>;
+  const effective = strategy || config.strategy;
   return (
     <div className="space-y-4">
+      <AcceptanceExperiment view={v} projectId={projectId} onQueued={onQueued} />
       <Section title="What to narrate">
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-sm">
@@ -355,21 +610,23 @@ function GenerateTab({ view: v, projectId, onQueued }: { view: VoiceView; projec
           )}
           <label className="text-sm">
             <span className="block text-xs text-stone-500">Performance</span>
-            <select value={strategy} onChange={(e) => setStrategy(e.target.value as PerformanceStrategy)} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
+            <select value={strategy} onChange={(e) => setStrategy(e.target.value as PerformanceStrategy | '')} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
+              <option value="">Profile default ({PERFORMANCE_STRATEGY_LABELS[config.strategy]})</option>
               {PERFORMANCE_STRATEGIES.map((s) => (
                 <option key={s} value={s}>
                   {PERFORMANCE_STRATEGY_LABELS[s]}
                 </option>
               ))}
             </select>
-            <span className="mt-1 block text-xs text-stone-500">{PERFORMANCE_STRATEGY_HELP[strategy]}</span>
+            <span className="mt-1 block text-xs text-stone-500">{PERFORMANCE_STRATEGY_HELP[effective]}</span>
           </label>
           <label className="text-sm">
-            <span className="block text-xs text-stone-500">Chunk size</span>
+            <span className="block text-xs text-stone-500">Chunk size (natural boundaries come first)</span>
             <select value={size} onChange={(e) => setSize(Number(e.target.value))} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
-              {SIZES.map((s, i) => (
+              <option value={-1}>Profile default ({sizeLabel(config.chunking)})</option>
+              {CHUNK_SIZES.map((s, i) => (
                 <option key={s.label} value={i}>
-                  {s.label}
+                  {s.label} ({s.chunking.minWords}–{s.chunking.maxWords} words)
                 </option>
               ))}
             </select>
@@ -377,6 +634,7 @@ function GenerateTab({ view: v, projectId, onQueued }: { view: VoiceView; projec
           <label className="text-sm">
             <span className="block text-xs text-stone-500">Continuity between chunks</span>
             <select value={context} onChange={(e) => setContext(Number(e.target.value))} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
+              <option value={-1}>Profile default ({contextLabel(config.context)})</option>
               {CONTEXTS.map((c, i) => (
                 <option key={c.label} value={i}>
                   {c.label}
@@ -386,47 +644,164 @@ function GenerateTab({ view: v, projectId, onQueued }: { view: VoiceView; projec
           </label>
           <label className="text-sm">
             <span className="block text-xs text-stone-500">Generate as</span>
-            <select value={compare} onChange={(e) => setCompare(e.target.value as typeof compare)} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
+            <select value={compare} onChange={(e) => setCompare(e.target.value as Compare)} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
               <option value="none">One run</option>
-              <option value="direction">A comparison: plain / restrained / over-directed</option>
-              <option value="size">A comparison: 20–40 / 40–80 / 80–120 words</option>
+              <option value="direction">A comparison of direction: plain / restrained / expressive</option>
+              <option value="context">A comparison of continuity: no context / neighbouring text</option>
+              <option value="size">A comparison of chunk size: {CHUNK_SIZES.map((s) => s.label.replace(/ s$/, '')).join(' / ')} s</option>
             </select>
           </label>
+          {compare === 'direction' && (
+            <label className="flex min-h-6 items-center gap-2 text-sm sm:self-end">
+              <input type="checkbox" checked={overDirected} onChange={(e) => setOverDirected(e.target.checked)} /> Add the over-directed reference (D)
+            </label>
+          )}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <button disabled={planReq.isPending} onClick={() => planReq.mutate(undefined)} className={secondary}>
+          <button disabled={p.plan.isPending} onClick={() => p.plan.mutate(undefined)} className={secondary}>
             Plan (nothing is generated)
           </button>
         </div>
-        {planReq.error && <p className="mt-2 text-sm text-red-700">{planReq.error.message}</p>}
+        {p.plan.error && <p className="mt-2 text-sm text-red-700">{p.plan.error.message}</p>}
       </Section>
 
-      {plan && <PlanView plan={plan} />}
-
-      {plan && (
+      {p.plans && !compared && <PlanView plan={p.plans[0]!.plan} />}
+      {p.plans && compared && (
+        <Section title={`Plan — ${compared.name}, ${p.plans.length} variants`}>
+          <VariantPlans plans={p.plans} />
+        </Section>
+      )}
+      {p.plans && (
         <Section title="Generate">
-          {plan.blocked ? (
-            <p className="text-sm text-red-800">{plan.blocked}</p>
-          ) : (
-            <div className="space-y-2">
-              <p className="text-sm text-stone-600">
-                {compare === 'none' ? 'One run' : 'A comparison of 3 runs'} of {plan.description.toLowerCase()} with {plan.profile.provider} {plan.profile.modelId}.{' '}
-                {plan.estimate.costBasis === 'MOCK' ? 'MOCK voice: no cost.' : `About ${plan.estimate.characters.toLocaleString()} characters${compare === 'none' ? '' : ' per run'}, ${plan.estimate.estimatedCostUsd !== null ? `~${formatUsd(plan.estimate.estimatedCostUsd)}` : 'unpriced'}.`}
-              </p>
-              {(plan.estimate.needsConfirmation || compare !== 'none') && (
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} /> I confirm this generation{compare !== 'none' ? ' (each variant is generated in full)' : ''}.
-                </label>
-              )}
-              <button disabled={create.isPending || ((plan.estimate.needsConfirmation || compare !== 'none') && !confirm)} onClick={() => create.mutate(undefined)} className={`${button} bg-stone-900 text-white hover:bg-stone-800`}>
-                {compare === 'none' ? (kind === 'AUDITION' ? 'Generate the audition' : 'Generate') : 'Generate the comparison'}
-              </button>
-              {create.error && <p className="text-sm text-red-700">{create.error.message}</p>}
-            </div>
-          )}
+          <GenerateBox plans={p.plans} multi={!!compared} confirmed={p.confirmed} setConfirmed={p.setConfirmed} create={create} label={compared ? `Generate the comparison (${p.plans.length} runs)` : kind === 'AUDITION' ? 'Generate the audition' : 'Generate'} />
         </Section>
       )}
     </div>
+  );
+}
+
+/**
+ * The acceptance experiment in one job: the opening narrated seven ways,
+ * each its own run and assembly. Planned first; one confirmation for the
+ * total it would send and cost.
+ */
+function AcceptanceExperiment({ view: v, projectId, onQueued }: { view: VoiceView; projectId: string; onQueued: (run: number) => void }) {
+  const preset = VOICE_ACCEPTANCE_EXPERIMENT;
+  const variants: VariantRequest[] = preset.variants.map(({ label, question, ...options }) => ({ label, question, options }));
+  const p = usePlans(projectId, JSON.stringify({ preset: preset.name, script: v.script?.id ?? null }), preset.scope, variants);
+  const create = useVoiceRequest(async () => {
+    const r = await api.createVoiceExperiment(projectId, { scope: preset.scope, ...(p.profileId ? { profileId: p.profileId } : {}), name: preset.name, variants: variants.map((x) => ({ label: x.label, ...x.options })), confirm: p.confirmed });
+    onQueued(r.runs[0]!);
+  });
+  const model = v.profiles.find((x) => x.id === v.activeProfileId)?.modelId ?? v.provider.defaultModel;
+  const opening = preset.scope.kind === 'AUDITION' ? preset.scope.seconds : null;
+  return (
+    <Section title={`${preset.name} — ${model}`}>
+      <p className="text-sm text-stone-600">
+        The opening{opening ? ` (about ${opening} s)` : ''} narrated {variants.length} ways in one job, each its own run with its own assembled audio to hear whole: direction (A–D), neighbouring context (E against B) and chunk size (F and G against B). B is the house default.
+      </p>
+      <ul className="mt-2 grid gap-1 text-xs text-stone-600 sm:grid-cols-2">
+        {variants.map((x) => (
+          <li key={x.label}>
+            <span className="font-semibold text-stone-800">{x.label}</span> — {x.question}
+          </li>
+        ))}
+      </ul>
+      <button disabled={p.plan.isPending} onClick={() => p.plan.mutate(undefined)} className={`${secondary} mt-3`}>
+        {p.plan.isPending ? 'Planning…' : 'Plan the acceptance experiment (nothing is generated)'}
+      </button>
+      {p.plan.error && <p className="mt-2 text-sm text-red-700">{p.plan.error.message}</p>}
+      {p.plans && (
+        <div className="mt-3 space-y-3">
+          <VariantPlans plans={p.plans} />
+          <GenerateBox plans={p.plans} multi confirmed={p.confirmed} setConfirmed={p.setConfirmed} create={create} label={`Generate the acceptance experiment (${p.plans.length} runs, one job)`} />
+        </div>
+      )}
+    </Section>
+  );
+}
+
+/** What generating the plans would send and cost, and the confirmation: always for a comparison, above the threshold for one run. */
+function GenerateBox({ plans, multi, confirmed, setConfirmed, create, label }: { plans: VariantPlan[]; multi: boolean; confirmed: boolean; setConfirmed: (on: boolean) => void; create: { isPending: boolean; error: Error | null; mutate: (arg: undefined) => void }; label: string }) {
+  const blocked = [...new Set(plans.map((x) => x.plan.blocked).filter((x): x is string => !!x))];
+  const total = plansEstimate(plans.map((x) => x.plan));
+  const first = plans[0]!.plan;
+  const needs = multi || first.estimate.needsConfirmation;
+  if (blocked.length) return <p className="text-sm text-red-800">{blocked.join('; ')}</p>;
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-stone-600">
+        {multi ? `${plans.length} runs in one job` : 'One run'} of {first.description.toLowerCase()} with {first.profile.provider} {first.profile.modelId}: {total.takes} takes, about {total.characters.toLocaleString()} characters, {costWords(total)}.
+      </p>
+      {needs && (
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+          <span>
+            I confirm {multi ? `all ${plans.length} runs (each variant is generated in full)` : 'this generation'}: {total.characters.toLocaleString()} characters, {costWords(total)}.
+          </span>
+        </label>
+      )}
+      <button disabled={create.isPending || (needs && !confirmed)} onClick={() => create.mutate(undefined)} className={`${button} bg-stone-900 text-white hover:bg-stone-800`}>
+        {label}
+      </button>
+      {create.error && <p className="text-sm text-red-700">{create.error.message}</p>}
+    </div>
+  );
+}
+
+const lengthRange = (chunks: readonly VoicePlanChunkView[]) => {
+  const secs = chunks.map((c) => c.estimatedSec);
+  const outside = secs.filter(outsideNatural).length;
+  return secs.length ? `≈${Math.min(...secs).toFixed(0)}–${Math.max(...secs).toFixed(0)} s each${outside ? `, ${outside} outside ${CHUNK_SECONDS.natural.min}–${CHUNK_SECONDS.natural.max} s` : ''}` : '—';
+};
+
+function VariantPlans({ plans }: { plans: VariantPlan[] }) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {plans.map(({ label, question, plan }) => (
+        <div key={label} className="min-w-0 rounded-md border border-stone-200 p-2 text-xs" data-variant={label}>
+          <p className="font-semibold text-stone-900">{label}</p>
+          {question && <p className="text-stone-500">{question}</p>}
+          <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
+            <Stat label="Performance" value={PERFORMANCE_STRATEGY_LABELS[plan.strategy]} />
+            <Stat label="Chunk size" value={sizeLabel(plan.chunking)} />
+            <Stat label="Context" value={contextLabel(plan.context)} />
+            <Stat label="Chunks" value={`${plan.estimate.chunks} · ${lengthRange(plan.chunks)}`} />
+            <Stat label="Planned length" value={`~${clock(plan.estimate.plannedSec * 1000)}`} />
+            <Stat label="Characters" value={plan.estimate.characters.toLocaleString()} />
+            <Stat label="Cost" value={plan.estimate.estimatedCostUsd !== null ? `${formatUsd(plan.estimate.estimatedCostUsd)} (${plan.estimate.costBasis.toLowerCase()})` : 'unpriced'} />
+          </dl>
+          {plan.blocked && <p className="mt-1 text-red-800">{plan.blocked}</p>}
+          <details className="mt-1">
+            <summary className="inline-flex min-h-6 cursor-pointer items-center text-stone-600 underline">The {plan.chunks.length} chunks</summary>
+            <PlanChunks chunks={plan.chunks} />
+          </details>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PlanChunks({ chunks }: { chunks: VoicePlanChunkView[] }) {
+  return (
+    <ol className="mt-2 space-y-2">
+      {chunks.map((ch) => (
+        <li key={ch.index} className="rounded-md border border-stone-200 p-2 text-xs" data-plan-chunk={ch.index + 1}>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-stone-500">
+            <span>
+              #{ch.index + 1} · {ch.sectionKey} · blocks {ch.blockKeys.join(', ')}
+            </span>
+            <span>{ch.words} words</span>
+            <Length sec={ch.estimatedSec} prefix="≈" />
+            <span>{ch.characters} chars</span>
+            <span>ends at {CHUNK_BOUNDARY_LABELS[ch.boundary]}</span>
+            {!ch.checksPassed && <span className="text-red-700">✗ checks</span>}
+          </p>
+          <NumberedText text={ch.text} className="mt-1 text-stone-900" />
+          {ch.performanceText !== ch.text && <p className="mt-1 font-mono break-words whitespace-pre-wrap text-stone-600">Sent: {ch.performanceText}</p>}
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -444,6 +819,9 @@ function PlanView({ plan }: { plan: VoicePlanView }) {
     <Section title={`Plan — ${plan.description}`}>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
         <Stat label="Chunks" value={String(plan.estimate.chunks)} />
+        <Stat label="Chunk length (planned)" value={lengthRange(plan.chunks)} />
+        <Stat label="Chunk size" value={sizeLabel(plan.chunking)} />
+        <Stat label="Context" value={contextLabel(plan.context)} />
         <Stat label="Words" value={plan.estimate.words.toLocaleString()} />
         <Stat label="Characters sent" value={plan.estimate.characters.toLocaleString()} />
         <Stat label="Estimated cost" value={plan.estimate.estimatedCostUsd !== null ? `${formatUsd(plan.estimate.estimatedCostUsd)} (${plan.estimate.costBasis.toLowerCase()})` : 'unpriced'} />
@@ -456,16 +834,8 @@ function PlanView({ plan }: { plan: VoicePlanView }) {
       <p className="mt-2 text-xs text-stone-600">
         Covers: {covered.map(([ok, label]) => `${ok ? '✓' : '✗'} ${label}`).join(' · ')}
       </p>
-      <ol className="mt-3 space-y-2">
-        {plan.chunks.map((ch) => (
-          <li key={ch.index} className="rounded-md border border-stone-200 p-2 text-xs">
-            <p className="text-stone-500">
-              #{ch.index + 1} · {ch.sectionKey} · blocks {ch.blockKeys.join(', ')} · {ch.words} words · {ch.characters} chars{ch.checksPassed ? '' : ' · ✗ checks'}
-            </p>
-            <p className="mt-1 font-mono break-words whitespace-pre-wrap text-stone-800">{ch.performanceText}</p>
-          </li>
-        ))}
-      </ol>
+      <p className="mt-2 text-xs text-stone-500">Seconds are planned from spoken words at the narration rate and the chunk's pace; the audio's own length replaces them. Sentence numbers are what “Regenerate with directions” addresses.</p>
+      <PlanChunks chunks={plan.chunks} />
     </Section>
   );
 }
@@ -527,12 +897,33 @@ function PronunciationRow({ item: x }: { item: VoicePronunciationView }) {
 
 function ProfileTab({ view: v, projectId }: { view: VoiceView; projectId: string }) {
   const active = v.profiles.find((x) => x.id === v.activeProfileId) ?? null;
+  const config = active?.config ?? DEFAULT_VOICE_PROFILE_CONFIG;
   const [voiceId, setVoiceId] = useState(active?.voiceId ?? v.provider.defaultVoiceId ?? '');
   const [modelId, setModelId] = useState(active?.modelId ?? v.provider.defaultModel);
-  const [stability, setStability] = useState(active?.config.settings.stability ?? 0.5);
-  const [similarity, setSimilarity] = useState(active?.config.settings.similarity ?? 0.75);
+  const [stability, setStability] = useState(config.settings.stability);
+  const [similarity, setSimilarity] = useState(config.settings.similarity);
+  const [strategy, setStrategy] = useState<PerformanceStrategy>(config.strategy);
+  const [minWords, setMinWords] = useState(config.chunking.minWords);
+  const [maxWords, setMaxWords] = useState(config.chunking.maxWords);
+  const [previousChars, setPreviousChars] = useState(config.context.previousChars);
+  const [nextChars, setNextChars] = useState(config.context.nextChars);
+  const [stitch, setStitch] = useState(config.context.stitch);
   const [notes, setNotes] = useState('');
-  const create = useVoiceRequest(() => api.createVoiceProfile(projectId, { ...(active ? { basedOn: active.id } : {}), voiceId, modelId, settings: { stability, similarity }, ...(notes ? { notes } : {}) }));
+  const chunking = { minWords, maxWords };
+  const sizeOk = ChunkingSettings.safeParse(chunking).success;
+  const contextOk = ContextSettings.safeParse({ previousChars, nextChars, stitch }).success;
+  const create = useVoiceRequest(() =>
+    api.createVoiceProfile(projectId, {
+      ...(active ? { basedOn: active.id } : {}),
+      voiceId,
+      modelId,
+      settings: { stability, similarity },
+      strategy,
+      chunking,
+      context: { previousChars, nextChars, stitch },
+      ...(notes ? { notes } : {}),
+    }),
+  );
   return (
     <div className="space-y-4">
       <Section title={active ? `Active profile — ${active.name} v${active.version}` : 'No profile yet'}>
@@ -545,10 +936,11 @@ function ProfileTab({ view: v, projectId }: { view: VoiceView; projectId: string
             <Stat label="Output" value={active.outputFormat} />
             <Stat label="Stability / similarity" value={`${active.config.settings.stability} / ${active.config.settings.similarity}`} />
             <Stat label="Performance" value={PERFORMANCE_STRATEGY_LABELS[active.config.strategy]} />
-            <Stat label="Chunks" value={`${active.config.chunking.minWords}–${active.config.chunking.maxWords} words`} />
+            <Stat label="Chunks" value={sizeLabel(active.config.chunking)} />
+            <Stat label="Context" value={contextLabel(active.config.context)} />
           </dl>
         ) : (
-          <p className="text-sm text-stone-600">The first plan creates one from the configured defaults.</p>
+          <p className="text-sm text-stone-600">The first plan creates one from the configured defaults ({sizeLabel(DEFAULT_VOICE_PROFILE_CONFIG.chunking)}).</p>
         )}
         <p className="mt-2 text-xs text-stone-500">A profile is never edited: a change makes a new version, so every take keeps the exact settings that made it.</p>
       </Section>
@@ -570,12 +962,59 @@ function ProfileTab({ view: v, projectId }: { view: VoiceView; projectId: string
             <span className="block text-xs text-stone-500">Similarity ({similarity})</span>
             <input type="range" min={0} max={1} step={0.05} value={similarity} onChange={(e) => setSimilarity(Number(e.target.value))} className="mt-1 w-full" />
           </label>
+          <label className="text-sm">
+            <span className="block text-xs text-stone-500">Performance</span>
+            <select value={strategy} onChange={(e) => setStrategy(e.target.value as PerformanceStrategy)} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1">
+              {PERFORMANCE_STRATEGIES.map((s) => (
+                <option key={s} value={s}>
+                  {PERFORMANCE_STRATEGY_LABELS[s]}
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block text-xs text-stone-500">{PERFORMANCE_STRATEGY_HELP[strategy]}</span>
+          </label>
+          <fieldset className="min-w-0 text-sm">
+            <legend className="text-xs text-stone-500">Chunk size in spoken words {sizeOk ? `(${sizeLabel(chunking)})` : ''}</legend>
+            <div className="mt-1 flex gap-2">
+              <input type="number" min={5} max={200} value={minWords} onChange={(e) => setMinWords(Number(e.target.value))} aria-label="Fewest words in a chunk" className="w-20 rounded-md border border-stone-300 px-2 py-1" />
+              <span className="self-center text-stone-500">to</span>
+              <input type="number" min={10} max={300} value={maxWords} onChange={(e) => setMaxWords(Number(e.target.value))} aria-label="Most words in a chunk" className="w-20 rounded-md border border-stone-300 px-2 py-1" />
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-3">
+              {CHUNK_SIZES.map((s) => (
+                <button
+                  key={s.label}
+                  type="button"
+                  aria-pressed={minWords === s.chunking.minWords && maxWords === s.chunking.maxWords}
+                  onClick={() => {
+                    setMinWords(s.chunking.minWords);
+                    setMaxWords(s.chunking.maxWords);
+                  }}
+                  className={link}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            {!sizeOk && <span className="block text-xs text-red-700">Whole numbers: the fewest words 5 to 200, the most 10 to 300, and the fewest below the most.</span>}
+          </fieldset>
+          <fieldset className="min-w-0 text-sm sm:col-span-2">
+            <legend className="text-xs text-stone-500">Continuity: neighbouring narration sent as context (characters before / after; never generated)</legend>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <input type="number" min={0} max={1000} value={previousChars} onChange={(e) => setPreviousChars(Number(e.target.value))} aria-label="Characters of the previous text" className="w-24 rounded-md border border-stone-300 px-2 py-1" />
+              <input type="number" min={0} max={1000} value={nextChars} onChange={(e) => setNextChars(Number(e.target.value))} aria-label="Characters of the next text" className="w-24 rounded-md border border-stone-300 px-2 py-1" />
+              <label className="inline-flex min-h-6 items-center gap-1 text-xs text-stone-600">
+                <input type="checkbox" checked={stitch} onChange={(e) => setStitch(e.target.checked)} /> Stitch to the previous take (takes one after another)
+              </label>
+            </div>
+            {!contextOk && <span className="block text-xs text-red-700">Context is a whole number of characters, 0 to 1,000.</span>}
+          </fieldset>
           <label className="text-sm sm:col-span-2">
             <span className="block text-xs text-stone-500">Notes</span>
             <input value={notes} onChange={(e) => setNotes(e.target.value)} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" />
           </label>
         </div>
-        <button disabled={create.isPending || !voiceId || !modelId} onClick={() => create.mutate(undefined)} className={`${button} mt-3 bg-stone-900 text-white hover:bg-stone-800`}>
+        <button disabled={create.isPending || !voiceId || !modelId || !sizeOk || !contextOk} onClick={() => create.mutate(undefined)} className={`${button} mt-3 bg-stone-900 text-white hover:bg-stone-800`}>
           Create the new version
         </button>
         {create.error && <p className="mt-2 text-sm text-red-700">{create.error.message}</p>}
@@ -587,10 +1026,10 @@ function ProfileTab({ view: v, projectId }: { view: VoiceView; projectId: string
               <span className="font-medium">
                 {x.name} v{x.version}
               </span>
-              <span className="text-xs text-stone-500 break-all">
-                {x.provider} · {x.modelId} · {x.voiceId} · {x.runs} run(s)
+              <span className="text-xs break-all text-stone-500">
+                {x.provider} · {x.modelId} · {x.voiceId} · {sizeLabel(x.config.chunking)} · {x.runs} run(s)
               </span>
-              {x.active && <TakeStatusPill />}
+              {x.active && <span className={`${pill} bg-emerald-100 text-emerald-800`}>active</span>}
             </li>
           ))}
         </ul>
@@ -598,8 +1037,3 @@ function ProfileTab({ view: v, projectId }: { view: VoiceView; projectId: string
     </div>
   );
 }
-
-function TakeStatusPill() {
-  return <span className={`${pill} bg-emerald-100 text-emerald-800`}>active</span>;
-}
-

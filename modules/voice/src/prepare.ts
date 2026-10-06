@@ -1,4 +1,4 @@
-import type { ChunkPerformance, DirectorMark, PerformanceStrategy, PreparedNarration, ScriptBlockClass, ScriptDelivery, VoiceProfileSettings } from '@docengine/core';
+import type { ChunkPerformance, DirectorMark, PerformanceStrategy, PreparedNarration, ScriptBlockClass, ScriptDelivery, SpokenForm, VoiceProfileSettings } from '@docengine/core';
 import type { PerformanceSegment, PronunciationRule, RenderedNarration, VoiceProvider } from '@docengine/providers';
 import { checkTake } from './checks.ts';
 import type { ChunkSentence } from './chunking.ts';
@@ -64,13 +64,12 @@ export function prepareTake(input: PrepareTakeInput): PreparedTake {
     if (!block) throw new Error(`prepareTake: block ${s.blockKey} is not in the script`);
     return { text: chunk.text.slice(s.start, s.end), blockKey: s.blockKey, delivery: block.delivery, infoClass: block.infoClass, blockStart: i === 0 || chunk.sentences[i - 1]!.blockKey !== s.blockKey };
   });
-  const marks = performanceMarks(sentences, input.strategy, input.director);
+  const marks = performanceMarks(sentences, input.strategy, chunk.performance.pauses, input.director);
   const pauses = strategyPauses(input.strategy, sentencePauses(sentences.length, chunk.performance.pauses));
-  const segments: PerformanceSegment[] = spokenSentences.map((s, i) => ({
-    text: spoken.text.slice(s.start, s.end),
-    intent: marks.find((m) => m.sentence === i)?.intent ?? null,
-    pauseAfter: pauses[i]!,
-  }));
+  const segments: PerformanceSegment[] = spokenSentences.map((s, i) => {
+    const emphasis = sentenceEmphasis(chunk, i, sentences[i]!.delivery, spoken.forms, s.start);
+    return { text: spoken.text.slice(s.start, s.end), intent: marks.find((m) => m.sentence === i)?.intent ?? null, pauseAfter: pauses[i]!, ...(emphasis.length ? { emphasis } : {}) };
+  });
   const rendered = input.provider.render(segments, input.model);
   const caps = input.provider.capabilities(input.model);
 
@@ -92,6 +91,7 @@ export function prepareTake(input: PrepareTakeInput): PreparedTake {
     sentences,
     strategy: input.strategy,
     director: !!input.director?.length,
+    caps,
   });
   const prepared: PreparedNarration = {
     strategy: input.strategy,
@@ -106,4 +106,18 @@ export function prepareTake(input: PrepareTakeInput): PreparedTake {
     checks,
   };
   return { spokenText: spoken.text, spokenSentences, segments, rendered, prepared, phonemes, passed: checks.every((c) => c.status !== 'FAIL') };
+}
+
+/** The script's stressed words in one sentence of the chunk, as ranges of the sentence's spoken text (the first occurrence of each; a spoken form is stressed whole). */
+function sentenceEmphasis(chunk: TakeChunk, i: number, delivery: ScriptDelivery, forms: readonly SpokenForm[], spokenStart: number): NonNullable<PerformanceSegment['emphasis']> {
+  const s = chunk.sentences[i]!;
+  const text = chunk.text.slice(s.start, s.end);
+  const toEnd = (offset: number) => canonicalToSpoken(forms, forms.find((f) => offset > f.start && offset < f.end)?.end ?? offset);
+  const out: NonNullable<PerformanceSegment['emphasis']> = [];
+  for (const e of delivery.emphasis) {
+    const at = text.indexOf(e.text);
+    if (at < 0) continue;
+    out.push({ start: canonicalToSpoken(forms, s.start + at) - spokenStart, end: toEnd(s.start + at + e.text.length) - spokenStart, level: e.level });
+  }
+  return out.sort((a, b) => a.start - b.start);
 }

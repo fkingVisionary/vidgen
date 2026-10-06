@@ -22,7 +22,7 @@ export interface AssemblyChunk {
   text: string;
   boundary: ChunkBoundary;
   pauses: ChunkPauses;
-  take: { id: string; generation: number; durationMs: number; alignment: NarrationAlignment | null } | null;
+  take: { id: string; generation: number; durationMs: number; alignment: NarrationAlignment | null; audioAssetId?: string } | null;
 }
 
 export interface AssemblyBlock {
@@ -33,7 +33,7 @@ export interface AssemblyBlock {
 }
 
 /** Breath between takes, by why the first one ends (ms). */
-export const BETWEEN_TAKES_MS: Record<ChunkBoundary, number> = { SENTENCE: 300, PARAGRAPH: 450, PERFORMANCE: 450, PAUSE: 450, SPEAKER: 450, SECTION_END: 1000 };
+export const BETWEEN_TAKES_MS: Record<ChunkBoundary, number> = { SENTENCE: 300, PARAGRAPH: 450, PERFORMANCE: 450, PAUSE: 450, SPEAKER: 450, PURPOSE: 450, SECTION_END: 1000 };
 
 const RANK: Record<PauseLength, number> = { NONE: 0, MICRO: 1, SHORT: 2, MEDIUM: 3, LONG: 4 };
 
@@ -71,6 +71,11 @@ export function assemble(chunks: readonly AssemblyChunk[], blocks: ReadonlyMap<s
     if (c.take && takeIds.has(c.take.id)) findings.push({ kind: 'DUPLICATE_CHUNK', severity: 'BLOCKING', ref: `#${c.index + 1}`, detail: `Take ${c.take.id} is used twice` });
     if (c.take) takeIds.add(c.take.id);
   }
+  // The same words in two chunks would be heard twice.
+  sorted.forEach((c, i) => {
+    const earlier = sorted.slice(0, i).find((p) => p.index !== c.index && p.spans.some((a) => c.spans.some((b) => a.blockKey === b.blockKey && a.start < b.end && b.start < a.end)));
+    if (earlier) findings.push({ kind: 'DUPLICATE_CHUNK', severity: 'BLOCKING', ref: `#${c.index + 1}`, detail: `Chunk ${c.index + 1} narrates words chunk ${earlier.index + 1} already does` });
+  });
 
   const entries: AssemblyEntry[] = [];
   const timeline: NarrationTimelineEntry[] = [];
@@ -80,7 +85,7 @@ export function assemble(chunks: readonly AssemblyChunk[], blocks: ReadonlyMap<s
     const take = c.take!;
     const next = usable[i + 1];
     const gap = next ? Math.max(0, pauseBetween(c, next) - trailing(take) - leading(next.take)) : 0;
-    entries.push({ chunkId: c.id, chunkIndex: c.index, generationId: take.id, generation: take.generation, sectionKey: c.sectionKey, blockKeys: c.blockKeys, startMs: clock, endMs: clock + take.durationMs, gapAfterMs: gap });
+    entries.push({ chunkId: c.id, chunkIndex: c.index, generationId: take.id, generation: take.generation, ...(take.audioAssetId ? { audioAssetId: take.audioAssetId } : {}), sectionKey: c.sectionKey, blockKeys: c.blockKeys, startMs: clock, endMs: clock + take.durationMs, gapAfterMs: gap });
     timeline.push(...timelineParts(c, clock, blocks));
     clock += take.durationMs + gap;
   });
@@ -102,7 +107,7 @@ function timelineParts(c: AssemblyChunk, offset: number, blocks: ReadonlyMap<str
     const endMs = words.length ? words.at(-1)!.endMs : offset + (c.spans.length === 1 ? take.durationMs : Math.round((range.end / c.text.length) * take.durationMs));
     out.push({
       scriptBlock: { id: span.blockId, key: span.blockKey, sectionKey: c.sectionKey },
-      audioChunk: { id: c.id, index: c.index, generationId: take.id, generation: take.generation },
+      audioChunk: { id: c.id, index: c.index, generationId: take.id, generation: take.generation, ...(take.audioAssetId ? { audioAssetId: take.audioAssetId } : {}) },
       startMs,
       endMs,
       durationMs: Math.max(0, endMs - startMs),
@@ -115,8 +120,30 @@ function timelineParts(c: AssemblyChunk, offset: number, blocks: ReadonlyMap<str
   return out;
 }
 
+/** Clips of the joined file further than this from where the entries put them are reported. */
+export const DRIFT_TOLERANCE_MS = 50;
+
+/**
+ * Where the joined file actually starts each clip against the entries'
+ * clock (the timeline's): a clip off by more than the tolerance means the
+ * words are heard away from their timestamps. The first such clip is
+ * reported (the drift only grows after it).
+ */
+export function clipDrift(entries: readonly Pick<AssemblyEntry, 'chunkIndex' | 'startMs'>[], startsMs: readonly number[]): VoiceQaFinding | null {
+  const i = entries.findIndex((e, k) => startsMs[k] === undefined || Math.abs(startsMs[k]! - e.startMs) > DRIFT_TOLERANCE_MS);
+  if (i < 0) return null;
+  const e = entries[i]!;
+  const at = startsMs[i];
+  return {
+    kind: 'ASSEMBLY_MISMATCH',
+    severity: 'WARNING',
+    ref: `#${e.chunkIndex + 1}`,
+    detail: at === undefined ? `The joined file has ${startsMs.length} clip(s) for ${entries.length} entries` : `The joined file starts chunk ${e.chunkIndex + 1} at ${formatClock(at)}, the timeline at ${formatClock(e.startMs)} (${Math.abs(at - e.startMs)} ms apart): words are heard off their timestamps`,
+  };
+}
+
 /** What is being said at a moment of the assembled narration (and what comes just before and after). */
-export function whatIsSaidAt(timeline: readonly NarrationTimelineEntry[], ms: number): { entry: NarrationTimelineEntry; word: { word: string; startMs: number; endMs: number } | null; between: boolean } | null {
+export function whatIsSaidAt<T extends NarrationTimelineEntry>(timeline: readonly T[], ms: number): { entry: T; word: { word: string; startMs: number; endMs: number } | null; between: boolean } | null {
   if (!timeline.length) return null;
   const inside = timeline.find((e) => ms >= e.startMs && ms < e.endMs);
   const entry = inside ?? timeline.reduce((best, e) => (Math.abs(e.startMs - ms) < Math.abs(best.startMs - ms) ? e : best));

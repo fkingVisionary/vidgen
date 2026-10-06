@@ -148,7 +148,16 @@ export class S3StorageProvider implements StorageProvider {
     const body = await res.text().catch(() => '');
     const code = tag(body, 'Code');
     const message = tag(body, 'Message');
-    throw new ProviderError('s3', `${what}: HTTP ${res.status}${code ? ` ${code}` : ''}${message ? `: ${decodeXml(message)}` : ''}`, res.status === 429 || res.status >= 500);
+    throw new ProviderError('s3', `${what}: HTTP ${res.status}${code ? ` ${code}` : ''}${message ? `: ${decodeXml(message)}` : ''}`, res.status === 429 || res.status >= 500, { status: res.status });
+  }
+
+  /** A body that breaks off after the headers (a timeout or reset) fails like a request that never arrived. */
+  private async read<T>(res: Response, what: string, body: (r: Response) => Promise<T>): Promise<T> {
+    try {
+      return await body(res);
+    } catch (err) {
+      throw new ProviderError('s3', `${what}: HTTP ${res.status}, then reading the response failed: ${err instanceof Error ? err.message : String(err)}`, true, { cause: err, status: res.status });
+    }
   }
 
   async put(key: string, body: Uint8Array | string, opts: PutOptions): Promise<StoredObject> {
@@ -165,7 +174,7 @@ export class S3StorageProvider implements StorageProvider {
     assertValidKey(key);
     const res = await this.send('GET', key);
     if (!res.ok) await this.fail(res, `GET ${key}`);
-    return new Uint8Array(await res.arrayBuffer());
+    return new Uint8Array(await this.read(res, `GET ${key}`, (r) => r.arrayBuffer()));
   }
 
   async head(key: string): Promise<StoredObject | null> {
@@ -196,7 +205,7 @@ export class S3StorageProvider implements StorageProvider {
       const query: Record<string, string> = { 'list-type': '2', prefix, ...(token ? { 'continuation-token': token } : {}) };
       const res = await this.send('GET', null, { query });
       if (!res.ok) await this.fail(res, `LIST ${prefix}`);
-      const xml = await res.text();
+      const xml = await this.read(res, `LIST ${prefix}`, (r) => r.text());
       for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
         const c = m[1]!;
         const modified = tag(c, 'LastModified');

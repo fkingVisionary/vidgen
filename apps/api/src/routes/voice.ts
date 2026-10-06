@@ -6,6 +6,7 @@ import {
   RegenerateVoiceInput,
   UpdatePronunciationInput,
   VoiceExperimentInput,
+  type NarrationTimelineView,
 } from '@docengine/core';
 import { ConflictError, NotFoundError } from '@docengine/pipeline';
 import { loadVoiceView, parseClock } from '@docengine/voice';
@@ -72,7 +73,7 @@ export async function voiceRoutes(app: FastifyInstance, c: AppContainer): Promis
     return reply.code(202).send({ job: toJobView(r.job), run: r.run });
   });
 
-  /** A comparison: the same passage narrated 2–4 ways. */
+  /** A comparison: the same passage narrated 2–8 ways, one run each, in one job (always confirmed). */
   app.post('/api/projects/:id/voice/experiments', async (req, reply) => {
     const project = await requireProject(req.params);
     requireReal();
@@ -80,7 +81,7 @@ export async function voiceRoutes(app: FastifyInstance, c: AppContainer): Promis
     return reply.code(202).send({ job: toJobView(r.job), runs: r.runs });
   });
 
-  /** New takes for chosen chunks of a run (earlier takes are kept). */
+  /** New takes for chosen chunks of a run, or an A/B of them (earlier takes are kept). */
   app.post('/api/voice/runs/:id/regenerate', async (req, reply) => {
     const { id } = IdParams.parse(req.params);
     requireReal();
@@ -136,14 +137,10 @@ export async function voiceRoutes(app: FastifyInstance, c: AppContainer): Promis
     return c.voice.moment(project.id, q.run, ms);
   });
 
-  /** The narration timeline of a run's latest assembly: the contract the storyboard is timed against. */
-  app.get('/api/projects/:id/voice/timeline', async (req) => {
+  /** The narration timeline of a run's latest assembly: the contract the storyboard is timed against (with each part's audio file and approval). */
+  app.get('/api/projects/:id/voice/timeline', async (req): Promise<NarrationTimelineView> => {
     const project = await requireProject(req.params);
     const q = z.object({ run: z.coerce.number().int().min(1) }).parse(req.query ?? {});
-    const run = await c.db.voiceRun.findUnique({ where: { projectId_number: { projectId: project.id, number: q.run } }, include: { script: { select: { version: true } } } });
-    if (!run) throw new NotFoundError('Voice run', String(q.run));
-    const assembly = await c.db.voiceAssembly.findFirst({ where: { runId: run.id }, orderBy: { version: 'desc' } });
-    if (!assembly) throw new ConflictError(`Voice run ${q.run} has no assembled narration yet`);
-    return { run: run.number, scriptVersion: run.script.version, assembly: assembly.version, status: assembly.status, complete: assembly.complete, totalDurationMs: assembly.totalDurationMs, entries: assembly.entries, timeline: assembly.timeline };
+    return c.voice.timeline(project.id, q.run);
   });
 }

@@ -5,23 +5,32 @@ import {
   RegenerateVoiceInput,
   UpdatePronunciationInput,
   VoiceExperimentInput,
+  estimateCost,
   type CreateVoiceProfileInput,
+  type DirectorMark,
+  type NarrationTimelineEntry,
+  type NarrationTimelineView,
+  type PerformanceStrategy,
+  type VoiceGenerationStatus,
   type VoiceMomentView,
   type VoicePlanView,
   type VoiceQaFinding,
   type VoiceRunOptions,
   type VoiceScope,
 } from '@docengine/core';
-import type { Database, Job, Prisma, Project, Tx, VoiceProfile } from '@docengine/database';
+import type { Database, Job, Prisma, Project, Tx, VoiceChunk, VoiceProfile } from '@docengine/database';
 import { ConflictError, EVENT, NotFoundError, type ProjectService } from '@docengine/pipeline';
-import { joinClips, buildAssetKey, type ProviderSet } from '@docengine/providers';
+import { joinClips, buildAssetKey, type ProviderSet, type VoiceProvider } from '@docengine/providers';
 import { createHash, randomUUID } from 'node:crypto';
-import { formatClock, whatIsSaidAt } from './assembly.ts';
+import { clipDrift, formatClock, whatIsSaidAt } from './assembly.ts';
 import { blockingCount } from './qa.ts';
 import { auditionCoverage, planRun, type RunSettings } from './plan.ts';
+import { prepareTake, type TakeBlock } from './prepare.ts';
 import { activeProfile, createProfileVersion, profileConfig, ProfileError, toProfileView } from './profiles.ts';
-import { lexicon, readQa, rebuildAssembly, runQa, syncLexicon, unresolvedIn } from './runs.ts';
+import { rulesFor } from './pronunciation.ts';
+import { assemblyMismatch, lexicon, readEntries, readPerformance, readQa, rebuildAssembly, runQa, syncLexicon, unresolvedIn } from './runs.ts';
 import { approvedScript, loadScriptForVoice, resolveScope, ScopeError, type VoiceScript } from './script.ts';
+import { chunkSentences } from './stage.ts';
 import { sha256 } from './text.ts';
 
 /**
@@ -47,6 +56,19 @@ export interface VoiceServiceDeps {
 }
 
 const LABEL: Record<VoiceScope['kind'], string> = { AUDITION: 'Audition', SECTION: 'Section', BLOCKS: 'Blocks', RANGE: 'Range', FULL: 'Full narration' };
+
+/** A chunk's current take, decided or not: to review (or GENERATED, made before IN_REVIEW existed), or approved. */
+const APPROVABLE = new Set<VoiceGenerationStatus>(['IN_REVIEW', 'GENERATED', 'APPROVED']);
+/** Takes with audio a decision can be taken back from. */
+const REJECTABLE = new Set<VoiceGenerationStatus>([...APPROVABLE, 'SUPERSEDED']);
+
+/** What sending this many characters would cost, in words for a confirmation (never a made-up figure). */
+function costWords(voice: VoiceProvider, model: string, characters: number): string {
+  if (voice.info.mock) return 'no cost: MOCK voice';
+  const cost = estimateCost(voice.info.name, model, [{ unit: 'CHARACTERS', quantity: characters }], voice.info.rates);
+  if (cost.unpriced.length) return `cost unknown: no price configured for ${model}`;
+  return cost.costUsd < 0.01 ? 'under $0.01 estimated' : `about $${cost.costUsd.toFixed(2)} estimated`;
+}
 
 function wrap<T>(fn: () => Promise<T>): Promise<T> {
   return fn().catch((err: unknown) => {
@@ -215,7 +237,7 @@ export class VoiceService {
     });
   }
 
-  /** A comparison: the same passage narrated 2–4 ways (each variant its own run, generated in one job). */
+  /** A comparison: the same passage narrated 2–8 ways (each variant its own run and assembly, generated in one job; always confirmed). */
   async createExperiment(projectRef: string, raw: VoiceExperimentInput, actor: string): Promise<{ job: Job; runs: number[] }> {
     const input = VoiceExperimentInput.parse(raw);
     if (input.scope.kind === 'FULL') throw new ConflictError('A comparison narrates a passage, not the whole script');
@@ -236,7 +258,8 @@ export class VoiceService {
           characters += r.characters;
         }
         if (characters > this.deps.config.maxCharacters) throw new ConflictError(`The comparison would send ${characters} characters, over the ceiling of ${this.deps.config.maxCharacters}`);
-        if (characters > this.deps.config.confirmCharacters && !input.confirm) throw new ConflictError(`Comparison: ${characters} characters to generate across ${input.variants.length} variants — confirm to go ahead`);
+        // A comparison buys several narrations of the same passage: always confirmed, whatever its size.
+        if (!input.confirm) throw new ConflictError(`Comparison: ${characters} characters (${costWords(this.deps.providers.voice, profile.modelId, characters)}) across ${input.variants.length} variants — confirm to go ahead`);
         await this.event(tx, p.id, EVENT.VOICE_RUN_REQUESTED, `Comparison "${input.name}": ${input.variants.map((v) => v.label).join(' / ')} — ${scope.description}`, { actor, runs: numbers, characters });
         return { runIds: ids };
       });
@@ -244,7 +267,13 @@ export class VoiceService {
     });
   }
 
-  /** New takes for chosen chunks of a run (earlier takes are kept). */
+  /**
+   * New takes for chosen chunks of a run (earlier takes are kept): one per
+   * chunk, made current when it is ready — or, for an A/B comparison, one per
+   * variant per chunk, kept beside the current take until the editor
+   * restores one. An A/B, every chunk, or more than the confirmation
+   * threshold must be confirmed.
+   */
   async regenerate(runId: string, raw: RegenerateVoiceInput, actor: string): Promise<{ job: Job; takes: number }> {
     const input = RegenerateVoiceInput.parse(raw);
     const run = await this.db.voiceRun.findUnique({ where: { id: runId }, include: { profile: true, chunks: { orderBy: { chunkIndex: 'asc' } } } });
@@ -256,37 +285,86 @@ export class VoiceService {
       input.all ? true : input.chunkIds?.length ? input.chunkIds.includes(c.id) : input.section ? c.sectionKey === `SC${String(input.section).padStart(2, '0')}` : (input.blockKeys ?? []).some((k) => c.blockKeys.includes(k)),
     );
     if (!chunks.length) throw new ConflictError('No chunk of this run matches');
-    const characters = chunks.reduce((n, c) => n + c.sourceText.length, 0);
-    if ((input.all || characters > this.deps.config.confirmCharacters) && !input.confirm) throw new ConflictError(`Regenerating ${chunks.length} chunk(s), about ${characters} characters — confirm to go ahead`);
-    const job = await this.deps.projects.voiceJob(project.id, actor, `New takes for ${chunks.length} chunk(s) of voice run ${run.number}`, async (tx, p) => {
+    const variants: { label: string | null; strategy: PerformanceStrategy; marks: DirectorMark[] }[] = input.variants
+      ? input.variants.map((v) => ({ label: v.label, strategy: v.strategy ?? run.strategy, marks: v.marks ?? [] }))
+      : [{ label: null, strategy: input.strategy ?? run.strategy, marks: input.marks ?? [] }];
+    const script = await loadScriptForVoice(this.db, run.scriptId);
+    if (!script) throw new NotFoundError('Script', run.scriptId);
+    const characters = await this.sentCharacters(project.id, run.profile, script, chunks, variants);
+    const takes = chunks.length * variants.length;
+    if (characters > this.deps.config.maxCharacters) throw new ConflictError(`${takes} new take(s) would send ${characters} characters, over the ceiling of ${this.deps.config.maxCharacters} per job (VOICE_MAX_CHARACTERS)`);
+    if ((input.all || input.variants || characters > this.deps.config.confirmCharacters) && !input.confirm) {
+      throw new ConflictError(`${input.variants ? `A/B (${variants.map((v) => v.label).join(' / ')}) of` : 'Regenerating'} ${chunks.length} chunk(s): ${takes} take(s), ${characters} characters (${costWords(this.deps.providers.voice, run.profile.modelId, characters)}) — confirm to go ahead`);
+    }
+    const job = await this.deps.projects.voiceJob(project.id, actor, `New takes for ${chunks.length} chunk(s) of voice run ${run.number}${input.variants ? ` (A/B: ${variants.map((v) => v.label).join(' / ')})` : ''}`, async (tx, p) => {
       const ids: string[] = [];
       for (const c of chunks) {
         const last = await tx.voiceGeneration.findFirst({ where: { chunkId: c.id }, orderBy: { generation: 'desc' }, select: { generation: true } });
-        const g = await tx.voiceGeneration.create({
-          data: {
-            chunkId: c.id,
-            runId: run.id,
-            projectId: p.id,
-            generation: (last?.generation ?? 0) + 1,
-            status: 'PENDING',
-            profileId: run.profileId,
-            provider: run.profile.provider,
-            model: run.profile.modelId,
-            voiceId: run.profile.voiceId,
-            strategy: input.strategy ?? run.strategy,
-            canonicalText: c.sourceText,
-            textHash: c.textHash,
-            ...(input.marks?.length ? { directions: input.marks as unknown as Prisma.InputJsonValue } : {}),
-            ...(input.note ? { note: input.note } : {}),
-            createdBy: actor,
-          },
-        });
-        ids.push(g.id);
+        let generation = last?.generation ?? 0;
+        for (const v of variants) {
+          const g = await tx.voiceGeneration.create({
+            data: {
+              chunkId: c.id,
+              runId: run.id,
+              projectId: p.id,
+              generation: ++generation,
+              status: 'PENDING',
+              profileId: run.profileId,
+              provider: run.profile.provider,
+              model: run.profile.modelId,
+              voiceId: run.profile.voiceId,
+              strategy: v.strategy,
+              variant: v.label,
+              canonicalText: c.sourceText,
+              textHash: c.textHash,
+              ...(v.marks.length ? { directions: v.marks as unknown as Prisma.InputJsonValue } : {}),
+              ...(input.note ? { note: input.note } : {}),
+              createdBy: actor,
+            },
+          });
+          ids.push(g.id);
+        }
       }
-      await this.event(tx, p.id, EVENT.VOICE_RUN_REQUESTED, `Voice run ${run.number}: new takes for chunk(s) ${chunks.map((c) => c.chunkIndex + 1).join(', ')}`, { actor, run: run.number, chunks: chunks.map((c) => c.chunkIndex + 1), directions: input.marks?.length ?? 0 });
+      await this.event(tx, p.id, EVENT.VOICE_RUN_REQUESTED, `Voice run ${run.number}: new takes for chunk(s) ${chunks.map((c) => c.chunkIndex + 1).join(', ')}${input.variants ? ` (A/B: ${variants.map((v) => v.label).join(' / ')})` : ''}`, {
+        actor,
+        run: run.number,
+        chunks: chunks.map((c) => c.chunkIndex + 1),
+        variants: input.variants ? variants.map((v) => v.label) : null,
+        directions: variants.reduce((n, v) => n + v.marks.length, 0),
+        characters,
+      });
       return { runIds: [run.id], generationIds: ids };
     });
-    return { job, takes: chunks.length };
+    return { job, takes };
+  }
+
+  /** Characters new takes of these chunks would send: prepared as the stage prepares them (spoken forms, approved aliases, markup), not the script's text. */
+  private async sentCharacters(projectId: string, profile: VoiceProfile, script: VoiceScript, chunks: readonly VoiceChunk[], variants: readonly { strategy: PerformanceStrategy; marks: readonly DirectorMark[] }[]): Promise<number> {
+    const config = profileConfig(profile);
+    const words = await lexicon(this.db, projectId, profile.language);
+    const blocks = new Map<string, TakeBlock>([...script.blocks.values()].map((b) => [b.key, { delivery: b.delivery, infoClass: b.infoClass }]));
+    let characters = 0;
+    for (const c of chunks) {
+      const rules = rulesFor(c.sourceText, words);
+      for (const v of variants) {
+        const prepared = prepareTake({
+          chunk: { text: c.sourceText, sentences: chunkSentences(c), performance: readPerformance(c.performance) },
+          blocks,
+          strategy: v.strategy,
+          ...(v.marks.length ? { director: v.marks } : {}),
+          numberStyle: config.numberStyle,
+          aliases: rules.aliases,
+          phonemes: rules.phonemes,
+          provider: this.deps.providers.voice,
+          model: profile.modelId,
+          settings: config.settings,
+          context: { previousText: null, nextText: null },
+          seed: null,
+        });
+        characters += prepared.rendered.text.length;
+      }
+    }
+    return characters;
   }
 
   /** Approve a take, reject it (no regeneration is forced), or make an earlier take current again. */
@@ -299,20 +377,21 @@ export class VoiceService {
     await this.db.$transaction(async (tx) => {
       if (input.action === 'APPROVE') {
         if (!isCurrent) throw new ConflictError('Only the current take of a chunk can be approved: restore it first');
-        if (take.status !== 'GENERATED' && take.status !== 'APPROVED') throw new ConflictError(`Take ${take.generation} is ${take.status.toLowerCase()}: it cannot be approved`);
+        if (!APPROVABLE.has(take.status)) throw new ConflictError(`Take ${take.generation} is ${take.status.toLowerCase()}: it cannot be approved`);
         const blocking = readQa(take.qa).filter((f) => f.severity === 'BLOCKING' && f.kind !== 'MOCK_AUDIO');
         if (blocking.length) throw new ConflictError(`Take ${take.generation} has blocking findings (${blocking.map((f) => f.detail).join('; ')}): regenerate it`);
         await tx.voiceGeneration.update({ where: { id: take.id }, data: { status: 'APPROVED', approvedAt: now, decidedBy: actor, decidedAt: now, ...(input.note ? { note: input.note } : {}) } });
       } else if (input.action === 'REJECT') {
-        if (!['GENERATED', 'APPROVED', 'SUPERSEDED'].includes(take.status)) throw new ConflictError(`Take ${take.generation} is ${take.status.toLowerCase()}: nothing to reject`);
+        if (!REJECTABLE.has(take.status)) throw new ConflictError(`Take ${take.generation} is ${take.status.toLowerCase()}: nothing to reject`);
         await tx.voiceGeneration.update({ where: { id: take.id }, data: { status: 'REJECTED', approvedAt: null, decidedBy: actor, decidedAt: now, ...(input.note ? { note: input.note } : {}) } });
       } else {
         if (isCurrent) throw new ConflictError(`Take ${take.generation} is already the current take`);
         if (!take.audioAssetId || !take.durationMs) throw new ConflictError(`Take ${take.generation} has no audio to restore`);
         if (take.textHash !== take.chunk.textHash) throw new ConflictError(`Take ${take.generation} was made from other text: it cannot be reused`);
         const current = take.chunk.currentGenerationId ? await tx.voiceGeneration.findUnique({ where: { id: take.chunk.currentGenerationId } }) : null;
-        if (current && (current.status === 'GENERATED' || current.status === 'APPROVED')) await tx.voiceGeneration.update({ where: { id: current.id }, data: { status: 'SUPERSEDED' } });
-        await tx.voiceGeneration.update({ where: { id: take.id }, data: { status: take.approvedAt ? 'APPROVED' : 'GENERATED', decidedBy: actor, decidedAt: now, ...(input.note ? { note: input.note } : {}) } });
+        if (current && APPROVABLE.has(current.status)) await tx.voiceGeneration.update({ where: { id: current.id }, data: { status: 'SUPERSEDED' } });
+        // Back to the decision it had: approved if it was, else to review (an A/B variant becomes the chunk's take here).
+        await tx.voiceGeneration.update({ where: { id: take.id }, data: { status: take.approvedAt ? 'APPROVED' : 'IN_REVIEW', decidedBy: actor, decidedAt: now, ...(input.note ? { note: input.note } : {}) } });
         await tx.voiceChunk.update({ where: { id: take.chunkId }, data: { currentGenerationId: take.id } });
       }
       await this.event(tx, take.projectId, EVENT.VOICE_TAKE_DECIDED, `Voice run ${take.run.number}, chunk ${take.chunk.chunkIndex + 1}: take ${take.generation} ${input.action === 'RESTORE' ? 'restored' : input.action === 'APPROVE' ? 'approved' : 'rejected'}`, { actor, take: take.generation, chunk: take.chunk.chunkIndex + 1, note: input.note ?? null });
@@ -333,7 +412,7 @@ export class VoiceService {
     let skipped = 0;
     for (const c of run.chunks) {
       const g = c.current;
-      if (!g || g.status !== 'GENERATED') continue;
+      if (!g || (g.status !== 'IN_REVIEW' && g.status !== 'GENERATED')) continue;
       if (readQa(g.qa).some((f) => f.severity === 'BLOCKING' && f.kind !== 'MOCK_AUDIO')) {
         skipped++;
         continue;
@@ -381,7 +460,7 @@ export class VoiceService {
     const assembly = await this.db.voiceAssembly.findUnique({ where: { id: assemblyId }, include: { run: { include: { profile: true } } } });
     if (!assembly) throw new NotFoundError('Assembly', assemblyId);
     if (assembly.audioAssetId) return this.audio(assembly.audioAssetId);
-    const entries = (assembly.entries ?? []) as { generationId: string; gapAfterMs: number }[];
+    const entries = readEntries(assembly.entries);
     const takes = await this.db.voiceGeneration.findMany({ where: { id: { in: entries.map((e) => e.generationId) } }, select: { id: true, audioAssetId: true } });
     const clips = [];
     let mock = false;
@@ -393,6 +472,8 @@ export class VoiceService {
       clips.push({ audio: a.bytes, mimeType: a.mimeType, gapAfterMs: e.gapAfterMs });
     }
     const joined = joinClips(clips);
+    const drift = clipDrift(entries, joined.startsMs);
+    if (drift) await this.db.voiceAssembly.update({ where: { id: assembly.id }, data: { qa: [...readQa(assembly.qa).filter((f) => f.kind !== drift.kind), drift] as unknown as Prisma.InputJsonValue } });
     const id = randomUUID();
     const key = buildAssetKey({ projectId: assembly.projectId, language: assembly.run.profile.language, kind: 'NARRATION_AUDIO', assetId: id, ext: joined.mimeType === 'audio/mpeg' ? 'mp3' : 'wav' });
     await this.deps.providers.storage.put(key, joined.audio, { contentType: joined.mimeType, metadata: { assembly: assembly.id } });
@@ -403,19 +484,14 @@ export class VoiceService {
     return { bytes: joined.audio, mimeType: joined.mimeType, mock };
   }
 
-  /** "What is being said at 02:43?" in a run's latest assembly. */
+  /** "What is being said at 02:43?" in a run's latest assembly, with the timeline's part for that moment. */
   async moment(projectRef: string, runNumber: number, ms: number): Promise<VoiceMomentView> {
-    const project = await this.project(projectRef);
-    const run = await this.db.voiceRun.findUnique({ where: { projectId_number: { projectId: project.id, number: runNumber } } });
-    if (!run) throw new NotFoundError('Voice run', String(runNumber));
-    const assembly = await this.db.voiceAssembly.findFirst({ where: { runId: run.id }, orderBy: { version: 'desc' } });
-    if (!assembly) throw new ConflictError(`Voice run ${runNumber} has no assembled narration yet`);
-    const timeline = (assembly.timeline ?? []) as unknown as Parameters<typeof whatIsSaidAt>[0];
-    const hit = whatIsSaidAt(timeline, ms);
+    const t = await this.timeline(projectRef, runNumber);
+    const hit = whatIsSaidAt(t.timeline, ms);
     if (!hit) throw new ConflictError(`Nothing is said at ${formatClock(ms)}`);
     return {
       atMs: ms,
-      run: run.number,
+      run: t.run,
       section: hit.entry.scriptBlock.sectionKey,
       block: hit.entry.scriptBlock.key,
       chunk: hit.entry.audioChunk.index + 1,
@@ -425,6 +501,44 @@ export class VoiceService {
       between: hit.between,
       startMs: hit.entry.startMs,
       endMs: hit.entry.endMs,
+      part: hit.entry,
+    };
+  }
+
+  /**
+   * The narration timeline of a run's latest assembly, as the storyboard
+   * reads it: for each block part, its section, block, chunk, take and audio
+   * file, start and end on the assembled clock, timed words and performance,
+   * and whether its take is approved now (a decision after assembly counts).
+   */
+  async timeline(projectRef: string, runNumber: number): Promise<NarrationTimelineView> {
+    const project = await this.project(projectRef);
+    const run = await this.db.voiceRun.findUnique({ where: { projectId_number: { projectId: project.id, number: runNumber } }, include: { script: { select: { version: true } } } });
+    if (!run) throw new NotFoundError('Voice run', String(runNumber));
+    const assembly = await this.db.voiceAssembly.findFirst({ where: { runId: run.id }, orderBy: { version: 'desc' } });
+    if (!assembly) throw new ConflictError(`Voice run ${runNumber} has no assembled narration yet`);
+    const entries = readEntries(assembly.entries);
+    const timeline = (assembly.timeline ?? []) as unknown as NarrationTimelineEntry[];
+    const ids = [...new Set([...entries.map((e) => e.generationId), ...timeline.map((t) => t.audioChunk.generationId)])];
+    const takes = new Map((await this.db.voiceGeneration.findMany({ where: { id: { in: ids } }, select: { id: true, status: true, audioAssetId: true } })).map((t) => [t.id, t]));
+    // Assemblies made before audio files were recorded in them get theirs from the take.
+    const asset = (takeId: string, known: string | undefined) => {
+      const id = known ?? takes.get(takeId)?.audioAssetId;
+      return id ? { audioAssetId: id } : {};
+    };
+    return {
+      run: run.number,
+      scriptVersion: run.script.version,
+      assembly: assembly.version,
+      status: assembly.status,
+      complete: assembly.complete,
+      totalDurationMs: assembly.totalDurationMs,
+      entries: entries.map((e) => ({ ...e, ...asset(e.generationId, e.audioAssetId) })),
+      timeline: timeline.map((t) => ({
+        ...t,
+        audioChunk: { ...t.audioChunk, ...asset(t.audioChunk.generationId, t.audioChunk.audioAssetId) },
+        approved: takes.get(t.audioChunk.generationId)?.status === 'APPROVED',
+      })),
     };
   }
 
@@ -445,7 +559,8 @@ export async function liveRunQa(
   const approvedText = approved && approved.id !== run.scriptId ? await loadScriptForVoice(db, approved.id) : null;
   const words = await lexicon(db, run.projectId, run.profile.language);
   const text = run.chunks.map((c) => c.sourceText).join('\n');
-  const assembly = await db.voiceAssembly.findFirst({ where: { runId: run.id }, orderBy: { version: 'desc' }, select: { qa: true } });
+  const assembly = await db.voiceAssembly.findFirst({ where: { runId: run.id }, orderBy: { version: 'desc' }, select: { version: true, entries: true, qa: true } });
+  const mismatch = assemblyMismatch(run.chunks, assembly);
   return [
     ...runQa({
       kind: run.kind,
@@ -457,6 +572,7 @@ export async function liveRunQa(
       approvedBlockText: approvedText ? new Map([...approvedText.blocks.values()].map((b) => [b.key, b.text])) : null,
       unresolved: unresolvedIn(text, words),
     }),
+    ...(mismatch ? [mismatch] : []),
     ...readQa(assembly?.qa),
   ];
 }
