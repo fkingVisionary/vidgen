@@ -1,15 +1,24 @@
 import {
-  CreateVoiceProfileInput,
+  CreateVoiceProfileFamilyInput,
   CreateVoiceRunInput,
   DecideVoiceGenerationInput,
+  DuplicateVoiceProfileInput,
+  NewVoiceProfileVersionInput,
   PlanVoiceRunInput,
   RegenerateVoiceInput,
+  SaveRunAsProfileInput,
   UpdatePronunciationInput,
+  UpdateVoiceProfileFamilyInput,
   VoiceExperimentInput,
+  VoiceSelectionInput,
   type NarrationTimelineView,
+  type VoiceConfigOverrides,
+  type VoiceProductionView,
+  type VoiceProfileHistoryView,
+  type VoiceProfileLibraryView,
 } from '@docengine/core';
 import { ConflictError, NotFoundError } from '@docengine/pipeline';
-import { loadVoiceView, parseClock } from '@docengine/voice';
+import { loadProduction, loadProfileHistory, loadProfileLibrary, loadVoiceView, parseClock } from '@docengine/voice';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { actorOf } from '../auth.ts';
@@ -19,6 +28,8 @@ import { findProject, toJobView } from '../views.ts';
 const ProjectParams = z.object({ id: z.string().trim().min(1).max(100) });
 const IdParams = z.object({ id: z.uuid() });
 const RunQuery = z.object({ run: z.coerce.number().int().min(1).optional() });
+const LibraryQuery = z.object({ archived: z.enum(['true', 'false']).optional() });
+const LanguageQuery = z.object({ language: z.string().trim().min(2).max(10).optional() });
 
 /** Audio with byte ranges (players seek with Range requests). Same-origin, behind the dashboard's auth. */
 function sendAudio(req: FastifyRequest, reply: FastifyReply, bytes: Uint8Array, mimeType: string, mock: boolean) {
@@ -36,10 +47,18 @@ function sendAudio(req: FastifyRequest, reply: FastifyReply, bytes: Uint8Array, 
 
 /**
  * Narration: the Voice page's read model, planning and generating runs,
- * comparisons, new takes, decisions on takes, the pronunciation list, voice
- * profiles, audio (takes and assemblies), the narration timeline, and the
- * lookup "what is said at 02:43". The VOICE gate goes through the generic
- * approvals route.
+ * comparisons, new takes (with the run's configuration, the production
+ * profile now, or a temporary override), decisions on takes, the
+ * pronunciation list, audio (takes and assemblies), the narration timeline,
+ * and the lookup "what is said at 02:43". The VOICE gate goes through the
+ * generic approvals route.
+ *
+ * Saved voice profiles: the library (global, not a project's), a profile
+ * and its history, an edit (always a new version: runs and takes keep the
+ * version they used), a duplicate, a run's or a take's configuration saved
+ * as a profile, and a project's choice of profile per language version with
+ * its own overrides (never stored on the profile). Library operations write
+ * no project event, so they are logged here.
  */
 export async function voiceRoutes(app: FastifyInstance, c: AppContainer): Promise<void> {
   const requireProject = async (raw: unknown) => {
@@ -47,6 +66,17 @@ export async function voiceRoutes(app: FastifyInstance, c: AppContainer): Promis
     const project = await findProject(c.db, id);
     if (!project) throw new NotFoundError('Project', id);
     return project;
+  };
+  const views = { db: c.db, providers: c.providers };
+  const history = async (familyId: string): Promise<VoiceProfileHistoryView> => {
+    const h = await loadProfileHistory(views, familyId);
+    if (!h) throw new NotFoundError('Voice profile', familyId);
+    return h;
+  };
+  const production = async (project: Awaited<ReturnType<typeof requireProject>>, language?: string): Promise<VoiceProductionView> => {
+    const p = await loadProduction(views, project, language);
+    if (!p) throw new NotFoundError('Language version', `${project.slug}/${language ?? project.masterLanguage}`);
+    return p;
   };
   const requireReal = () => {
     if (!c.realStages.includes('VOICE')) throw new ConflictError('The voice stage needs a real script stage here (AI_PROVIDER=anthropic): there is no script to narrate');
@@ -62,7 +92,7 @@ export async function voiceRoutes(app: FastifyInstance, c: AppContainer): Promis
   app.post('/api/projects/:id/voice/plan', async (req) => {
     const project = await requireProject(req.params);
     requireReal();
-    return c.voice.plan(project.id, PlanVoiceRunInput.parse(req.body ?? {}));
+    return c.voice.plan(project.id, PlanVoiceRunInput.parse(req.body ?? {}), actorOf(req));
   });
 
   /** Generate a run: an audition (the opening), a section, chosen blocks, a range, or the whole script. */
@@ -106,11 +136,91 @@ export async function voiceRoutes(app: FastifyInstance, c: AppContainer): Promis
     return { ok: true };
   });
 
-  /** A new voice profile version (profiles are never edited in place). */
-  app.post('/api/projects/:id/voice/profiles', async (req, reply) => {
+  /** The profile library, with what a form needs for the configured provider (archived profiles with ?archived=true). */
+  app.get('/api/voice/profiles', async (req): Promise<VoiceProfileLibraryView> => {
+    const q = LibraryQuery.parse(req.query ?? {});
+    return loadProfileLibrary(views, { archived: q.archived === 'true' });
+  });
+
+  /** A new saved profile (its v1): the configured provider's defaults and the house default, with the fields given over them. */
+  app.post('/api/voice/profiles', async (req, reply) => {
+    const actor = actorOf(req);
+    const r = await c.voice.createProfileFamily(CreateVoiceProfileFamilyInput.parse(req.body ?? {}), actor);
+    req.log.info({ actor, familyId: r.familyId, versionId: r.versionId, version: 1 }, 'voice profile created');
+    return reply.code(201).send(await history(r.familyId));
+  });
+
+  /** A saved profile and every version, newest first. */
+  app.get('/api/voice/profiles/:id', async (req): Promise<VoiceProfileHistoryView> => {
+    const { id } = IdParams.parse(req.params);
+    return history(id);
+  });
+
+  /** Rename, describe, archive or unarchive a saved profile, or make it the library default (its versions are not touched). */
+  app.patch('/api/voice/profiles/:id', async (req): Promise<VoiceProfileHistoryView> => {
+    const { id } = IdParams.parse(req.params);
+    const input = UpdateVoiceProfileFamilyInput.parse(req.body ?? {});
+    const actor = actorOf(req);
+    await c.voice.updateProfileFamily(id, input, actor);
+    const h = await history(id);
+    req.log.info({ actor, familyId: id, versionId: h.current?.id ?? null, version: h.current?.version ?? null, change: input }, 'voice profile updated');
+    return h;
+  });
+
+  /** An edit: always a new version (refused when the profile changed since the editor opened it, or nothing changed). */
+  app.post('/api/voice/profiles/:id/versions', async (req, reply) => {
+    const { id } = IdParams.parse(req.params);
+    const actor = actorOf(req);
+    const r = await c.voice.newProfileVersion(id, NewVoiceProfileVersionInput.parse(req.body ?? {}), actor);
+    req.log.info({ actor, familyId: r.familyId, versionId: r.versionId, version: r.version }, 'voice profile version saved');
+    return reply.code(201).send(await history(r.familyId));
+  });
+
+  /** A new saved profile from any version of this one (another language allowed). */
+  app.post('/api/voice/profiles/:id/duplicate', async (req, reply) => {
+    const { id } = IdParams.parse(req.params);
+    const actor = actorOf(req);
+    const r = await c.voice.duplicateProfile(id, DuplicateVoiceProfileInput.parse(req.body ?? {}), actor);
+    req.log.info({ actor, familyId: r.familyId, versionId: r.versionId, version: 1, from: id }, 'voice profile duplicated');
+    return reply.code(201).send(await history(r.familyId));
+  });
+
+  /**
+   * Save a run's configuration (or one of its takes') as a profile: a new one
+   * by name, or a new version of one. With `use`, the run's language version
+   * narrates with it from now on and the project's overrides are cleared
+   * (they are in what was saved): they are returned.
+   */
+  app.post('/api/voice/runs/:id/save-profile', async (req, reply) => {
+    const { id } = IdParams.parse(req.params);
+    const input = SaveRunAsProfileInput.parse(req.body ?? {});
+    const actor = actorOf(req);
+    const r = await c.voice.saveRunAsProfile(id, input, actor);
+    req.log.info({ actor, familyId: r.familyId, versionId: r.versionId, version: r.version, runId: id, generationId: input.generationId ?? null, selected: r.selected }, 'voice profile saved from a run');
+    const run = r.selected ? await c.db.voiceRun.findUniqueOrThrow({ where: { id }, select: { project: true, languageVersion: { select: { language: true } } } }) : null;
+    const body: { profile: VoiceProfileHistoryView; production: VoiceProductionView | null; clearedOverrides: VoiceConfigOverrides | null } = {
+      profile: await history(r.familyId),
+      production: run ? await production(run.project, run.languageVersion.language) : null,
+      clearedOverrides: r.clearedOverrides,
+    };
+    return reply.code(201).send(body);
+  });
+
+  /** What a language version narrates with now (default: the master language). */
+  app.get('/api/projects/:id/voice/selection', async (req): Promise<VoiceProductionView> => {
     const project = await requireProject(req.params);
-    const p = await c.voice.createProfile(project.id, CreateVoiceProfileInput.parse(req.body ?? {}), actorOf(req));
-    return reply.code(201).send({ id: p.id, name: p.name, version: p.version });
+    const q = LanguageQuery.parse(req.query ?? {});
+    return production(project, q.language);
+  });
+
+  /** Choose a saved profile (following its current version or pinned to one) or the library default, and the project's overrides. */
+  app.put('/api/projects/:id/voice/selection', async (req): Promise<VoiceProductionView> => {
+    const project = await requireProject(req.params);
+    const input = VoiceSelectionInput.parse(req.body ?? {});
+    const actor = actorOf(req);
+    const r = await c.voice.setSelection(project.id, input, actor);
+    req.log.info({ actor, projectId: project.id, languageVersionId: r.languageVersionId, familyId: input.familyId, versionId: input.versionId ?? null, revision: r.revision }, 'voice profile selected');
+    return production(project, input.language);
   });
 
   /** The voices the configured provider offers (for choosing a profile's voice). */

@@ -238,10 +238,12 @@ erDiagram
 
 | Table | Notes |
 |---|---|
-| `voice_profiles` | Provider, voice, model, language, output format and `config` (voice settings, performance strategy, chunking, context, number style). Never edited: a change is a new version; one active per provider and language. |
-| `voice_runs` | One run ("Voice Run 3") of one approved script version with one profile: scope (audition, section, blocks, range, full), strategy and chunk/context settings used; `experiment` + `variant` group the runs of a comparison. |
+| `voice_profile_families` | A saved voice profile (§16, *Saved voice profiles*): the stable identity, display name (unique, ignoring case), description, archived flag and library-default flag. Its settings live in its versions. Updated only in those four fields. |
+| `voice_profiles` | The versions of saved profiles: provider, voice, model, language, output format and `config` (performance strategy, chunking, context, number style, the profile's pronunciation rules, performance rules, provider settings; versions made before saved profiles hold the earlier shape, `settings`). Never edited: an edit is a new version of its family (`family_id`, `version` per family, `based_on_id`, `origin`); the current version is the newest. `active` is read only to adopt a version written without a family. |
+| `voice_selections` | A project's choice of profile per language version: the family (null: the library default), following its current version or pinned to one, the project's `overrides` of supported settings (never stored on the profile) and a `revision` incremented by every change. |
+| `voice_runs` | One run ("Voice Run 3") of one approved script version with one profile version: scope (audition, section, blocks, range, full), strategy and chunk/context settings used, and `config`, what it was made with, frozen when it is created (version, the project's overrides, the run's options, the effective configuration with provenance, the provider settings as sent; null before saved profiles); `experiment` + `variant` group the runs of a comparison. |
 | `voice_chunks` | The smallest generation unit: whole sentences of one section (spans into blocks), canonical `source_text`, its `text_hash`, each source block's hash (stale detection), why it ends where it does, the script's delivery, the current take. |
-| `voice_generations` | Every take of a chunk (Generation 1, 2, 3…), never deleted: status PENDING → GENERATING → IN_REVIEW (the chunk's current take, awaiting a decision) → APPROVED / REJECTED / SUPERSEDED, or FAILED; GENERATED for stored audio that is not current (an A/B take, labelled in `variant`); canonical, spoken and performance text and the performance text's hash (`performance_text_hash`); the derived representation and its checks; seed; context sent; audio asset; measured duration; word and character timestamps; QA; ledger link. |
+| `voice_generations` | Every take of a chunk (Generation 1, 2, 3…), never deleted: status PENDING → GENERATING → IN_REVIEW (the chunk's current take, awaiting a decision) → APPROVED / REJECTED / SUPERSEDED, or FAILED; GENERATED for stored audio that is not current (an A/B take, labelled in `variant`); canonical, spoken and performance text and the performance text's hash (`performance_text_hash`); the derived representation and its checks; seed; context sent; `config`, what the take was made with (the run's configuration or the production profile, any temporary override, how it differs from the run's; null before saved profiles); audio asset; measured duration; word and character timestamps; QA; ledger link. |
 | `voice_assemblies` | A run's current takes in order on the measured clock (`entries`, each with its take's audio asset), the pauses between them, the narration `timeline` (the downstream contract), QA, the joined audio file once built. A new version whenever a current take changes, the one before superseded; DRAFT until every chunk has a take, then IN_REVIEW; the approved full assembly is what the VOICE gate approves (`approvals.voice_assembly_id`). |
 | `voice_pronunciations` | The project's pronunciation review list: term, kind, method (the voice's own reading, alias, IPA, CMU), pronunciation, status (to check, approved, heard wrong), source and hint. |
 
@@ -404,15 +406,16 @@ Cost basis per ledger row (`provider_calls.cost_basis`):
 | Basis | Meaning |
 |---|---|
 | `VENDOR_REPORTED` | The provider returned a dollar cost (`actual_cost_usd`). |
-| `ESTIMATED` | Usage reported by the provider × configured price (`estimated_cost_usd`): Anthropic tokens × the served model's published per-token prices; Tavily credits × `TAVILY_USD_PER_CREDIT`; ElevenLabs characters (reported, else counted as sent) × `ELEVENLABS_USD_PER_1K_CHARS` or the model's list price. Labelled "estimated" in the dashboard. |
+| `ESTIMATED` | Usage reported by the provider × configured price (`estimated_cost_usd`): Anthropic tokens × the served model's published per-token prices; Tavily credits × `TAVILY_USD_PER_CREDIT`; ElevenLabs characters sent × `ELEVENLABS_USD_PER_1K_CHARS` or the model's list price (its `character-cost` header is kept raw in `response.reported`, never priced). Labelled "estimated" in the dashboard. |
 | `UNPRICED` | Usage without a configured price (counted in "unpriced calls", never as $0). |
 | `MOCK` | Mock provider, $0. |
 
 Failed calls keep the usage the provider reported (a refused or truncated
 Claude response still costs tokens; an ElevenLabs response that arrived but
 could not be used still costs its characters). When the provider says, a
-row's `response` also records the HTTP attempts (retries included) and
-whether the usage was REPORTED by the vendor or COUNTED.
+row's `response` also records the HTTP attempts (retries included),
+whether the usage was REPORTED by the vendor or COUNTED, and any figure the
+vendor reported beside it (`reported`, raw, under its own name).
 
 ## 11. Research engine (milestone 2)
 
@@ -1277,9 +1280,10 @@ approved script version → sections → blocks → chunks (≈ 8–12 s of natu
 ```
 
 Module `modules/voice`; provider code in `packages/providers` (ElevenLabs,
-S3 storage, MP3/WAV tools). Pages: the dashboard's Voice page. Production
-uses Eleven v4 (`eleven_v4`) with the audio in a Railway bucket
-(DEPLOYMENT.md, *Enabling real narration*).
+S3 storage, MP3/WAV tools). Pages: the dashboard's Voice page and the Voice
+profiles library (*Saved voice profiles*, below). Production uses Eleven v4
+(`eleven_v4`) with the audio in a Railway bucket (DEPLOYMENT.md, *Enabling
+real narration*).
 
 ### Chunks
 
@@ -1391,9 +1395,9 @@ stored with every run.
    and the ElevenLabs provider refuses to send a text that contains one.
    **SSML models** (Multilingual v2, Flash v2/v2.5) get `<break time="…"/>`
    (≤ 3 s) and no tags; a model the provider does not know gets line breaks
-   only. Voice settings are sent only where the model takes them (v4:
-   stability and similarity; no speed or style). What a model cannot
-   express is reported, not sent.
+   only. Provider settings are sent only where the model takes them
+   (`sentSettings`; v4: stability and similarity, no speed or style). What
+   a model cannot express is reported, not sent.
 4. **Checks** (`checkTake`, before anything is sent; a FAIL means not sent):
    the spoken text is the canonical text plus recorded forms only; the sent
    text has exactly the spoken words in order; every sentence is verbatim;
@@ -1412,7 +1416,8 @@ stored with every run.
 The canonical text, the spoken text and the performance text (exactly what
 was sent, marked derived, with its SHA-256 in `performance_text_hash`) are
 all stored with the take, with the spoken forms, marks, pauses, context,
-settings, seed, dictionary rules and checks.
+settings (every provider setting with the chunk's pace applied, and what the
+model was sent of them), seed, dictionary rules and checks.
 
 ### Takes, context, alignment, statuses
 
@@ -1552,32 +1557,40 @@ dashboard shows them wherever a confirmation is asked.
 - **Regenerate** (`POST /api/voice/runs/:id/regenerate`): one chunk, the
   chunks selected, a section, chosen blocks, or every chunk — one new take
   per chunk, made current when it is ready; no other chunk changes and the
-  assembly is rebuilt. Optionally another strategy, a note kept with each
-  take, and, for exactly one chunk, a director's directions. The
+  assembly is rebuilt. Made with the run's own configuration (the
+  default), the project's production profile as it is now, or either with a
+  temporary override (*Saved voice profiles*, below); optionally a note kept
+  with each take and, for exactly one chunk, a director's directions. The
   characters are counted as the stage will prepare them (spoken forms,
   aliases, markup); every chunk, or more than `VOICE_CONFIRM_CHARACTERS`,
   must be confirmed.
 - **A/B** of chosen chunks: two or three variants (each its strategy and,
-  for a single chunk, its directions), one take per variant per chunk, kept
+  for a single chunk, its directions; the request's override applies to
+  every variant), one take per variant per chunk, kept
   beside the current take as GENERATED and never made current by itself;
   the editor compares and picks one with *Use this take*. Always confirmed.
 - **Use a previous take**: any earlier take of the same text with audio can
   be made current again (above).
 - **Experiments** (`POST /api/projects/:id/voice/experiments`): the same
   passage (never the whole script) narrated 2–8 ways in one job, each
-  variant setting its own strategy, context and chunk size over the
-  profile's, each its own run with its own assembly so it can be heard
-  whole. Always confirmed, whatever the size; the total is held to
+  variant setting its own run options over the profile's (strategy,
+  context, chunk size, number style, performance rules, the provider
+  settings it lets be overridden) or narrating with another saved profile
+  version (`profileId`, heard as saved), each its own run with its own
+  assembly so it can be heard whole. Always confirmed, whatever the size; the total is held to
   `VOICE_MAX_CHARACTERS`. The Generate tab offers three: direction (A plain
   / B restrained / C expressive, and optionally D over-directed),
-  continuity (no context / neighbouring text) and chunk size (≈ 5–8 /
-  8–12 / 12–20 s).
+  continuity (no context / neighbouring text), chunk size (≈ 5–8 /
+  8–12 / 12–20 s) and a comparison of 2–4 saved profiles.
 - **The acceptance experiment** (`VOICE_ACCEPTANCE_EXPERIMENT`, its own
   panel on the Generate tab): the opening audition (whole blocks from the
   start until about 100 s of planned narration) narrated seven ways in one
   job behind one confirmation. Every variant spells out all three settings,
   so it does not depend on the profile; B is the house default the others
-  are heard against.
+  are heard against. It narrates with the profile chosen on the Generate tab
+  (the production profile unless another is chosen), so a new voice can be
+  auditioned with the same seven variants and the winner saved from its
+  variant card as a profile.
 
   | Variant | Strategy | Context | Chunk size | What it is there to hear |
   |---|---|---|---|---|
@@ -1591,24 +1604,192 @@ dashboard shows them wherever a confirmation is asked.
 
   Neighbouring text is 200 characters before and 120 after.
 
-Plans are pinned to their profile version: the dashboard plans every
-variant on the profile of the first plan and generates on that profile, so a
-profile version made in the meantime (in another tab) cannot change what
-was confirmed. A plan or a confirmation is dropped as soon as the request it
-was made for changes.
+Plans are pinned to their profile version and to the project's selection
+revision: the dashboard plans every variant on the version of the first
+plan (or the variant's own) and generates on it with the revision it was
+planned at. A profile version saved in the meantime (in another tab) cannot
+change what was confirmed; a change of the project's profile choice or
+overrides refuses it (409, "plan again"). A plan or a confirmation is
+dropped as soon as the request it was made for changes.
 
-### Profiles, pronunciation, cost
+### Saved voice profiles
 
-A voice profile (provider, voice, model, language, output format, voice
-settings, strategy, chunking, context, number style) is never edited: a
-change is a new version, active from then on, and every take points at the
-version that made it. The first one ("House narrator") is created the
-first time a run is planned, from the configured defaults
-(ELEVENLABS_VOICE_ID; ELEVENLABS_MODEL_ID, `eleven_v4`, with no automatic
-fallback; ELEVENLABS_OUTPUT_FORMAT) and the house settings (RESTRAINED,
-20–30 words, 200/120 characters of context, UK number style). A profile whose output
-format cannot be measured or joined (anything but `mp3_*`, `wav_*`,
-`pcm_*`) is refused.
+A voice profile is everything that shapes a take beyond the script:
+provider, voice, model, language, output format, performance strategy,
+chunking, context, number style, the profile's own pronunciation rules,
+performance rules and the provider's own settings. Profiles are a library
+(`/voice-profiles` in the dashboard, global, not a project's); a project
+chooses one, and may set some of its settings over it for itself.
+
+**Families and versions.** A saved profile is a family
+(`voice_profile_families`: stable id, display name, description, archived,
+library default) with immutable versions (`voice_profiles`). An edit is
+always a new version (the family's highest number plus one), based on the
+current version or on any earlier one ("Edit from this version" is how to
+go back); an edit that changes nothing is refused, and so is one made
+against a version that is no longer current (`expectedCurrent`: "changed
+since you opened it"; the dashboard keeps the edit, names the version saved
+since, and saves over it only on purpose, "Save vN anyway"). The **current
+version is the newest**; versions are not archived. Renaming or describing
+a family makes no version: each version keeps the name it was made with. Provider and language are fixed per family: a voice for
+another language is a duplicate (a new family with v1 from any version).
+Each version records how it was made (`origin`: DEFAULTS, LIBRARY, EDIT,
+DUPLICATE, or RUN with the run, project, experiment, variant and take;
+LEGACY for versions from before), and the history shows what changed from
+the version before it ("performance: restrained → expressive"). Names are
+1–80 characters and unique among families ignoring case (a name still
+carried by another family's versions is refused too). Every version is
+checked: the configured provider, a voice id, an output format the engine
+can measure and join (`mp3_*`, `wav_*`, `pcm_*`), provider settings the
+provider accepts, and chunking, context, rules and pronunciation that parse.
+Archiving a family hides it from choice lists and refuses new versions and
+new selections of it; projects already using it keep it (with a notice);
+the library default cannot be archived. Unarchiving restores it.
+
+**Provider settings.** The profile schema is provider-neutral, plus one
+open record, `providerSettings`, that only the provider understands. The
+provider **describes** it (`VoiceProvider.settings`: per key a label, help,
+kind NUMBER, BOOLEAN or CHOICE, default, range or choices, the models it is
+sent to — `models`, or every model but those in `except` — whether a
+project, a run or a take may override it, and `role: 'SPEED'` for the base
+speaking rate), **checks and normalises** it (`normalizeSettings`: every
+described key present with its default; unknown keys, wrong kinds and
+out-of-range values are listed as problems, never clamped) and says **what
+a model is sent** (`sentSettings`: a key is sent when `models ?
+models.includes(model) : !except.includes(model)`, so a model the provider
+does not know gets the keys sent to every model). ElevenLabs describes
+stability (every model), similarity (every model but `eleven_v3`), style,
+speaker boost and speed (Multilingual v2 and Flash; speed is the SPEED
+role): Eleven v4 is sent stability and similarity only, as before. The mock
+describes the same five for every model. The engine names no key: a
+chunk's pace scales the SPEED-role setting where the model takes it, and
+the dashboard builds its forms from the descriptors.
+
+**Performance rules** are the house style's limits and words as a profile
+sets them: directions per chunk, words between directions, the director's
+words per direction before a warning, the word for each scripted feeling,
+the four delivery words (also the manners of a turn), the reset word and
+the pace speeds. A reset word that is also a delivery word is refused
+(`performanceRulesProblems`: its directions would read as resets, exempt
+from the spacing), for a version and for the rules a project's overrides,
+a run's options or a take's override make with it. A new profile starts
+from `DEFAULT_PERFORMANCE_RULES`.
+`EARLIER_PERFORMANCE_RULES` (frozen, never edited) is what the engine
+applied before saved profiles: versions in the earlier shape and runs made
+before them are read with it, so tuning the default can never change what
+an old run reads as. EXPRESSIVE's one moment of at most two cues is the
+strategy's definition, not a rule. **Pronunciation**: a profile's own rules
+(term, alias / IPA / CMU) cover the terms the project has not approved; the
+project's approved list always applies and wins for a term it has decided.
+
+**A project chooses per language version** (`voice_selections`, one row
+per language version): a family, following its current version or pinned
+to one, or the library default (no row, or no family); the project's
+overrides; a revision. A run belongs to one language version, and so do
+takes, assets and the timeline; a profile version has one language and one
+voice, so a Spanish edition needs its own choice. The Voice page works on
+the master language. **Resolution** (`resolveProduction`): FOLLOW gives the
+family's current version, PIN the pinned one, DEFAULT the current version of
+the unarchived library-default family for the configured provider and the
+language (the most recently updated when several match). Problems that
+stop a new run (another provider, another language, no voice id) and
+notices (an archived profile, a newer version while pinned, no default yet)
+are reported, not thrown. A read never writes. At plan or run time a
+missing default is created from the configured defaults ("House narrator",
+origin DEFAULTS: ELEVENLABS_VOICE_ID; ELEVENLABS_MODEL_ID, `eleven_v4`, with
+no automatic fallback; ELEVENLABS_OUTPUT_FORMAT; the house default and the
+provider's setting defaults), after any version written
+without a family (by code from before this change, say after a rollback) has
+been adopted into a family by the migration's rule. There is at most one
+library default per provider and language: making a family the default
+takes the flag from the other.
+
+**Layers and provenance.** The effective configuration of a run is the
+version, then the project's overrides (PROJECT), then the run's options
+(RUN); a take may add a temporary override (TAKE). Strategy, chunking,
+context and number style are replaced whole; performance rules and provider
+settings are merged key by key. Provider settings may be overridden only
+where the provider marks them overridable, and a take cannot change the
+chunking (its chunk is the run's). Every path a layer sets is recorded with
+its source, even at the profile's own value, so an override in force is
+always visible. Overrides are checked when they are stored or used (a
+problem is a 409); a read never throws. The PROJECT layer applies only to
+versions of the **production family** — production's own version, or an
+older version of that family a plan pinned before the profile was edited.
+Another saved profile named for a run or a comparison variant is heard as
+saved (mode EXPLICIT): an audition of a profile sounds like that profile.
+
+**Snapshots: what was made is kept.** Every run stores what it was made
+with (`voice_runs.config`: the version as `{family, version, name}`, how it
+was chosen and at which selection revision, the project's overrides, the
+run's options, the effective configuration, provenance, and the provider
+settings as the model is sent them and those it does not take), and every
+take stores its own (`voice_generations.config`: its base, any override,
+the version, the effective configuration, provenance, and how it differs
+from the run's). Both are written when the row is created and never after;
+`voice_profiles` rows are never updated, and families only in name,
+description, archived flag and default flag. A snapshot is **used
+verbatim**: a take made with the run's configuration lays its override over
+the stored effective configuration as it is, never re-read from the version
+or re-normalised by today's descriptors. Only what the provider sends of
+the settings follows its model table at the time (that follows the
+vendor's API, not the profile). `voice_runs.strategy` and `settings` are
+still written with the effective values, for code from before.
+**Reconstruction.** Runs and takes made before saved profiles (no `config`)
+are read back rebuilt and marked `reconstructed`: the run's version (voice,
+model, output format, number style, provider settings), its strategy, its
+chunking and context from `settings`, no profile pronunciation rules and
+`EARLIER_PERFORMANCE_RULES` — exactly what the engine then did; `runOptions`
+are where the run differs from its version. An old take is its run's with
+its own strategy (an A/B variant), differing at most in that.
+
+**Regeneration choices.** New takes are made with (a) the run's own
+configuration (the default: its snapshot, stored or reconstructed), (b) the
+**production profile** as it resolves now (its version with the project's
+overrides), or either with (c) a **temporary override** of strategy,
+context, number style, performance rules or overridable provider settings.
+A PRODUCTION take is refused when production has a problem, when its output
+format or language is not the run's (clips of one run share a format), or
+when the project's selection changed since the request was made; another
+voice or model is allowed, labelled, and gets a QA warning. A take's
+chunking is always its run's: the chunk was cut by the run. Each take stores
+its configuration and how it differs from the run's ("stability: 0.3 (run:
+0.5)"), worked out once when it is made; live run QA adds the warning
+`CONFIGURATION_DIFFERS` where a chunk's current take differs from its run in
+voice identity (provider, voice, model, output format, provider settings,
+number style, pronunciation rules). It reads only stored JSON, so the VOICE
+gate (which has no providers) is unchanged, and a warning does not block.
+Strategy, context and rule differences are labelled, not findings: they are
+per-take performance choices (A/B, a director). An override is kept with its
+take only; nothing reaches a profile unless it is saved.
+
+**Save as a profile.** "Save this run's configuration as a voice profile"
+(`POST /api/voice/runs/:id/save-profile`) saves the run's effective
+configuration, or one take's (`generationId`, a temporary override that was
+liked), as a new profile (`name`) or a new version of one (`familyId`, same
+language). Its origin names the run, project, experiment, variant and take,
+and whether the run was reconstructed; the notes default to "Saved from voice
+run 3 of tulip-mania (Acceptance experiment — C expressive)". It never
+becomes the library default. With `use`, the run's own language version
+narrates with it from then on (FOLLOW) and **the project's overrides are
+cleared**: where they applied to the run they are already in what was saved,
+and a kept override (say a strategy) would make production differ from what
+was heard. The cleared overrides are returned, written into the project
+event and shown. Project events: `VOICE_PROFILE_CREATED` (a profile saved
+from a run) and `VOICE_PROFILE_SELECTED` (every change of a selection or its
+overrides). Library operations are global, write no project event, and are
+logged by the API (actor, family, version).
+
+**No global winner.** `DEFAULT_VOICE_PROFILE_CONFIG` (RESTRAINED, 20–30
+words, 200/120 characters of context without stitching, UK numbers) is only
+the starting point of a new profile. The acceptance result — Eleven v4, the
+chosen voice, EXPRESSIVE, neighbouring context, 20–30 words, run 3 of Tulip
+Mania — is Tulip's choice, made in the product ("Save this run's
+configuration as a voice profile", a name, "Use for this project"). No code
+default and no migration writes it, and another documentary keeps the
+library default until it chooses.
+
+### Pronunciation, cost
 
 The pronunciation review list starts from the script's pronunciation notes
 (an editor-confirmed note with IPA is approved; the rest are to check) and
@@ -1616,16 +1797,37 @@ adds foreign spellings, names with particles and abbreviations found in the
 narration. Approved aliases are spoken by the engine; approved IPA/CMU
 phonemes go to a provider pronunciation dictionary (ElevenLabs: phoneme
 rules, IPA written between slashes, CMU as Arpabet), one per rule set, found
-again by its name (a hash of the rules) or created once. The whole narration
-is generated only once every term is decided; auditions may run with terms
+again by its name (a hash of the rules) or created once; a profile's own
+phoneme rules reach the provider the same way. The whole narration is
+generated only once every term is decided; auditions may run with terms
 still to check (that is how they are heard).
 
-Cost: every request is a ledger row. ElevenLabs reports characters (the
-`character-cost` header), not dollars, so cost is an ESTIMATE: the reported
-characters — or, when the header is missing, the characters sent, recorded
-as counted — × ELEVENLABS_USD_PER_1K_CHARS when it is set (one price for
-every model), else the documented list price per model (v4: $0.08 per
-1,000). A model with no price is UNPRICED; the mock is MOCK. A response that
+Term detection keeps a sentence's ordinary first word out of a name: a run
+of capitalised words that opens a sentence loses its first word when a
+capitalised name follows ("Meet Thijs, a Haarlem craftsman." gives Thijs
+and Haarlem), unless something says the word belongs to the name — a
+foreign spelling ("Thijs Gaergoedt"), a particle after it ("Jan van
+Goyen"), or the same word capitalised inside a sentence elsewhere in the
+text. A detected entry nobody has decided or edited, which the detector no
+longer finds while it finds a term the entry ends with, is **withdrawn**
+("Meet Thijs", replaced by Thijs): it no longer blocks narration, the
+Pronunciation tab lists it apart, and no row is rewritten or deleted; the
+next plan adds the term that replaced it, to decide.
+
+Cost: every request is a ledger row. ElevenLabs returns no dollars, so cost
+is an ESTIMATE whose basis is the **characters sent** (spoken text and
+markup: an upper bound), recorded as COUNTED, × ELEVENLABS_USD_PER_1K_CHARS
+when it is set (one price for every model), else the documented list price
+per model (v4: $0.08 per 1,000). What the provider reports about a call is
+kept raw beside it, under its own name, and never priced: ElevenLabs'
+`character-cost` header came back at about 0.11 of the characters sent in
+the live acceptance run (run 3: 1,577 sent, 174 reported), and its unit
+under v4 (characters, credits, a discount) is unverified. Views and logs
+show both: "sent 1,577 characters; provider reported 174 (character-cost
+header)". Ledger rows written before 2026-10-06 priced the reported figure
+(REPORTED): voice views and logs re-estimate them from the characters sent
+and say so (`reestimated`); the ledger itself is not rewritten. A model with
+no price is UNPRICED; the mock is MOCK. A response that
 arrived but could not be used (no audio, unreadable audio, invalid JSON)
 keeps its usage, so a request that may have been billed is still costed. A
 take's ledger row records:
@@ -1633,12 +1835,14 @@ take's ledger row records:
 - **request**: run (id and number), script id and version, section, block
   keys, chunk (id and number), take (id and generation), variant, model,
   voice id, characters sent, strategy, text hash, performance-text hash,
-  the job attempt, and the context sent (characters before and after,
-  stitched or not);
+  the job attempt, the context sent (characters before and after, stitched
+  or not), the profile (family and version) and the take's configuration
+  (its base and any override);
 - **response**: measured duration, MIME type, bytes, whether timestamps came
   back, the provider's request id, the pronunciation dictionary used, the
-  HTTP attempts (retries included) and whether the characters were REPORTED
-  by the provider or COUNTED;
+  HTTP attempts (retries included), how the characters were counted
+  (COUNTED: the characters sent; REPORTED on rows before 2026-10-06) and
+  the provider's reported figures (`reported`, raw);
 - usage, cost basis and estimate, the provider's request id (`request-id`,
   else `x-trace-id`) and history item id (`history-item-id`) when returned.
 
@@ -1679,34 +1883,49 @@ never what was meant:
 - **`voice chunk`**, one per chunk of each run: run id and number, chunk
   number and id, section, block keys, boundary, spoken words, estimated
   seconds, characters sent, and the chunk's current take (else its newest):
-  id, generation, status, current or not, variant, strategy, the exact
+  id, generation, status, current or not, variant, strategy, what it was
+  made with (`configuration`: base, override, the profile version as
+  "Tulip narrator v2", its source — run configuration, production profile
+  or temporary override — and how it differs from the run), the exact
   performance text, measured duration, alignment (source, number of the
   provider's character timestamps, timed words, unmatched words), cost
-  (ledger row id, status, basis, estimated and reported USD, characters,
+  (ledger row id, status, basis, estimated and reported USD, characters
+  sent, the provider's reported figures, whether it was re-estimated,
   REPORTED or COUNTED, HTTP attempts), the provider's request id, error.
 - **`voice run summary`**, one per run: run id and number, kind,
   experiment and variant, script id and version, strategy, chunking,
-  context, profile (id, name, version), provider, model, voice id, language,
-  output format; chunk count; takes by status; regenerations; this job's
-  takes, characters and estimated USD; the characters of every ledgered
-  request of the run, the characters the provider reported (when it did),
-  estimated and reported USD, cost bases; the measured durations of the
+  context, profile (family id and name now, version id, version, the
+  version's own name), `configuration` (reconstructed or not, how the
+  version was chosen and at which selection revision, the project's
+  overrides, the run's options, provenance, and both in words: "performance
+  expressive, stability 0.4"), `effective` (provider settings, what the
+  model is sent of them and what it does not take, number style,
+  performance rules, pronunciation rules), provider, model, voice id,
+  language, output format; chunk count; takes by status; regenerations;
+  this job's takes, characters and estimated USD; the characters sent by
+  every ledgered request of the run, the provider's reported figures summed
+  per name (`providerReported`: name, total, requests), `costText` ("sent
+  1,577 characters; provider reported 174 (character-cost header)"),
+  estimated and reported USD, whether any row was re-estimated, cost
+  bases; the measured durations of the
   current takes (total, shortest, longest, mean, median) and how many have
   timestamps; the latest assembly (id, version, status, total duration,
   complete); QA findings by kind (blocking, warning); pronunciation terms
   unresolved and used; why the run stopped, if it did.
 - **`voice regeneration summary`**, for a regeneration: per chunk
   regenerated, the previous current take (id, generation, duration) and
-  the new takes (as in `voice chunk`, with their ledger row and alignment);
-  the assembly before and after (id, version, total duration); the number
+  the new takes (as in `voice chunk`, with their configuration, ledger row
+  and alignment); the new takes by what they were made with
+  (`configurations`: run, production, overridden) and the profile versions
+  they used; the assembly before and after (id, version, total duration); the number
   of chunks regenerated, the other chunks, how many of those kept their
   current take, and `othersIntact` (true when they all did).
 - **`voice experiment comparison`**, for an experiment: its name, the
-  number of variants, and one row per variant (label, run, strategy,
-  context, chunking, chunks, total measured duration, mean chunk duration,
-  characters, estimated USD), also as text rows to read straight from the
-  log ("B restrained | RESTRAINED | context previous 200 / next 120 chars |
-  20–30 words | …").
+  number of variants, and one row per variant (label, run, profile version,
+  strategy, context, chunking, any other override, chunks, total measured
+  duration, mean chunk duration, characters, estimated USD), also as text
+  rows to read straight from the log ("C expressive | House narrator v1 |
+  EXPRESSIVE | context previous 200 / next 120 chars | 20–30 words | …").
 
 A failure to read the log back never fails a job whose takes are kept. The
 job's result carries the same run lines.
@@ -1714,16 +1933,34 @@ job's result carries the same run lines.
 ### API
 
 ```
-GET  /api/projects/:id/voice[?run=N]                 the Voice page's view
-POST /api/projects/:id/voice/plan                     plan (nothing is generated)
-POST /api/projects/:id/voice/runs · …/experiments     generate (202, one VOICE job)
-POST /api/projects/:id/voice/profiles                 a new profile version
-GET  /api/projects/:id/voice/timeline?run=N · …/voice/moment?run=N&at=mm:ss
-POST /api/voice/runs/:id/regenerate · …/approve-all
-POST /api/voice/generations/:id/decision              APPROVE | REJECT | RESTORE
+GET   /api/projects/:id/voice[?run=N]                 the Voice page's view
+POST  /api/projects/:id/voice/plan                     plan (nothing is generated)
+POST  /api/projects/:id/voice/runs · …/experiments     generate (202, one VOICE job)
+GET   /api/projects/:id/voice/timeline?run=N · …/voice/moment?run=N&at=mm:ss
+POST  /api/voice/runs/:id/regenerate · …/approve-all   (regenerate: configuration RUN | PRODUCTION, override)
+POST  /api/voice/generations/:id/decision              APPROVE | REJECT | RESTORE
 PATCH /api/voice/pronunciations/:id
-GET  /api/voice/voices · /api/voice/audio/:id · /api/voice/assemblies/:id/audio (byte ranges)
+GET   /api/voice/voices · /api/voice/audio/:id · /api/voice/assemblies/:id/audio (byte ranges)
+
+GET   /api/voice/profiles[?archived=true]              the library, with the provider's settings and defaults
+POST  /api/voice/profiles                              a new profile, v1 (201)
+GET   /api/voice/profiles/:id                          a profile and every version
+PATCH /api/voice/profiles/:id                          rename, describe, archive, unarchive, make library default
+POST  /api/voice/profiles/:id/versions                 an edit: a new version (201)
+POST  /api/voice/profiles/:id/duplicate                a new profile from any version (201)
+POST  /api/voice/runs/:id/save-profile                 a run's or a take's configuration as a profile (201; with `use`, the cleared overrides)
+GET   /api/projects/:id/voice/selection[?language=]    what a language version narrates with now
+PUT   /api/projects/:id/voice/selection                choose, follow or pin, and the project's overrides
 ```
+
+Invalid input is a 400; an unknown project, profile, version, run, take or
+language a 404; a profile rule (name taken, archived, another provider, an
+unknown or not overridable provider setting, an unmeasurable output format,
+nothing changed, a pinned version that is not the chosen profile's) or a
+stale revision (`expectedCurrent`, the selection's `revision`, a plan's
+`selectionRevision`) a 409. The earlier `POST
+/api/projects/:id/voice/profiles` is gone (404): profiles are a library with
+versions, not a project's list.
 
 ### Limits (stated)
 
@@ -1738,16 +1975,40 @@ GET  /api/voice/voices · /api/voice/audio/:id · /api/voice/assemblies/:id/audi
   English voice may stress wrongly; the script's notes cover the rest.
 - Request ids for stitching are only kept two hours by ElevenLabs; older
   takes fall back to text context.
-- Not yet verified against the live v4 API (no real narration has been
-  generated): whether its alignment includes the characters of the audio
-  tags (the alignment works either way), whether tags are billed (the
-  characters sent include them), the `character-cost` and `request-id`
-  headers (without them the characters are counted and no request id is
-  kept), whether dictionary phonemes should be written between slashes, and
-  emphasis (reported as not expressed until it is tested).
+- The live acceptance experiment (2026-10-06, seven runs, 78 takes) showed
+  that v4's alignment includes the characters of the audio tags (the
+  alignment works either way) and that the `character-cost` and
+  `request-id` headers come back. Not yet verified: what `character-cost`
+  counts (above), whether tags are billed (the characters sent include
+  them), whether dictionary phonemes should be written between slashes (no
+  dictionary was used), and emphasis (reported as not expressed until it is
+  tested).
 - The audio route reads the whole object before answering a byte range;
   two first plays of the same assembly at the same moment can store its
   joined file twice (one is kept in use).
+- The unit of ElevenLabs' `character-cost` under v4 is unverified: it is
+  recorded raw and never priced, and the estimate (from the characters
+  sent) is an upper bound. The project-wide ledger total keeps the earlier,
+  understated estimates of the seven acceptance runs; voice views and logs
+  re-estimate them, and the ledger is not rewritten.
+- A sentence-opening first name with no other evidence is dropped from the
+  term ("Wouter Bartholomeusz sold…" alone gives Bartholomeusz).
+- Profiles are created and chosen for the configured voice provider only.
+  Profiles of another provider are kept and listed (not offered for choice)
+  and are usable again when that provider is configured.
+- A regeneration with the run's configuration re-uses its stored settings
+  verbatim; what the provider sends of them follows its model table at the
+  time (the vendor's API), not the profile.
+- Code from before saved profiles, if rolled back to, reads versions in the
+  new shape with the house voice settings; versions it writes have no family
+  and are adopted when new code next plans.
+- Voice names are not looked up on reads (`voiceName` is null; the dashboard
+  maps names from `/api/voice/voices`).
+- Cut for V1: archiving single versions (a revert is an edit from an older
+  version), external provider pronunciation dictionaries (a profile's
+  dictionary is its own rules), switching the project's approved list off
+  per profile, per-profile moment counts (EXPRESSIVE's one moment of two
+  cues is the strategy's), and the earlier per-project profile route.
 
 ## 17. Documentary Writing Engine 2
 
@@ -2060,3 +2321,9 @@ No model call is made by the writing module; no live voice is generated.
 | D97 | A take caught mid-request is never sent again on the same row; storage is retried inside the job; a fault after paid audio came back stops the job | The request may already have been billed: a job retry would buy the same audio again | Retry the job as for any other stage |
 | D98 | Startup connectivity checks that spend nothing and never decide the HTTP status | The operator sees whether the bucket and the voice work before paying for audio; a slow vendor must not fail Railway's deploy health check | A test generation at startup; health tied to the vendors |
 | D99 | Every voice job logs what it did, read back from the database | Acceptance runs are checked from the production logs (the engineers cannot call the authenticated API); a logged figure must be what was stored, not what was meant | Log as the job goes; rely on the dashboard |
+| D100 | A saved voice profile is a family with immutable versions; the current version is the newest | Runs and takes must keep the exact configuration they were made with whatever happens to the profile later; a family gives the library a stable name to choose and rename | Edit profiles in place; archive single versions |
+| D101 | Provider-specific settings are one open record the provider describes, checks and filters per model | The profile schema must not be one vendor's; a form, a check and what is sent all come from the provider's descriptors, so a new provider adds no column and no engine code | Columns per ElevenLabs setting; a closed settings type in the contract |
+| D102 | A project chooses a profile per language version, with its own overrides stored on the choice, never on the profile | Runs, takes and the timeline are per language version and a voice has one language; an override is the project's, so it must not change what other projects hear | One profile per project; overrides saved as a new profile version |
+| D103 | Every run and take stores its effective configuration as a snapshot, used verbatim; older rows are reconstructed with frozen earlier rules | What was heard must stay reproducible after a profile edit, an override change or a tuned default | Re-derive from the profile row at read time |
+| D104 | The acceptance winner becomes the project's profile through the product ("Save as a voice profile", "Use for this project"), never a code default or a migration | The brief: the result is this documentary's default, not the engine's; another film keeps the library default until it chooses | Change DEFAULT_VOICE_PROFILE_CONFIG to the winner |
+| D105 | Cost is estimated from the characters sent; the vendor's character-cost figure is recorded raw, never priced | Its unit under v4 is unverified (about 0.11 of the characters sent); an upper bound is honest, a discount guessed is not | Price the reported figure |

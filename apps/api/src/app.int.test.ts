@@ -14,7 +14,7 @@ import { ALL_MOCK, createProviders } from '@docengine/providers';
 import { FAKE_CORPUS_GATE, FakeResearchAI, FakeResearchProvider } from '@docengine/research/testing';
 import { FakeStoryAI, seedFakeDossier } from '@docengine/story/testing';
 import { FakeScriptAI } from '@docengine/script/testing';
-import { StoryArchitectureContent, type NarrationTimelineView, type ResearchView, type ScriptBlockView, type ScriptChangeReport, type ScriptCompareView, type ScriptEditorialView, type ScriptView, type StoryView, type VoiceMomentView, type VoicePlanView, type VoiceRenderPlan, type VoiceView, type WritingCorpusView, type WritingExampleView } from '@docengine/core';
+import { StoryArchitectureContent, type NarrationTimelineView, type ResearchView, type ScriptBlockView, type ScriptChangeReport, type ScriptCompareView, type ScriptEditorialView, type ScriptView, type StoryView, type VoiceMomentView, type VoicePlanView, type VoiceProfileHistoryView, type VoiceRenderPlan, type VoiceView, type WritingCorpusView, type WritingExampleView } from '@docengine/core';
 import { Prisma } from '@docengine/database';
 
 const db = useTestDatabase();
@@ -996,14 +996,22 @@ describe('voice API', () => {
     expect(gate.statusCode).toBe(409);
     expect(gate.json<{ message: string }>().message).toMatch(/No full narration of script v1/);
 
-    // A new profile version becomes the active one; the old one is kept.
-    const profile = await app.inject({ method: 'POST', url: `/api/projects/${id}/voice/profiles`, payload: { settings: { stability: 0.4 }, notes: 'A little more expressive (test).' } });
+    // An edit of the profile this project narrates with is a new version of it, current from then on; the old one is kept,
+    // and the runs made with it keep it. (Pinned on purpose: this was the per-project POST …/voice/profiles reading
+    // `active` and `settings`; profiles are now a library with versions, `active` is no longer read, and provider
+    // settings live in `config.providerSettings`. The earlier route is gone.)
+    const house = v.production.family!;
+    expect(v.production).toMatchObject({ mode: 'DEFAULT', revision: 0, family: { isDefault: true }, profile: { version: 1, current: true } });
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${id}/voice/profiles`, payload: { settings: { stability: 0.4 } } })).statusCode).toBe(404);
+    const profile = await app.inject({ method: 'POST', url: `/api/voice/profiles/${house.id}/versions`, payload: { fields: { providerSettings: { stability: 0.4 } }, notes: 'A little more expressive (test).' } });
     expect(profile.statusCode).toBe(201);
-    v = await voice(app, id);
-    expect(v.profiles.map((p) => [p.version, p.active, p.config.settings.stability])).toEqual([
+    expect(profile.json<VoiceProfileHistoryView>().history.map((p) => [p.version, p.current, p.config.providerSettings.stability])).toEqual([
       [2, true, 0.4],
       [1, false, 0.5],
     ]);
+    v = await voice(app, id);
+    expect(v.production.profile).toMatchObject({ version: 2, changes: ['stability: 0.5 → 0.4'] });
+    expect(v.runs.every((r) => r.profile.version === 1 && r.profile.familyId === house.id)).toBe(true);
     // Pronunciation decisions are validated.
     const term = v.pronunciations[0];
     if (term) {

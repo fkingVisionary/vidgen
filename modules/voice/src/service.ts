@@ -2,31 +2,55 @@ import {
   CreateVoiceRunInput,
   DecideVoiceGenerationInput,
   PlanVoiceRunInput,
+  PronunciationConfig,
   RegenerateVoiceInput,
   UpdatePronunciationInput,
   VoiceExperimentInput,
   estimateCost,
-  type CreateVoiceProfileInput,
+  performanceRulesProblems,
+  type CreateVoiceProfileFamilyInput,
   type DirectorMark,
+  type DuplicateVoiceProfileInput,
   type NarrationTimelineEntry,
   type NarrationTimelineView,
-  type PerformanceStrategy,
+  type NewVoiceProfileVersionInput,
+  type SaveRunAsProfileInput,
+  type UpdateVoiceProfileFamilyInput,
+  type VoiceConfigOverrides,
   type VoiceGenerationStatus,
   type VoiceMomentView,
   type VoicePlanView,
   type VoiceQaFinding,
+  type VoiceRunConfig,
   type VoiceRunOptions,
   type VoiceScope,
+  type VoiceSelectionInput,
+  type VoiceTakeConfig,
+  type VoiceTakeOverride,
 } from '@docengine/core';
-import type { Database, Job, Prisma, Project, Tx, VoiceChunk, VoiceProfile } from '@docengine/database';
+import type { Database, Job, Prisma, Project, Tx, VoiceChunk } from '@docengine/database';
 import { ConflictError, EVENT, NotFoundError, type ProjectService } from '@docengine/pipeline';
 import { joinClips, buildAssetKey, type ProviderSet, type VoiceProvider } from '@docengine/providers';
 import { createHash, randomUUID } from 'node:crypto';
 import { clipDrift, formatClock, whatIsSaidAt } from './assembly.ts';
-import { blockingCount } from './qa.ts';
-import { auditionCoverage, planRun, type RunSettings } from './plan.ts';
+import { checkOverrides, describeOverrides, mergeOverrides, newRunConfig, newTakeConfig, profileLabel, runConfig, takeSource, type ProfileRow } from './config.ts';
+import { blockingCount, configurationFindings } from './qa.ts';
+import { auditionCoverage, planRun } from './plan.ts';
 import { prepareTake, type TakeBlock } from './prepare.ts';
-import { activeProfile, createProfileVersion, profileConfig, ProfileError, toProfileView } from './profiles.ts';
+import {
+  ProfileError,
+  createProfileFamily,
+  duplicateProfile,
+  isUniqueViolation,
+  libraryDefault,
+  newProfileVersion,
+  profileViews,
+  resolveProduction,
+  saveRunAsProfile,
+  setSelection,
+  updateProfileFamily,
+  type Production,
+} from './profiles.ts';
 import { rulesFor } from './pronunciation.ts';
 import { assemblyMismatch, lexicon, readEntries, readPerformance, readQa, rebuildAssembly, runQa, syncLexicon, unresolvedIn } from './runs.ts';
 import { approvedScript, loadScriptForVoice, resolveScope, ScopeError, type VoiceScript } from './script.ts';
@@ -36,9 +60,11 @@ import { sha256 } from './text.ts';
 /**
  * The editor's side of the Voice Engine: plan a run, generate it (an
  * audition, a section, chosen blocks, the whole script, or a comparison of
- * several ways of narrating the same passage), regenerate chunks, approve,
- * reject or restore takes, decide pronunciations, and version profiles.
- * Every generation goes through a VOICE job; nothing here calls a voice.
+ * several ways of narrating the same passage), regenerate chunks with the
+ * run's configuration, the production profile or a temporary override,
+ * approve, reject or restore takes, decide pronunciations, keep the profile
+ * library, and choose a project's profile and overrides. Every generation
+ * goes through a VOICE job; nothing here calls a voice.
  */
 
 export interface VoiceServiceConfig {
@@ -62,19 +88,42 @@ const APPROVABLE = new Set<VoiceGenerationStatus>(['IN_REVIEW', 'GENERATED', 'AP
 /** Takes with audio a decision can be taken back from. */
 const REJECTABLE = new Set<VoiceGenerationStatus>([...APPROVABLE, 'SUPERSEDED']);
 
-/** What sending this many characters would cost, in words for a confirmation (never a made-up figure). */
-function costWords(voice: VoiceProvider, model: string, characters: number): string {
+/** What sending these characters would cost, in words for a confirmation (never a made-up figure): each part at its model's price. */
+function costWords(voice: VoiceProvider, parts: readonly { model: string; characters: number }[]): string {
   if (voice.info.mock) return 'no cost: MOCK voice';
-  const cost = estimateCost(voice.info.name, model, [{ unit: 'CHARACTERS', quantity: characters }], voice.info.rates);
-  if (cost.unpriced.length) return `cost unknown: no price configured for ${model}`;
-  return cost.costUsd < 0.01 ? 'under $0.01 estimated' : `about $${cost.costUsd.toFixed(2)} estimated`;
+  let usd = 0;
+  for (const p of parts) {
+    const cost = estimateCost(voice.info.name, p.model, [{ unit: 'CHARACTERS', quantity: p.characters }], voice.info.rates);
+    if (cost.unpriced.length) return `cost unknown: no price configured for ${p.model}`;
+    usd += cost.costUsd;
+  }
+  return usd < 0.01 ? 'under $0.01 estimated' : `about $${usd.toFixed(2)} estimated`;
 }
 
+/** A refusal the editor can act on (409): a scope or profile problem, or a version, name or selection saved at the same time elsewhere. */
 function wrap<T>(fn: () => Promise<T>): Promise<T> {
   return fn().catch((err: unknown) => {
     if (err instanceof ScopeError || err instanceof ProfileError) throw new ConflictError(err.message);
+    if (isUniqueViolation(err)) throw new ConflictError('Saved at the same time somewhere else (a profile version, a name or a project\'s choice): reload and try again');
     throw err;
   });
+}
+
+/** A selection revision a plan was made at that is no longer the project's. */
+const revisionChanged = (planned: number, now: number) =>
+  new ConflictError(`The project's voice profile or its overrides changed since this was planned (revision ${planned}, now ${now}): plan again`);
+
+/** How a run narrates, resolved: the version, production, and the frozen configuration. */
+interface Resolved {
+  production: Production;
+  version: ProfileRow;
+  config: VoiceRunConfig;
+}
+
+/** "Tulip narrator, follows the current version (v1); overrides: stability 0.4", "Tulip narrator, pinned to v1; overrides: none". */
+function selectionText(s: { family: { name: string } | null; version: { name: string; version: number } | null; pinned: boolean; overrides: VoiceConfigOverrides }): string {
+  const which = !s.family ? `the library default${s.version ? ` (${s.version.name} v${s.version.version})` : ''}` : `${s.family.name}, ${s.pinned ? `pinned to v${s.version?.version}` : `follows the current version (v${s.version?.version})`}`;
+  return `${which}; overrides: ${describeOverrides(s.overrides)}`;
 }
 
 export class VoiceService {
@@ -99,20 +148,48 @@ export class VoiceService {
     return script;
   }
 
-  private settingsFor(profile: VoiceProfile, options: VoiceRunOptions | undefined): RunSettings {
-    const config = profileConfig(profile);
-    return { strategy: options?.strategy ?? config.strategy, chunking: options?.chunking ?? config.chunking, context: options?.context ?? config.context };
+  private async masterLanguage(project: Project): Promise<{ id: string; language: string; projectId: string }> {
+    const lv = await this.db.languageVersion.findUnique({ where: { projectId_language: { projectId: project.id, language: project.masterLanguage } } });
+    if (!lv) throw new NotFoundError('Language version', `${project.slug} (${project.masterLanguage})`);
+    return lv;
   }
 
-  private async profileFor(project: Project, profileId: string | undefined): Promise<VoiceProfile> {
-    const { voice } = this.deps.providers;
+  /**
+   * The version a run narrates with and its frozen configuration: the one
+   * named (a comparison of saved profiles, a plan pinned to a version), else
+   * production's. The project's overrides apply to versions of production's
+   * family only (an older version a plan pinned included); another saved
+   * profile is heard as saved (EXPLICIT).
+   */
+  private async resolve(production: Production, profileId: string | undefined, options: VoiceRunOptions | undefined): Promise<Resolved> {
+    const voice = this.deps.providers.voice;
+    let version: ProfileRow;
     if (profileId) {
-      const p = await this.db.voiceProfile.findUnique({ where: { id: profileId } });
-      if (!p) throw new NotFoundError('Voice profile', profileId);
-      if (p.provider !== voice.info.name) throw new ConflictError(`Profile ${p.name} v${p.version} is for ${p.provider}; the configured voice provider is ${voice.info.name}`);
-      return p;
+      const named = await this.db.voiceProfile.findUnique({ where: { id: profileId }, include: { family: true } });
+      if (!named) throw new NotFoundError('Voice profile', profileId);
+      if (named.provider !== voice.info.name) throw new ProfileError(`Profile ${named.name} v${named.version} is for ${named.provider}; the configured voice provider is ${voice.info.name}`);
+      if (named.language !== production.language) throw new ProfileError(`Profile ${named.name} v${named.version} is for ${named.language}; this narration is ${production.language}`);
+      if (named.family?.archivedAt && named.familyId !== production.family?.id) throw new ProfileError(`Profile ${named.family.name} is archived: unarchive it to narrate with it`);
+      version = named;
+    } else {
+      if (production.problem || !production.version) throw new ProfileError(production.problem ?? 'No voice profile to narrate with');
+      version = production.version;
     }
-    return activeProfile(this.db, voice, project.masterLanguage);
+    const runOptions = options ?? {};
+    const problems = checkOverrides(runOptions, voice, 'RUN');
+    if (problems.length) throw new ProfileError(`Run options: ${problems.join('; ')}`);
+    const own = !!production.family && version.familyId === production.family.id;
+    const config = newRunConfig({ version, selection: { mode: own ? production.mode : 'EXPLICIT', revision: production.revision }, projectOverrides: own ? production.overrides : {}, runOptions }, voice);
+    const rules = performanceRulesProblems(config.effective.performanceRules);
+    if (rules.length) throw new ProfileError(`Performance rules (the profile's with the overrides): ${rules.join('; ')}`);
+    return { production, version, config };
+  }
+
+  /** Production for the project's master language (the library default made or adopted if need be), refused when the plan was made at another revision. */
+  private async production(project: Project, selectionRevision: number | undefined, actor: string): Promise<Production> {
+    const production = await resolveProduction(this.db, this.deps.providers.voice, await this.masterLanguage(project), { create: true, actor });
+    if (selectionRevision !== undefined && selectionRevision !== production.revision) throw revisionChanged(selectionRevision, production.revision);
+    return production;
   }
 
   /** Why a plan cannot be generated (null when it can). */
@@ -126,62 +203,75 @@ export class VoiceService {
   }
 
   /** What a run would be: chunks, what each sends, cost, coverage. Nothing is generated (the pronunciation list is brought up to date). */
-  async plan(projectRef: string, raw: PlanVoiceRunInput): Promise<VoicePlanView> {
+  async plan(projectRef: string, raw: PlanVoiceRunInput, actor = 'system'): Promise<VoicePlanView> {
     const input = PlanVoiceRunInput.parse(raw);
     return wrap(async () => {
       const project = await this.project(projectRef);
       const script = await this.approved(project);
-      const profile = await this.profileFor(project, input.profileId);
-      const settings = this.settingsFor(profile, input.options);
+      const { version, config, production } = await this.resolve(await this.production(project, input.selectionRevision, actor), input.profileId, input.options);
+      const { effective } = config;
       const scope = resolveScope(script, input.scope);
-      await syncLexicon(this.db, project.id, profile.language, scope.blocks.map((b) => b.text).join('\n'), script.pronunciations);
-      const words = await lexicon(this.db, project.id, profile.language);
-      const planned = planRun(script, scope.blocks, profile, settings, this.deps.providers.voice, words);
-      const unresolved = unresolvedIn(scope.blocks.map((b) => b.text).join('\n'), words);
+      await syncLexicon(this.db, project.id, effective.language, scope.blocks.map((b) => b.text).join('\n'), script.pronunciations);
+      const words = await lexicon(this.db, project.id, effective.language);
+      const planned = planRun(script, scope.blocks, effective, this.deps.providers.voice, words);
+      const unresolved = unresolvedIn(scope.blocks.map((b) => b.text).join('\n'), words, effective.pronunciation.rules);
       const needsConfirmation = input.scope.kind === 'FULL' || planned.estimate.characters > this.deps.config.confirmCharacters;
-      const runs = await this.db.voiceRun.count({ where: { profileId: profile.id } });
       return {
         scope: input.scope,
         description: scope.description,
-        profile: toProfileView(profile, runs),
-        strategy: settings.strategy,
-        chunking: settings.chunking,
-        context: settings.context,
+        profile: (await profileViews(this.db, this.deps.providers.voice, [version]))[0]!,
+        strategy: effective.strategy,
+        chunking: effective.chunking,
+        context: effective.context,
         chunks: planned.views,
         estimate: { ...planned.estimate, needsConfirmation },
         coverage: auditionCoverage(script, scope.blocks, words),
         unresolvedPronunciations: unresolved,
         blocked: this.blockedReason(input.scope.kind, planned.estimate.characters, unresolved, planned.takes.filter((t) => !t.passed).length),
+        configuration: {
+          effective,
+          provenance: config.provenance,
+          selectionRevision: production.revision,
+          mode: config.selection?.mode ?? 'EXPLICIT',
+          projectOverrides: config.projectOverrides,
+          runOptions: config.runOptions,
+          sent: config.sent,
+          ignored: config.ignored,
+        },
       };
     });
   }
 
-  /** Create a run's rows (chunks and their first takes) inside the job's transaction. */
-  private async createRunRows(tx: Tx, project: Project, script: VoiceScript, profile: VoiceProfile, scope: VoiceScope, settings: RunSettings, extra: { experiment?: string; variant?: string; notes?: string }, actor: string): Promise<{ id: string; number: number; characters: number }> {
+  /** Create a run's rows (chunks and their first takes) inside the job's transaction, with the configuration resolved and checked before it. */
+  private async createRunRows(tx: Tx, project: Project, script: VoiceScript, config: VoiceRunConfig, scope: VoiceScope, extra: { experiment?: string; variant?: string; notes?: string }, actor: string): Promise<{ id: string; number: number; characters: number }> {
+    const { effective } = config;
     const resolved = resolveScope(script, scope);
-    const words = await lexicon(tx, project.id, profile.language);
-    const planned = planRun(script, resolved.blocks, profile, settings, this.deps.providers.voice, words);
-    const blocked = this.blockedReason(scope.kind, planned.estimate.characters, unresolvedIn(resolved.blocks.map((b) => b.text).join('\n'), words), planned.takes.filter((t) => !t.passed).length);
+    const words = await lexicon(tx, project.id, effective.language);
+    const planned = planRun(script, resolved.blocks, effective, this.deps.providers.voice, words);
+    const blocked = this.blockedReason(scope.kind, planned.estimate.characters, unresolvedIn(resolved.blocks.map((b) => b.text).join('\n'), words, effective.pronunciation.rules), planned.takes.filter((t) => !t.passed).length);
     if (blocked) throw new ConflictError(blocked);
     const last = await tx.voiceRun.findFirst({ where: { projectId: project.id }, orderBy: { number: 'desc' }, select: { number: true } });
-    const lv = await tx.languageVersion.findUniqueOrThrow({ where: { projectId_language: { projectId: project.id, language: project.masterLanguage } } });
+    const lv = await tx.languageVersion.findUniqueOrThrow({ where: { projectId_language: { projectId: project.id, language: effective.language } } });
     const run = await tx.voiceRun.create({
       data: {
         projectId: project.id,
         languageVersionId: lv.id,
         scriptId: script.id,
-        profileId: profile.id,
+        profileId: config.profile.versionId,
         number: (last?.number ?? 0) + 1,
         kind: scope.kind,
         scope: { ...scope, description: resolved.description, blockKeys: resolved.blocks.map((b) => b.key) } as unknown as Prisma.InputJsonValue,
-        strategy: settings.strategy,
-        settings: { chunking: settings.chunking, context: settings.context } as unknown as Prisma.InputJsonValue,
+        // Still written, with their meaning (the effective strategy, chunking and context): code from before saved profiles reads them.
+        strategy: effective.strategy,
+        settings: { chunking: effective.chunking, context: effective.context } as unknown as Prisma.InputJsonValue,
+        config: config as unknown as Prisma.InputJsonValue,
         experiment: extra.experiment ?? null,
         variant: extra.variant ?? null,
         notes: extra.notes ?? null,
         createdBy: actor,
       },
     });
+    const take: VoiceTakeConfig = { reconstructed: false, base: 'RUN', override: null, profile: config.profile, effective, provenance: config.provenance, differs: [], identityDiffers: false };
     for (const c of planned.chunks) {
       const blockHashes = Object.fromEntries(c.spans.map((s) => [s.blockKey, sha256(script.blocks.get(s.blockKey)!.text)]));
       const textHash = sha256(c.text);
@@ -203,7 +293,22 @@ export class VoiceService {
         },
       });
       await tx.voiceGeneration.create({
-        data: { chunkId: chunk.id, runId: run.id, projectId: project.id, generation: 1, status: 'PENDING', profileId: profile.id, provider: profile.provider, model: profile.modelId, voiceId: profile.voiceId, strategy: settings.strategy, canonicalText: c.text, textHash, createdBy: actor },
+        data: {
+          chunkId: chunk.id,
+          runId: run.id,
+          projectId: project.id,
+          generation: 1,
+          status: 'PENDING',
+          profileId: config.profile.versionId,
+          provider: effective.provider,
+          model: effective.model,
+          voiceId: effective.voiceId,
+          strategy: effective.strategy,
+          config: take as unknown as Prisma.InputJsonValue,
+          canonicalText: c.text,
+          textHash,
+          createdBy: actor,
+        },
       });
     }
     return { id: run.id, number: run.number, characters: planned.estimate.characters };
@@ -219,18 +324,26 @@ export class VoiceService {
     return wrap(async () => {
       const project = await this.project(projectRef);
       const script = await this.approved(project);
-      const profile = await this.profileFor(project, input.profileId);
-      const settings = this.settingsFor(profile, input.options);
+      const { config } = await this.resolve(await this.production(project, input.selectionRevision, actor), input.profileId, input.options);
+      const { effective } = config;
       const scope = resolveScope(script, input.scope);
-      await syncLexicon(this.db, project.id, profile.language, scope.blocks.map((b) => b.text).join('\n'), script.pronunciations);
+      await syncLexicon(this.db, project.id, effective.language, scope.blocks.map((b) => b.text).join('\n'), script.pronunciations);
       const out: { number?: number } = {};
       const job = await this.deps.projects.voiceJob(project.id, actor, `${LABEL[input.scope.kind]} of script v${script.version}`, async (tx, p) => {
-        const created = await this.createRunRows(tx, p, script, profile, input.scope, settings, { ...(input.notes ? { notes: input.notes } : {}) }, actor);
+        const created = await this.createRunRows(tx, p, script, config, input.scope, { ...(input.notes ? { notes: input.notes } : {}) }, actor);
         out.number = created.number;
         if ((input.scope.kind === 'FULL' || created.characters > this.deps.config.confirmCharacters) && !input.confirm) {
           throw new ConflictError(`${LABEL[input.scope.kind]}: ${created.characters} characters to generate — confirm to go ahead`);
         }
-        await this.event(tx, p.id, EVENT.VOICE_RUN_REQUESTED, `Voice run ${created.number}: ${scope.description} (${profile.provider} ${profile.modelId}, ${settings.strategy.toLowerCase()})`, { actor, run: created.number, scope: input.scope, profile: `${profile.name} v${profile.version}`, characters: created.characters });
+        await this.event(tx, p.id, EVENT.VOICE_RUN_REQUESTED, `Voice run ${created.number}: ${scope.description} (${profileLabel(config.profile)}: ${effective.provider} ${effective.model}, ${effective.strategy.toLowerCase()})`, {
+          actor,
+          run: created.number,
+          scope: input.scope,
+          profile: profileLabel(config.profile),
+          selection: config.selection,
+          overrides: describeOverrides(mergeOverrides(config.projectOverrides, config.runOptions)),
+          characters: created.characters,
+        });
         return { runIds: [created.id] };
       });
       return { job, run: out.number! };
@@ -244,23 +357,32 @@ export class VoiceService {
     return wrap(async () => {
       const project = await this.project(projectRef);
       const script = await this.approved(project);
-      const profile = await this.profileFor(project, input.profileId);
+      const production = await this.production(project, input.selectionRevision, actor);
+      // Each variant narrates with its own profile version when it names one (a comparison of saved profiles), else the request's or production's.
+      const variants: (Resolved & { label: string })[] = [];
+      for (const { label, profileId, ...options } of input.variants) variants.push({ label, ...(await this.resolve(production, profileId ?? input.profileId, options)) });
       const scope = resolveScope(script, input.scope);
-      await syncLexicon(this.db, project.id, profile.language, scope.blocks.map((b) => b.text).join('\n'), script.pronunciations);
+      for (const language of new Set(variants.map((v) => v.config.effective.language))) await syncLexicon(this.db, project.id, language, scope.blocks.map((b) => b.text).join('\n'), script.pronunciations);
       const numbers: number[] = [];
       const job = await this.deps.projects.voiceJob(project.id, actor, `Comparison "${input.name}" of script v${script.version}`, async (tx, p) => {
         const ids: string[] = [];
-        let characters = 0;
-        for (const v of input.variants) {
-          const r = await this.createRunRows(tx, p, script, profile, input.scope, this.settingsFor(profile, v), { experiment: input.name, variant: v.label }, actor);
+        const parts: { model: string; characters: number }[] = [];
+        for (const v of variants) {
+          const r = await this.createRunRows(tx, p, script, v.config, input.scope, { experiment: input.name, variant: v.label }, actor);
           ids.push(r.id);
           numbers.push(r.number);
-          characters += r.characters;
+          parts.push({ model: v.config.effective.model, characters: r.characters });
         }
+        const characters = parts.reduce((n, x) => n + x.characters, 0);
         if (characters > this.deps.config.maxCharacters) throw new ConflictError(`The comparison would send ${characters} characters, over the ceiling of ${this.deps.config.maxCharacters}`);
         // A comparison buys several narrations of the same passage: always confirmed, whatever its size.
-        if (!input.confirm) throw new ConflictError(`Comparison: ${characters} characters (${costWords(this.deps.providers.voice, profile.modelId, characters)}) across ${input.variants.length} variants — confirm to go ahead`);
-        await this.event(tx, p.id, EVENT.VOICE_RUN_REQUESTED, `Comparison "${input.name}": ${input.variants.map((v) => v.label).join(' / ')} — ${scope.description}`, { actor, runs: numbers, characters });
+        if (!input.confirm) throw new ConflictError(`Comparison: ${characters} characters (${costWords(this.deps.providers.voice, parts)}) across ${input.variants.length} variants — confirm to go ahead`);
+        await this.event(tx, p.id, EVENT.VOICE_RUN_REQUESTED, `Comparison "${input.name}": ${variants.map((v) => v.label).join(' / ')} — ${scope.description}`, {
+          actor,
+          runs: numbers,
+          characters,
+          variants: variants.map((v) => ({ label: v.label, profile: profileLabel(v.config.profile), mode: v.config.selection?.mode ?? null, overrides: describeOverrides(mergeOverrides(v.config.projectOverrides, v.config.runOptions)) })),
+        });
         return { runIds: ids };
       });
       return { job, runs: numbers };
@@ -272,11 +394,20 @@ export class VoiceService {
    * chunk, made current when it is ready — or, for an A/B comparison, one per
    * variant per chunk, kept beside the current take until the editor
    * restores one. An A/B, every chunk, or more than the confirmation
-   * threshold must be confirmed.
+   * threshold must be confirmed. A take is made with the run's
+   * configuration (as the run stored it), or with the project's production
+   * profile now (the chunk is still the run's: same output format and
+   * language), and either may take a temporary override; each take records
+   * what it was made with, and no profile is changed.
    */
   async regenerate(runId: string, raw: RegenerateVoiceInput, actor: string): Promise<{ job: Job; takes: number }> {
     const input = RegenerateVoiceInput.parse(raw);
-    const run = await this.db.voiceRun.findUnique({ where: { id: runId }, include: { profile: true, chunks: { orderBy: { chunkIndex: 'asc' } } } });
+    return wrap(() => this.regenerateRun(runId, input, actor));
+  }
+
+  private async regenerateRun(runId: string, input: ReturnType<typeof RegenerateVoiceInput.parse>, actor: string): Promise<{ job: Job; takes: number }> {
+    const voice = this.deps.providers.voice;
+    const run = await this.db.voiceRun.findUnique({ where: { id: runId }, include: { profile: { include: { family: true } }, languageVersion: true, chunks: { orderBy: { chunkIndex: 'asc' } } } });
     if (!run) throw new NotFoundError('Voice run', runId);
     const project = await this.db.project.findUniqueOrThrow({ where: { id: run.projectId } });
     const approved = await approvedScript(this.db, project.id);
@@ -285,23 +416,48 @@ export class VoiceService {
       input.all ? true : input.chunkIds?.length ? input.chunkIds.includes(c.id) : input.section ? c.sectionKey === `SC${String(input.section).padStart(2, '0')}` : (input.blockKeys ?? []).some((k) => c.blockKeys.includes(k)),
     );
     if (!chunks.length) throw new ConflictError('No chunk of this run matches');
-    const variants: { label: string | null; strategy: PerformanceStrategy; marks: DirectorMark[] }[] = input.variants
-      ? input.variants.map((v) => ({ label: v.label, strategy: v.strategy ?? run.strategy, marks: v.marks ?? [] }))
-      : [{ label: null, strategy: input.strategy ?? run.strategy, marks: input.marks ?? [] }];
+    const base = input.configuration ?? 'RUN';
+    const override: VoiceTakeOverride = { ...input.override, ...(input.strategy ? { strategy: input.strategy } : {}) };
+    const problems = checkOverrides(override, voice, 'TAKE');
+    if (problems.length) throw new ConflictError(`Temporary override: ${problems.join('; ')}`);
+    const config = runConfig(run, voice);
+    let production: { version: ProfileRow; overrides: VoiceConfigOverrides } | undefined;
+    if (base === 'PRODUCTION') {
+      const p = await resolveProduction(this.db, voice, run.languageVersion, { create: true, actor });
+      if (p.problem || !p.version) throw new ConflictError(`The production profile cannot be used: ${p.problem ?? 'there is none'}`);
+      if (input.selectionRevision !== undefined && input.selectionRevision !== p.revision) throw revisionChanged(input.selectionRevision, p.revision);
+      const label = `${p.version.name} v${p.version.version}`;
+      if (p.version.outputFormat !== config.effective.outputFormat) throw new ConflictError(`The production profile ${label} makes ${p.version.outputFormat} and voice run ${run.number} is ${config.effective.outputFormat}: clips of one run share a format — start a new run with the production profile`);
+      if (p.version.language !== config.effective.language) throw new ConflictError(`The production profile ${label} is for ${p.version.language} and voice run ${run.number} is ${config.effective.language}`);
+      production = { version: p.version, overrides: p.overrides };
+    }
+    // An A/B variant's strategy is its own TAKE override; the rest of the override applies to every variant.
+    const variants: { label: string | null; marks: DirectorMark[]; config: VoiceTakeConfig }[] = (input.variants ?? [{ label: null, strategy: undefined, marks: input.marks }]).map((v) => ({
+      label: v.label ?? null,
+      marks: v.marks ?? [],
+      config: newTakeConfig({ run: config, base, ...(production ? { production } : {}), override: v.strategy ? { ...override, strategy: v.strategy } : override }, voice),
+    }));
+    const rules = performanceRulesProblems(variants[0]!.config.effective.performanceRules);
+    if (rules.length) throw new ConflictError(`Performance rules (the take's with the override): ${rules.join('; ')}`);
     const script = await loadScriptForVoice(this.db, run.scriptId);
     if (!script) throw new NotFoundError('Script', run.scriptId);
-    const characters = await this.sentCharacters(project.id, run.profile, script, chunks, variants);
+    const sent = await this.sentCharacters(project.id, script, chunks, variants);
+    const characters = sent.reduce((n, x) => n + x.characters, 0);
     const takes = chunks.length * variants.length;
+    const made = variants[0]!.config;
+    const what = base === 'PRODUCTION' ? ` with the production profile ${profileLabel(made.profile)}` : '';
+    const overridden = made.override && !input.variants ? ` (temporary override: ${describeOverrides(made.override)})` : '';
     if (characters > this.deps.config.maxCharacters) throw new ConflictError(`${takes} new take(s) would send ${characters} characters, over the ceiling of ${this.deps.config.maxCharacters} per job (VOICE_MAX_CHARACTERS)`);
     if ((input.all || input.variants || characters > this.deps.config.confirmCharacters) && !input.confirm) {
-      throw new ConflictError(`${input.variants ? `A/B (${variants.map((v) => v.label).join(' / ')}) of` : 'Regenerating'} ${chunks.length} chunk(s): ${takes} take(s), ${characters} characters (${costWords(this.deps.providers.voice, run.profile.modelId, characters)}) — confirm to go ahead`);
+      throw new ConflictError(`${input.variants ? `A/B (${variants.map((v) => v.label).join(' / ')}) of` : 'Regenerating'} ${chunks.length} chunk(s)${what}${overridden}: ${takes} take(s), ${characters} characters (${costWords(voice, sent)}) — confirm to go ahead`);
     }
-    const job = await this.deps.projects.voiceJob(project.id, actor, `New takes for ${chunks.length} chunk(s) of voice run ${run.number}${input.variants ? ` (A/B: ${variants.map((v) => v.label).join(' / ')})` : ''}`, async (tx, p) => {
+    const job = await this.deps.projects.voiceJob(project.id, actor, `New takes for ${chunks.length} chunk(s) of voice run ${run.number}${input.variants ? ` (A/B: ${variants.map((v) => v.label).join(' / ')})` : ''}${what}`, async (tx, p) => {
       const ids: string[] = [];
       for (const c of chunks) {
         const last = await tx.voiceGeneration.findFirst({ where: { chunkId: c.id }, orderBy: { generation: 'desc' }, select: { generation: true } });
         let generation = last?.generation ?? 0;
         for (const v of variants) {
+          const { effective } = v.config;
           const g = await tx.voiceGeneration.create({
             data: {
               chunkId: c.id,
@@ -309,11 +465,12 @@ export class VoiceService {
               projectId: p.id,
               generation: ++generation,
               status: 'PENDING',
-              profileId: run.profileId,
-              provider: run.profile.provider,
-              model: run.profile.modelId,
-              voiceId: run.profile.voiceId,
-              strategy: v.strategy,
+              profileId: v.config.profile.versionId,
+              provider: effective.provider,
+              model: effective.model,
+              voiceId: effective.voiceId,
+              strategy: effective.strategy,
+              config: v.config as unknown as Prisma.InputJsonValue,
               variant: v.label,
               canonicalText: c.sourceText,
               textHash: c.textHash,
@@ -325,12 +482,13 @@ export class VoiceService {
           ids.push(g.id);
         }
       }
-      await this.event(tx, p.id, EVENT.VOICE_RUN_REQUESTED, `Voice run ${run.number}: new takes for chunk(s) ${chunks.map((c) => c.chunkIndex + 1).join(', ')}${input.variants ? ` (A/B: ${variants.map((v) => v.label).join(' / ')})` : ''}`, {
+      await this.event(tx, p.id, EVENT.VOICE_RUN_REQUESTED, `Voice run ${run.number}: new takes for chunk(s) ${chunks.map((c) => c.chunkIndex + 1).join(', ')}${input.variants ? ` (A/B: ${variants.map((v) => v.label).join(' / ')})` : ''}${what}${overridden}`, {
         actor,
         run: run.number,
         chunks: chunks.map((c) => c.chunkIndex + 1),
         variants: input.variants ? variants.map((v) => v.label) : null,
         directions: variants.reduce((n, v) => n + v.marks.length, 0),
+        configuration: { base, source: takeSource(made), profile: profileLabel(made.profile), override: input.variants ? null : made.override, differs: made.differs },
         characters,
       });
       return { runIds: [run.id], generationIds: ids };
@@ -338,33 +496,36 @@ export class VoiceService {
     return { job, takes };
   }
 
-  /** Characters new takes of these chunks would send: prepared as the stage prepares them (spoken forms, approved aliases, markup), not the script's text. */
-  private async sentCharacters(projectId: string, profile: VoiceProfile, script: VoiceScript, chunks: readonly VoiceChunk[], variants: readonly { strategy: PerformanceStrategy; marks: readonly DirectorMark[] }[]): Promise<number> {
-    const config = profileConfig(profile);
-    const words = await lexicon(this.db, projectId, profile.language);
+  /** Characters new takes of these chunks would send, per take's model: prepared as the stage prepares them (each take's configuration, spoken forms, approved aliases, markup), not the script's text. */
+  private async sentCharacters(projectId: string, script: VoiceScript, chunks: readonly VoiceChunk[], takes: readonly { config: VoiceTakeConfig; marks: readonly DirectorMark[] }[]): Promise<{ model: string; characters: number }[]> {
     const blocks = new Map<string, TakeBlock>([...script.blocks.values()].map((b) => [b.key, { delivery: b.delivery, infoClass: b.infoClass }]));
-    let characters = 0;
-    for (const c of chunks) {
-      const rules = rulesFor(c.sourceText, words);
-      for (const v of variants) {
+    const out: { model: string; characters: number }[] = [];
+    for (const t of takes) {
+      const { effective } = t.config;
+      const words = await lexicon(this.db, projectId, effective.language);
+      let characters = 0;
+      for (const c of chunks) {
+        const rules = rulesFor(c.sourceText, words, effective.pronunciation.rules);
         const prepared = prepareTake({
           chunk: { text: c.sourceText, sentences: chunkSentences(c), performance: readPerformance(c.performance) },
           blocks,
-          strategy: v.strategy,
-          ...(v.marks.length ? { director: v.marks } : {}),
-          numberStyle: config.numberStyle,
+          strategy: effective.strategy,
+          ...(t.marks.length ? { director: t.marks } : {}),
+          numberStyle: effective.numberStyle,
           aliases: rules.aliases,
           phonemes: rules.phonemes,
           provider: this.deps.providers.voice,
-          model: profile.modelId,
-          settings: config.settings,
+          model: effective.model,
+          settings: effective.providerSettings,
+          rules: effective.performanceRules,
           context: { previousText: null, nextText: null },
           seed: null,
         });
         characters += prepared.rendered.text.length;
       }
+      out.push({ model: effective.model, characters });
     }
-    return characters;
+    return out;
   }
 
   /** Approve a take, reject it (no regeneration is forced), or make an earlier take current again. */
@@ -435,12 +596,88 @@ export class VoiceService {
     await this.event(this.db, row.projectId, EVENT.VOICE_PRONUNCIATION_UPDATED, `Pronunciation of "${row.term}": ${input.status.toLowerCase()}${input.method !== 'DEFAULT' ? ` (${input.method.toLowerCase()} ${input.pronunciation})` : " (the voice's own reading)"}`, { actor, term: row.term });
   }
 
-  async createProfile(projectRef: string, input: CreateVoiceProfileInput, actor: string): Promise<VoiceProfile> {
+  // ── The profile library and a project's choice ───────────────────────────
+  // Library operations are global (no project event; the routes log them). A project's choice and save-from-run write project events.
+
+  /** A new saved profile (v1). */
+  async createProfileFamily(input: CreateVoiceProfileFamilyInput, actor: string): Promise<{ familyId: string; versionId: string }> {
+    return wrap(async () => {
+      const v = await createProfileFamily(this.db, this.deps.providers.voice, input, actor);
+      return { familyId: v.familyId!, versionId: v.id };
+    });
+  }
+
+  /** An edit: a new version of a saved profile (runs and takes keep the version they used). */
+  async newProfileVersion(familyId: string, input: NewVoiceProfileVersionInput, actor: string): Promise<{ familyId: string; versionId: string; version: number }> {
+    return wrap(async () => {
+      const v = await newProfileVersion(this.db, this.deps.providers.voice, familyId, input, actor);
+      return { familyId, versionId: v.id, version: v.version };
+    });
+  }
+
+  /** A new saved profile from any version of another. */
+  async duplicateProfile(familyId: string, input: DuplicateVoiceProfileInput, actor: string): Promise<{ familyId: string; versionId: string }> {
+    return wrap(async () => {
+      const v = await duplicateProfile(this.db, this.deps.providers.voice, familyId, input, actor);
+      return { familyId: v.familyId!, versionId: v.id };
+    });
+  }
+
+  /** Rename, describe, archive or unarchive a saved profile, or make it the library default. */
+  async updateProfileFamily(familyId: string, input: UpdateVoiceProfileFamilyInput, _actor: string): Promise<{ familyId: string }> {
+    return wrap(async () => ({ familyId: (await updateProfileFamily(this.db, familyId, input)).id }));
+  }
+
+  /**
+   * A run's configuration (or one of its takes') saved as a profile: a new
+   * one, or a new version of one; with `use`, the run's language version
+   * follows it and the project's overrides are cleared (and returned).
+   */
+  async saveRunAsProfile(runId: string, input: SaveRunAsProfileInput, actor: string): Promise<{ familyId: string; versionId: string; version: number; selected: boolean; clearedOverrides: VoiceConfigOverrides | null }> {
+    return wrap(async () => {
+      const saved = await saveRunAsProfile(this.db, this.deps.providers.voice, runId, input, actor);
+      const { version, run } = saved;
+      const label = `${version.name} v${version.version}`;
+      await this.event(this.db, run.projectId, EVENT.VOICE_PROFILE_CREATED, `Voice profile ${label} saved from voice run ${run.number}${run.variant ? ` (${run.variant})` : ''}: ${version.provider} ${version.modelId}`, {
+        actor,
+        familyId: version.familyId,
+        versionId: version.id,
+        version: version.version,
+        run: run.number,
+        generationId: input.generationId ?? null,
+      });
+      if (saved.selected) {
+        const cleared = saved.clearedOverrides ? ` (project overrides cleared: ${describeOverrides(saved.clearedOverrides)}; they are part of the saved profile)` : '';
+        await this.event(this.db, run.projectId, EVENT.VOICE_PROFILE_SELECTED, `Voice profile for ${version.language}: ${version.name}, follows the current version (v${version.version})${cleared}`, {
+          actor,
+          language: version.language,
+          familyId: version.familyId,
+          mode: 'FOLLOW',
+          revision: saved.revision,
+          clearedOverrides: saved.clearedOverrides,
+        });
+      }
+      return { familyId: version.familyId!, versionId: version.id, version: version.version, selected: saved.selected, clearedOverrides: saved.clearedOverrides };
+    });
+  }
+
+  /** A project's choice of profile for one language version (the master language by default), and its overrides; refused at another revision than the editor saw. */
+  async setSelection(projectRef: string, input: VoiceSelectionInput, actor: string): Promise<{ languageVersionId: string; revision: number }> {
     return wrap(async () => {
       const project = await this.project(projectRef);
-      const p = await createProfileVersion(this.db, this.deps.providers.voice, project.masterLanguage, input, actor);
-      await this.event(this.db, project.id, EVENT.VOICE_PROFILE_CREATED, `Voice profile ${p.name} v${p.version}: ${p.provider} ${p.modelId}, voice ${p.voiceId}`, { actor, profile: p.id });
-      return p;
+      const voice = this.deps.providers.voice;
+      const saved = await setSelection(this.db, voice, project, input, actor);
+      const version = saved.version ?? (await libraryDefault(this.db, voice, saved.language, { create: false, actor }));
+      await this.event(this.db, project.id, EVENT.VOICE_PROFILE_SELECTED, `Voice profile for ${saved.language}: ${selectionText({ ...saved, version })}`, {
+        actor,
+        language: saved.language,
+        familyId: saved.family?.id ?? null,
+        mode: !saved.family ? 'DEFAULT' : saved.pinned ? 'PIN' : 'FOLLOW',
+        versionId: saved.pinned ? saved.version?.id : null,
+        overrides: saved.overrides,
+        revision: saved.revision,
+      });
+      return { languageVersionId: saved.languageVersionId, revision: saved.revision };
     });
   }
 
@@ -552,13 +789,16 @@ export class VoiceService {
 /** Live QA of a run (shared by the view and the VOICE gate). */
 export async function liveRunQa(
   db: Database | Tx,
-  run: { id: string; projectId: string; kind: string; scriptId: string; script: { version: number }; profile: { language: string }; chunks: Parameters<typeof runQa>[0]['chunks'] },
+  run: { id: string; projectId: string; kind: string; scriptId: string; config?: Prisma.JsonValue; script: { version: number }; profile: { language: string }; chunks: Parameters<typeof runQa>[0]['chunks'] },
 ): Promise<VoiceQaFinding[]> {
   const approved = await approvedScript(db, run.projectId);
   const script = await loadScriptForVoice(db, run.scriptId);
   const approvedText = approved && approved.id !== run.scriptId ? await loadScriptForVoice(db, approved.id) : null;
   const words = await lexicon(db, run.projectId, run.profile.language);
   const text = run.chunks.map((c) => c.sourceText).join('\n');
+  // The profile's own pronunciation rules count as decided, as they did when the run was made (a run from before saved profiles has none).
+  const rules = (run.config as { effective?: { pronunciation?: { rules?: unknown } } } | null)?.effective?.pronunciation?.rules;
+  const profileRules = PronunciationConfig.shape.rules.catch([]).parse(rules ?? []);
   const assembly = await db.voiceAssembly.findFirst({ where: { runId: run.id }, orderBy: { version: 'desc' }, select: { version: true, entries: true, qa: true } });
   const mismatch = assemblyMismatch(run.chunks, assembly);
   return [
@@ -570,10 +810,12 @@ export async function liveRunQa(
       chunks: run.chunks,
       allBlockKeys: script ? [...script.blocks.keys()] : [],
       approvedBlockText: approvedText ? new Map([...approvedText.blocks.values()].map((b) => [b.key, b.text])) : null,
-      unresolved: unresolvedIn(text, words),
+      unresolved: unresolvedIn(text, words, profileRules),
     }),
     ...(mismatch ? [mismatch] : []),
     ...readQa(assembly?.qa),
+    // From what each current take stored (no provider is needed: the VOICE gate has none).
+    ...configurationFindings(run.chunks),
   ];
 }
 

@@ -1,8 +1,40 @@
 export { createVoiceStage, DEFAULT_VOICE_CONFIG, VoiceJobInput, type VoiceStageConfig } from './stage.ts';
 export { VoiceService, liveRunQa, type VoiceServiceConfig, type VoiceServiceDeps } from './service.ts';
 export { voiceGate } from './gate.ts';
-export { loadVoiceView, type VoiceViewDeps } from './views.ts';
-export { activeProfile, createProfileVersion, profileConfig, HOUSE_PROFILE } from './profiles.ts';
+export * from './views.ts';
+export {
+  familyCurrent,
+  libraryDefault,
+  profileViews,
+  resolveProduction,
+  HOUSE_PROFILE,
+  OUTPUT_FORMAT,
+  ProfileError,
+  type Production,
+  type ProfileRow,
+} from './profiles.ts';
+export {
+  checkOverrides,
+  configDifferences,
+  contextText,
+  describeOverrides,
+  effectiveConfig,
+  mergeOverrides,
+  newRunConfig,
+  newTakeConfig,
+  profileLabel,
+  profileRef,
+  runConfig,
+  takeConfig,
+  takeSource,
+  versionConfig,
+  versionFields,
+  voiceIdentityDiffers,
+  type ConfigLayer,
+  type ConfigProvider,
+} from './config.ts';
+export { costText, sumReported, takeCost, LEDGER, type LedgerRow, type TakeCost } from './cost.ts';
+export { configurationFindings } from './qa.ts';
 export { planChunks, performanceShift, CHUNK_COSTS, type PlannedChunk, type ChunkSection, type ChunkBlock } from './chunking.ts';
 export { toSpoken, numberToWords, yearToWords } from './spoken.ts';
 export { assemble, whatIsSaidAt, parseClock, formatClock } from './assembly.ts';

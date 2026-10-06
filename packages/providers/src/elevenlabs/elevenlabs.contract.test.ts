@@ -32,7 +32,8 @@ const fakeElevenLabs: typeof fetch = async (input, init) => {
         audio_base64: Buffer.from(mp3For(chars.length * 50)).toString('base64'),
         alignment: { characters: chars, character_start_times_seconds: chars.map((_, i) => i * 0.05), character_end_times_seconds: chars.map((_, i) => (i + 1) * 0.05) },
       },
-      { 'request-id': 'contract-req', 'character-cost': String(text.length) },
+      // Under eleven_v4 the header read about a ninth of the characters sent.
+      { 'request-id': 'contract-req', 'character-cost': String(Math.round(text.length * 0.11)) },
     );
   }
   return new Response(JSON.stringify({ detail: 'not found' }), { status: 404 });

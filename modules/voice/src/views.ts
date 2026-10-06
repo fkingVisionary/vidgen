@@ -1,4 +1,5 @@
 import {
+  DEFAULT_VOICE_PROFILE_CONFIG,
   DirectorMark,
   PreparedNarration,
   VoiceScope,
@@ -7,35 +8,67 @@ import {
   type VoiceAssemblyVersionView,
   type VoiceAssemblyView,
   type VoiceChunkView,
+  type VoiceCostView,
   type VoiceGenerationStatus,
   type VoiceGenerationView,
+  type VoiceProductionView,
+  type VoiceProfileFamilyView,
+  type VoiceProfileHistoryView,
+  type VoiceProfileLibraryView,
+  type VoiceProfileUseView,
+  type VoiceRunConfig,
   type VoiceRunSummaryView,
   type VoiceRunView,
+  type VoiceTakeConfigView,
   type VoiceView,
 } from '@docengine/core';
-import type { Database, Project, VoiceGeneration } from '@docengine/database';
-import type { ProviderSet } from '@docengine/providers';
+import type { Database, Project, VoiceGeneration, VoiceProfile, VoiceProfileFamily } from '@docengine/database';
+import type { ProviderSet, VoiceProvider } from '@docengine/providers';
 import { z } from 'zod';
-import { profileConfig, toProfileView } from './profiles.ts';
+import { newRunConfig, runConfig, takeConfig, type ProfileRow } from './config.ts';
+import { LEDGER, sumReported, takeCost, type LedgerRow, type TakeCost } from './cost.ts';
+import { profileViews, resolveProduction, type Production } from './profiles.ts';
+import { withdrawnTerms, type LexiconEntry } from './pronunciation.ts';
 import { readAlignment, readPerformance, readQa, readSpans, staleChunk, takeStatus } from './runs.ts';
 import { liveRunQa } from './service.ts';
 import { approvedScript, loadScriptForVoice } from './script.ts';
 
-/** The Voice page's read model. */
+/**
+ * The Voice page's read model, the profile library and a language
+ * version's production profile. Reads never write: no profile is made or
+ * adopted here, and a voice's name is not looked up (no network on a read).
+ * Runs and takes show what they were made with (stored, or reconstructed
+ * for those made before saved profiles) and what they cost, estimated from
+ * the characters sent with the provider's own figures beside it.
+ */
 
 const audioUrl = (assetId: string | null) => (assetId ? `/api/voice/audio/${assetId}` : null);
 
 type TakeRow = VoiceGeneration & {
-  profile: { id: string; name: string; version: number };
+  profile: ProfileRow;
   audioAsset: { mimeType: string; isMock: boolean } | null;
-  providerCall: { estimatedCostUsd: unknown; actualCostUsd: unknown; costBasis: CostBasis | null; costNote: string | null } | null;
+  providerCall: (LedgerRow & { costNote: string | null }) | null;
 };
 
-const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+/** What a take's cost reads as: the ledger's, or re-estimated from the characters sent (and the ledger's own note kept after it). */
+function costView(cost: TakeCost, note: string | null): VoiceCostView {
+  return {
+    estimatedUsd: cost.estimatedUsd,
+    actualUsd: cost.reportedUsd,
+    basis: cost.basis as CostBasis | null,
+    note: cost.reestimated ? `Re-estimated from the ${cost.characters} characters sent: the ledger row (before 2026-10-06) priced the provider's own figure${note ? ` (${note})` : ''}` : note,
+    characters: cost.characters,
+    reported: cost.reported,
+    reestimated: cost.reestimated,
+  };
+}
 
-function toGenerationView(g: TakeRow, currentId: string | null): VoiceGenerationView {
+function toGenerationView(g: TakeRow, currentId: string | null, run: VoiceRunConfig, voice: VoiceProvider): VoiceGenerationView {
   const alignment = readAlignment(g.alignment);
   const prepared = PreparedNarration.nullable().catch(null).parse(g.prepared ?? null);
+  const config = takeConfig(g, run);
+  const configuration: VoiceTakeConfigView = { base: config.base, override: config.override, profile: config.profile, reconstructed: config.reconstructed, differs: config.differs, identityDiffers: config.identityDiffers };
+  const cost = takeCost(g.providerCall, g.characters, voice);
   return {
     id: g.id,
     generation: g.generation,
@@ -44,7 +77,8 @@ function toGenerationView(g: TakeRow, currentId: string | null): VoiceGeneration
     provider: g.provider,
     model: g.model,
     voiceId: g.voiceId,
-    profile: { id: g.profile.id, name: g.profile.name, version: g.profile.version },
+    profile: { id: g.profile.id, name: g.profile.name, version: g.profile.version, familyId: g.profile.familyId, familyName: g.profile.family?.name ?? null },
+    configuration,
     strategy: g.strategy,
     variant: g.variant,
     performanceText: g.performanceText,
@@ -59,7 +93,7 @@ function toGenerationView(g: TakeRow, currentId: string | null): VoiceGeneration
     unmatchedWords: alignment?.unmatchedWords ?? 0,
     qa: readQa(g.qa),
     characters: g.characters,
-    cost: g.providerCall ? { estimatedUsd: num(g.providerCall.estimatedCostUsd), actualUsd: num(g.providerCall.actualCostUsd), basis: g.providerCall.costBasis, note: g.providerCall.costNote } : null,
+    cost: cost ? costView(cost, g.providerCall?.costNote ?? null) : null,
     providerRequestId: g.providerRequestId,
     error: g.error,
     note: g.note,
@@ -72,15 +106,15 @@ function toGenerationView(g: TakeRow, currentId: string | null): VoiceGeneration
 }
 
 const RUN_INCLUDE = {
-  profile: true,
+  profile: { include: { family: true } },
   script: { select: { version: true } },
   chunks: { orderBy: { chunkIndex: 'asc' as const }, include: { current: true } },
   generations: {
     orderBy: { generation: 'desc' as const },
     include: {
-      profile: { select: { id: true, name: true, version: true } },
+      profile: { include: { family: true } },
       audioAsset: { select: { mimeType: true, isMock: true } },
-      providerCall: { select: { estimatedCostUsd: true, actualCostUsd: true, costBasis: true, costNote: true } },
+      providerCall: { select: { ...LEDGER.select, costNote: true } },
     },
   },
 };
@@ -94,7 +128,7 @@ function runLabel(r: { kind: string; experiment: string | null; variant: string 
   return scope.description ?? r.kind;
 }
 
-function summary(r: RunRow, approved: { id: string } | null): VoiceRunSummaryView {
+function summary(r: RunRow, approved: { id: string } | null, voice: VoiceProvider): VoiceRunSummaryView {
   const takes: Partial<Record<VoiceGenerationStatus, number>> = {};
   for (const c of r.chunks) {
     if (!c.current) continue;
@@ -104,7 +138,8 @@ function summary(r: RunRow, approved: { id: string } | null): VoiceRunSummaryVie
   const pending = r.chunks.filter((c) => !c.current).length;
   if (pending) takes.PENDING = (takes.PENDING ?? 0) + pending;
   const attempts = r.generations.filter((g) => g.providerCall);
-  const bases = new Set(attempts.map((g) => g.providerCall!.costBasis).filter((b): b is CostBasis => !!b));
+  const costs = attempts.map((g) => takeCost(g.providerCall, g.characters, voice)!);
+  const bases = new Set(costs.map((c) => c.basis as CostBasis | null).filter((b): b is CostBasis => !!b));
   const durations = r.chunks.map((c) => c.current?.durationMs ?? null);
   return {
     id: r.id,
@@ -115,26 +150,29 @@ function summary(r: RunRow, approved: { id: string } | null): VoiceRunSummaryVie
     variant: r.variant,
     scriptVersion: r.script.version,
     strategy: r.strategy,
-    profile: { id: r.profile.id, name: r.profile.name, version: r.profile.version, modelId: r.profile.modelId, voiceId: r.profile.voiceId },
+    profile: { id: r.profile.id, name: r.profile.name, version: r.profile.version, modelId: r.profile.modelId, voiceId: r.profile.voiceId, familyId: r.profile.familyId, familyName: r.profile.family?.name ?? null },
     chunkCount: r.chunks.length,
     takes,
     durationMs: durations.every((d) => d !== null) && durations.length ? durations.reduce<number>((n, d) => n + d!, 0) : null,
     characters: attempts.reduce((n, g) => n + (g.characters ?? 0), 0),
     cost: {
-      totalUsd: Math.round(attempts.reduce((n, g) => n + (num(g.providerCall!.actualCostUsd) ?? num(g.providerCall!.estimatedCostUsd) ?? 0), 0) * 1e6) / 1e6,
+      totalUsd: Math.round(costs.reduce((n, c) => n + (c.reportedUsd ?? c.estimatedUsd ?? 0), 0) * 1e6) / 1e6,
       basis: bases.size === 0 ? null : bases.size === 1 ? [...bases][0]! : 'MIXED',
+      reported: sumReported(costs).map((s) => ({ name: s.name, quantity: s.total })),
+      reestimated: costs.some((c) => c.reestimated),
     },
     stale: !!approved && approved.id !== r.scriptId,
     createdAt: r.createdAt.toISOString(),
   };
 }
 
-async function runView(db: Database, r: RunRow, approved: { id: string; version: number } | null): Promise<VoiceRunView> {
+async function runView(db: Database, r: RunRow, approved: { id: string; version: number } | null, voice: VoiceProvider): Promise<VoiceRunView> {
   const script = await loadScriptForVoice(db, r.scriptId);
   const approvedText = approved && approved.id !== r.scriptId ? await loadScriptForVoice(db, approved.id) : null;
   const titles = new Map((script?.sections ?? []).map((s) => [s.key, s.title]));
+  const configuration = runConfig(r, voice);
   const chunks: VoiceChunkView[] = r.chunks.map((c) => {
-    const takes = r.generations.filter((g) => g.chunkId === c.id).map((g) => toGenerationView(g, c.currentGenerationId));
+    const takes = r.generations.filter((g) => g.chunkId === c.id).map((g) => toGenerationView(g, c.currentGenerationId, configuration, voice));
     const spans = readSpans(c.spans);
     const stale = approvedText ? staleChunk(c, new Map([...approvedText.blocks.values()].map((b) => [b.key, b.text]))) : false;
     return {
@@ -172,12 +210,11 @@ async function runView(db: Database, r: RunRow, approved: { id: string; version:
     : null;
   const current = r.chunks.map((c) => c.current).filter((g): g is VoiceGeneration => !!g && !!g.durationMs);
   const durations = current.map((g) => g.durationMs!);
-  const settings = (r.settings ?? {}) as Partial<VoiceRunView['settings']>;
-  const config = profileConfig(r.profile);
   return {
-    ...summary(r, approved),
+    ...summary(r, approved, voice),
     scope: VoiceScope.catch({ kind: 'FULL' }).parse(r.scope),
-    settings: { chunking: settings.chunking ?? config.chunking, context: { ...config.context, ...(settings.context ?? {}) } },
+    configuration,
+    settings: { chunking: configuration.effective.chunking, context: configuration.effective.context },
     notes: r.notes,
     chunks,
     assembly,
@@ -195,6 +232,113 @@ async function runView(db: Database, r: RunRow, approved: { id: string; version:
   };
 }
 
+// ── The profile library and production ───────────────────────────────────────
+
+/** What the library and production views read with: the database and the configured voice provider. */
+export interface ProfileViewDeps {
+  db: Database;
+  providers: Pick<ProviderSet, 'voice'>;
+}
+
+/** Families as the library shows them: their current version, how many versions, who uses them, and their runs (a few queries for all of them). */
+async function familyViews(db: Database, voice: VoiceProvider, families: readonly VoiceProfileFamily[]): Promise<VoiceProfileFamilyView[]> {
+  if (!families.length) return [];
+  const ids = families.map((f) => f.id);
+  const versions = await db.voiceProfile.findMany({ where: { familyId: { in: ids } }, orderBy: { version: 'asc' } });
+  const ofFamily = (id: string) => versions.filter((v) => v.familyId === id);
+  const currents = families.map((f) => ofFamily(f.id).at(-1)).filter((v): v is VoiceProfile => !!v);
+  const currentViews = new Map((await profileViews(db, voice, currents)).map((v) => [v.id, v]));
+  const runs = await db.voiceRun.groupBy({ by: ['profileId'], where: { profileId: { in: versions.map((v) => v.id) } }, _count: { _all: true } });
+  const runsOf = new Map(runs.map((r) => [r.profileId, r._count._all]));
+  const uses = await db.voiceSelection.findMany({
+    where: { familyId: { in: ids } },
+    orderBy: { updatedAt: 'desc' },
+    include: { project: { select: { id: true, slug: true, title: true } }, languageVersion: { select: { language: true } }, pinnedVersion: { select: { version: true } } },
+  });
+  return families.map((f) => {
+    const own = ofFamily(f.id);
+    const current = own.at(-1) ?? null;
+    const usedBy: VoiceProfileUseView[] = uses
+      .filter((u) => u.familyId === f.id)
+      .map((u) => ({ projectId: u.project.id, slug: u.project.slug, title: u.project.title, language: u.languageVersion.language, mode: u.pinnedVersionId ? 'PIN' : 'FOLLOW', pinnedVersion: u.pinnedVersion?.version ?? null }));
+    return {
+      id: f.id,
+      name: f.name,
+      description: f.description,
+      isDefault: f.isDefault,
+      archived: !!f.archivedAt,
+      provider: current?.provider ?? null,
+      language: current?.language ?? null,
+      current: current ? (currentViews.get(current.id) ?? null) : null,
+      versions: own.length,
+      usedBy,
+      runs: own.reduce((n, v) => n + (runsOf.get(v.id) ?? 0), 0),
+      createdAt: f.createdAt.toISOString(),
+      updatedAt: f.updatedAt.toISOString(),
+    };
+  });
+}
+
+/** Library families, the default first, then by name (archived ones only when asked for). */
+const listFamilies = (db: Database, archived: boolean) => db.voiceProfileFamily.findMany({ where: archived ? {} : { archivedAt: null }, orderBy: [{ isDefault: 'desc' }, { name: 'asc' }] });
+
+/** The profile library, with what a form needs to make or edit a profile for the configured provider. Profiles of another provider are listed as they are (their `provider` says so). */
+export async function loadProfileLibrary(deps: ProfileViewDeps, opts: { archived: boolean }): Promise<VoiceProfileLibraryView> {
+  const { db } = deps;
+  const voice = deps.providers.voice;
+  return {
+    provider: { name: voice.info.name, mock: voice.info.mock, defaultModel: voice.defaults.model, defaultVoiceId: voice.defaults.voiceId, defaultOutputFormat: voice.defaults.outputFormat, models: [...voice.models] },
+    settings: [...voice.settings],
+    defaults: { ...structuredClone(DEFAULT_VOICE_PROFILE_CONFIG), providerSettings: voice.normalizeSettings({}).settings },
+    families: await familyViews(db, voice, await listFamilies(db, opts.archived)),
+  };
+}
+
+/** A saved profile with every version, newest first (null: no such profile). */
+export async function loadProfileHistory(deps: ProfileViewDeps, familyId: string): Promise<VoiceProfileHistoryView | null> {
+  const { db } = deps;
+  const voice = deps.providers.voice;
+  const family = await db.voiceProfileFamily.findUnique({ where: { id: familyId } });
+  if (!family) return null;
+  const [view] = await familyViews(db, voice, [family]);
+  const versions = await db.voiceProfile.findMany({ where: { familyId }, orderBy: { version: 'desc' } });
+  return { ...view!, history: await profileViews(db, voice, versions) };
+}
+
+/** Production as a view: its version, and the effective configuration a new run would start from (the project's overrides over the version). */
+async function productionView(db: Database, voice: VoiceProvider, p: Production): Promise<VoiceProductionView> {
+  const [profile] = p.version ? await profileViews(db, voice, [p.version]) : [];
+  const config = p.version ? newRunConfig({ version: p.version, selection: { mode: p.mode, revision: p.revision }, projectOverrides: p.overrides, runOptions: {} }, voice) : null;
+  return {
+    language: p.language,
+    mode: p.mode,
+    revision: p.revision,
+    family: p.family ? { id: p.family.id, name: p.family.name, archived: !!p.family.archivedAt, isDefault: p.family.isDefault } : null,
+    profile: profile ?? null,
+    newer: p.newer ? { id: p.newer.id, version: p.newer.version } : null,
+    overrides: p.overrides,
+    effective: config?.effective ?? null,
+    provenance: config?.provenance ?? {},
+    sent: config?.sent ?? {},
+    ignored: config?.ignored ?? [],
+    problem: p.problem,
+    notices: p.notices,
+    updatedBy: p.updatedBy,
+    updatedAt: p.updatedAt?.toISOString() ?? null,
+  };
+}
+
+/** What a project's language version narrates with now (the master language by default; null: the project has no such language version). */
+export async function loadProduction(deps: ProfileViewDeps, project: Pick<Project, 'id' | 'masterLanguage'>, language?: string): Promise<VoiceProductionView | null> {
+  const { db } = deps;
+  const voice = deps.providers.voice;
+  const lv = await db.languageVersion.findUnique({ where: { projectId_language: { projectId: project.id, language: language ?? project.masterLanguage } }, select: { id: true, language: true, projectId: true } });
+  if (!lv) return null;
+  return productionView(db, voice, await resolveProduction(db, voice, lv));
+}
+
+// ── The Voice page ───────────────────────────────────────────────────────────
+
 export interface VoiceViewDeps {
   db: Database;
   providers: ProviderSet;
@@ -204,11 +348,22 @@ export interface VoiceViewDeps {
 
 export async function loadVoiceView(deps: VoiceViewDeps, project: Project, runNumber: number | undefined): Promise<VoiceView> {
   const { db, providers } = deps;
+  const voice = providers.voice;
   const approved = await approvedScript(db, project.id);
-  const profiles = await db.voiceProfile.findMany({ orderBy: [{ name: 'asc' }, { version: 'desc' }], include: { _count: { select: { runs: true } } } });
+  const production = await loadProduction(deps, project);
+  if (!production) throw new Error(`Project ${project.slug} has no ${project.masterLanguage} language version`);
+  const library = (await familyViews(db, voice, await listFamilies(db, false))).filter((f) => f.provider === voice.info.name && f.language === project.masterLanguage);
   const runsRows = await db.voiceRun.findMany({ where: { projectId: project.id }, orderBy: { number: 'desc' }, include: RUN_INCLUDE });
   const selected = runNumber !== undefined ? runsRows.find((r) => r.number === runNumber) : runsRows[0];
   const pronunciations = await db.voicePronunciation.findMany({ where: { projectId: project.id, language: project.masterLanguage }, orderBy: [{ status: 'asc' }, { term: 'asc' }] });
+  // Entries the term detector has replaced in the approved script's text ("Meet Thijs" → Thijs): no longer to decide.
+  const approvedScriptText = approved ? await loadScriptForVoice(db, approved.id) : null;
+  const withdrawn = approvedScriptText
+    ? withdrawnTerms(
+        [...approvedScriptText.blocks.values()].map((b) => b.text).join('\n'),
+        pronunciations.map((p) => ({ term: p.term, source: p.source as LexiconEntry['source'], status: p.status, edited: p.updatedBy !== null })),
+      )
+    : new Map<string, string>();
   const activeJob = await db.job.findFirst({ where: { projectId: project.id, type: 'VOICE', status: { in: ['QUEUED', 'RUNNING'] } }, orderBy: { createdAt: 'desc' } });
   const status = project.status === 'FAILED' ? project.failedFromStatus : project.status;
   const voiceStatuses = ['SCRIPT_APPROVED', 'VOICE_GENERATING', 'VOICE_REVIEW', 'VOICE_COMPLETE'];
@@ -226,15 +381,23 @@ export async function loadVoiceView(deps: VoiceViewDeps, project: Project, runNu
       : !fullRun
         ? { allowed: false, reason: `Generate the whole script (a full run) first: an audition is not the narration${approved ? ` of script v${approved.version}` : ''}` }
         : { allowed: true, reason: null };
-  const active = profiles.find((p) => p.active && p.provider === providers.voice.info.name && p.language === project.masterLanguage) ?? null;
   return {
     project: { id: project.id, slug: project.slug, title: project.title, status: project.status },
     script: approved,
-    provider: { name: providers.voice.info.name, mock: providers.voice.info.mock, defaultModel: providers.voice.defaults.model, defaultVoiceId: providers.voice.defaults.voiceId, storage: providers.storage.info.name, durableStorage: !providers.storage.info.mock },
-    profiles: profiles.map((p) => toProfileView(p, p._count.runs)),
-    activeProfileId: active?.id ?? null,
-    runs: runsRows.map((r) => summary(r, approved)),
-    run: selected ? await runView(db, selected, approved) : null,
+    provider: {
+      name: voice.info.name,
+      mock: voice.info.mock,
+      defaultModel: voice.defaults.model,
+      defaultVoiceId: voice.defaults.voiceId,
+      storage: providers.storage.info.name,
+      durableStorage: !providers.storage.info.mock,
+      settings: [...voice.settings],
+      models: [...voice.models],
+    },
+    production,
+    library,
+    runs: runsRows.map((r) => summary(r, approved, voice)),
+    run: selected ? await runView(db, selected, approved, voice) : null,
     pronunciations: pronunciations.map((p) => ({
       id: p.id,
       term: p.term,
@@ -247,6 +410,7 @@ export async function loadVoiceView(deps: VoiceViewDeps, project: Project, runNu
       notes: p.notes,
       updatedBy: p.updatedBy,
       updatedAt: p.updatedAt.toISOString(),
+      withdrawn: withdrawn.get(p.term) ?? null,
     })),
     editorial: { generate, approve },
     confirmCharacters: deps.confirmCharacters,

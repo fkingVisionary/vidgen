@@ -1,13 +1,17 @@
 import { createHash } from 'node:crypto';
-import type { Rate } from '@docengine/core';
+import type { ProviderSettingValues, Rate } from '@docengine/core';
 import { audioMetadata, pcmToWav } from '../audio.ts';
 import { ProviderError, type CallMeta, type ProviderInfo } from '../types.ts';
 import { renderSegments } from '../voice-markup.ts';
+import { normalizeVoiceSettings, sentVoiceSettings, settingProblem } from '../voice-settings.ts';
+import { ELEVENLABS_MODELS, UNKNOWN_MODEL } from './models.ts';
+import { ELEVENLABS_SETTINGS } from './settings.ts';
 import type {
   AudioMetadata,
   CharacterAlignment,
   NarrationRequest,
   NarrationResult,
+  NarrationSettings,
   PerformanceSegment,
   PronunciationRule,
   RenderedNarration,
@@ -34,19 +38,28 @@ import type {
  *   per request.
  * - Multilingual / Flash v2 models take `<break time="…"/>` (≤ 3 s), speed
  *   and style, but no audio tags.
- * - Text to speech is billed per character; the `character-cost` response
- *   header reports a generation's characters where ElevenLabs returns it.
- *   The API reports characters, not dollars: every cost is an ESTIMATE =
- *   characters × the configured price (ELEVENLABS_USD_PER_1K_CHARS) or the
- *   documented list price for the model.
+ * - Text to speech is billed per character, and the API reports no dollars:
+ *   every cost is an ESTIMATE = the characters sent (an upper bound) × the
+ *   configured price (ELEVENLABS_USD_PER_1K_CHARS) or the documented list
+ *   price for the model. The `character-cost` response header, where
+ *   ElevenLabs returns it, is recorded raw beside the estimate and never
+ *   priced: its unit is unverified (under eleven_v4 it read about a ninth of
+ *   the characters sent).
  * - GET /v1/voices/{voice_id} and GET /v1/models cost nothing: `check()`
  *   uses them to confirm the configured voice and model. GET /v2/voices is
  *   paged (`next_page_token` while `has_more`).
  *
- * A model this table does not know gets plain text (no tags, no SSML) and
- * only stability and similarity, so nothing it would read aloud or reject
- * is ever sent. There is no automatic fallback to another model.
+ * A model the table (models.ts) does not know gets plain text (no tags, no
+ * SSML) and only stability and similarity, so nothing it would read aloud or
+ * reject is ever sent. There is no automatic fallback to another model.
+ *
+ * Voice settings are the provider settings a request carries, as given
+ * (settings.ts describes them), else the flat shorthand from before them. A
+ * model is sent only those it takes (`sentSettings`), under ElevenLabs'
+ * names; a value that does not fit its description is refused, not sent.
  */
+
+export { ELEVENLABS_MODELS } from './models.ts';
 
 export interface ElevenLabsOptions {
   apiKey?: string;
@@ -79,52 +92,6 @@ export const ELEVENLABS_PRICES_PER_1K: Record<string, number> = {
   eleven_multilingual_v2: 0.08,
   eleven_flash_v2_5: 0.04,
   eleven_flash_v2: 0.04,
-};
-
-const TAG_MODEL = {
-  directions: true,
-  pauses: 'TAGS',
-  settings: { stability: true, similarity: true, style: false, speakerBoost: false, speed: false },
-  phonemes: true,
-  contextText: true,
-  stitching: true,
-  languageCode: true,
-  maxCharacters: 10_000,
-  known: true,
-} as const satisfies Omit<VoiceModelCapabilities, 'model'>;
-
-const SSML_MODEL = {
-  directions: false,
-  pauses: 'BREAKS',
-  settings: { stability: true, similarity: true, style: true, speakerBoost: true, speed: true },
-  phonemes: false,
-  contextText: true,
-  stitching: true,
-  languageCode: false,
-  maxCharacters: 10_000,
-  known: true,
-} as const satisfies Omit<VoiceModelCapabilities, 'model'>;
-
-export const ELEVENLABS_MODELS: Record<string, Omit<VoiceModelCapabilities, 'model'>> = {
-  eleven_v4: TAG_MODEL,
-  eleven_v4_turbo: TAG_MODEL,
-  // v3: tags, no SSML; request stitching is documented as unavailable, neighbouring text is not documented either way.
-  eleven_v3: { ...TAG_MODEL, settings: { ...TAG_MODEL.settings, similarity: false }, contextText: false, stitching: false, maxCharacters: 5_000 },
-  eleven_multilingual_v2: SSML_MODEL,
-  eleven_flash_v2_5: { ...SSML_MODEL, languageCode: true, maxCharacters: 40_000 },
-  eleven_flash_v2: { ...SSML_MODEL, phonemes: true, maxCharacters: 30_000 },
-};
-
-const UNKNOWN_MODEL: Omit<VoiceModelCapabilities, 'model'> = {
-  directions: false,
-  pauses: 'PUNCTUATION',
-  settings: { stability: true, similarity: true, style: false, speakerBoost: false, speed: false },
-  phonemes: false,
-  contextText: false,
-  stitching: false,
-  languageCode: false,
-  maxCharacters: 5_000,
-  known: false,
 };
 
 /** Output formats the engine can measure and join without transcoding. */
@@ -165,9 +132,21 @@ const CHECK_TIMEOUT_MS = 10_000;
 const MAX_VOICE_PAGES = 50;
 const MAX_DICTIONARY_PAGES = 20;
 
+/** Settings ElevenLabs' API names differently (the rest are sent under their own key). */
+const WIRE_NAMES: Readonly<Record<string, string>> = { similarity: 'similarity_boost', speakerBoost: 'use_speaker_boost' };
+
+/** The flat shorthand as provider settings (the keys it has a value for). */
+function shorthandSettings(s: NarrationSettings): ProviderSettingValues {
+  const out: ProviderSettingValues = {};
+  for (const key of ['stability', 'similarity', 'style', 'speakerBoost', 'speed'] as const) if (s[key] !== undefined) out[key] = s[key];
+  return out;
+}
+
 export class ElevenLabsVoiceProvider implements VoiceProvider {
   readonly info: ProviderInfo;
   readonly defaults: { model: string; voiceId: string | null; outputFormat: string };
+  readonly settings = ELEVENLABS_SETTINGS;
+  readonly models: readonly string[] = Object.keys(ELEVENLABS_MODELS);
   private readonly fetchImpl: typeof fetch;
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
@@ -192,8 +171,18 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
+  /** The generic capabilities (which settings a model takes is `sentSettings`'s). */
   capabilities(model: string): VoiceModelCapabilities {
-    return { model, ...(ELEVENLABS_MODELS[model] ?? UNKNOWN_MODEL) };
+    const { settings: _settings, ...generic } = ELEVENLABS_MODELS[model] ?? UNKNOWN_MODEL;
+    return { model, ...generic };
+  }
+
+  normalizeSettings(input: Readonly<Record<string, unknown>>): { settings: ProviderSettingValues; problems: string[] } {
+    return normalizeVoiceSettings(this.settings, input);
+  }
+
+  sentSettings(settings: Readonly<ProviderSettingValues>, model: string): { sent: ProviderSettingValues; ignored: string[] } {
+    return sentVoiceSettings(this.settings, settings, model);
   }
 
   render(segments: readonly PerformanceSegment[], model: string): RenderedNarration {
@@ -261,12 +250,11 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     const format = req.outputFormat ?? this.opts.outputFormat;
     const { mimeType, container, sampleRate } = parseOutputFormat(format);
 
-    const voiceSettings: Record<string, unknown> = {};
-    if (caps.settings.stability) voiceSettings.stability = req.settings.stability;
-    if (caps.settings.similarity) voiceSettings.similarity_boost = req.settings.similarity;
-    if (caps.settings.style) voiceSettings.style = req.settings.style;
-    if (caps.settings.speakerBoost && req.settings.speakerBoost !== undefined) voiceSettings.use_speaker_boost = req.settings.speakerBoost;
-    if (caps.settings.speed) voiceSettings.speed = req.settings.speed;
+    // What the model takes of the request's settings; a setting with no value is not sent.
+    const { sent: taken } = this.sentSettings(req.settings.provider ?? shorthandSettings(req.settings), model);
+    const unfit = this.settings.flatMap((d) => (d.key in taken ? (settingProblem(d, taken[d.key]) ?? []) : []));
+    if (unfit.length) throw new ProviderError('elevenlabs', `Voice settings for ${model} do not fit: ${unfit.join('; ')}; not sent`, false);
+    const voiceSettings = Object.fromEntries(Object.entries(taken).map(([key, value]) => [WIRE_NAMES[key] ?? key, value]));
     const body: Record<string, unknown> = { text: req.text, model_id: model, voice_settings: voiceSettings };
     if (caps.languageCode && req.language) body.language_code = req.language;
     if (req.seed !== undefined) body.seed = req.seed;
@@ -284,19 +272,22 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
 
     const path = `/v1/text-to-speech/${encodeURIComponent(req.settings.voiceId)}/with-timestamps?output_format=${encodeURIComponent(format)}`;
     const sent = req.text.length;
-    // Usage by ElevenLabs' character-cost header, else the characters sent.
+    // Usage is the characters sent; ElevenLabs' character-cost header is kept raw beside it, never priced.
     const metaFrom = (headers: Headers, attempts: number, unusable = false): CallMeta => {
-      const header = Number(headers.get('character-cost') ?? Number.NaN);
-      const reported = Number.isFinite(header) && header >= 0;
+      // A plain count only: a blank header is not a report of 0.
+      const raw = headers.get('character-cost')?.trim() ?? '';
+      const header = /^\d+(\.\d+)?$/.test(raw) ? Number(raw) : Number.NaN;
+      const reported = Number.isFinite(header);
       const requestId = headers.get('request-id') ?? headers.get('x-trace-id') ?? undefined;
       const historyItemId = headers.get('history-item-id') ?? undefined;
-      const note = reported ? `${header} character(s) reported by ElevenLabs (character-cost)` : `ElevenLabs reported no character cost: ${sent} character(s) counted as sent`;
+      const note = `${sent} character${sent === 1 ? '' : 's'} sent (the estimate's basis: an upper bound); ElevenLabs reported ${reported ? `${header} (character-cost header; its unit is unverified, so it is not priced)` : 'no character cost'}`;
       return {
         provider: 'elevenlabs',
         model,
         mock: false,
-        usage: [{ unit: 'CHARACTERS', quantity: reported ? header : sent }],
-        usageSource: reported ? 'REPORTED' : 'COUNTED',
+        usage: [{ unit: 'CHARACTERS', quantity: sent }],
+        usageSource: 'COUNTED',
+        ...(reported ? { reportedUsage: [{ name: 'character-cost', quantity: header }] } : {}),
         attempts,
         costNote: unusable ? `Response unusable; characters may have been billed. ${note}` : note,
         ...(requestId ? { providerRequestId: requestId } : {}),

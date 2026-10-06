@@ -1,5 +1,5 @@
-import { DEFAULT_DELIVERY, DEFAULT_VOICE_PROFILE_CONFIG, type ScriptDelivery } from '@docengine/core';
-import { ElevenLabsVoiceProvider, MockVoiceProvider } from '@docengine/providers';
+import { DEFAULT_DELIVERY, EARLIER_PERFORMANCE_RULES, type ProviderSettingValues, type ScriptDelivery, type VoiceSettingDescriptor } from '@docengine/core';
+import { ElevenLabsVoiceProvider, MockVoiceProvider, renderSegments, sentVoiceSettings, type VoiceProvider } from '@docengine/providers';
 import { describe, expect, it } from 'vitest';
 import { alignTake } from './alignment.ts';
 import { checkTake } from './checks.ts';
@@ -26,7 +26,7 @@ function take(blocks: ChunkBlock[], strategy: 'PLAIN' | 'RESTRAINED' | 'DIRECTED
   const map = new Map<string, TakeBlock>(blocks.map((b) => [b.key, { delivery: b.delivery, infoClass: b.infoClass }]));
   return {
     chunk: chunk!,
-    prepared: prepareTake({ chunk: chunk!, blocks: map, strategy, numberStyle: 'UK', aliases: [], phonemes: [], provider, model, settings: DEFAULT_VOICE_PROFILE_CONFIG.settings, context: { previousText: null, nextText: null }, seed: 7 }),
+    prepared: prepareTake({ chunk: chunk!, blocks: map, strategy, numberStyle: 'UK', aliases: [], phonemes: [], provider, model, settings: provider.normalizeSettings({}).settings, context: { previousText: null, nextText: null }, seed: 7 }),
   };
 }
 
@@ -49,8 +49,10 @@ describe('performance preparation (the canonical text never changes)', () => {
     ]);
     expect(prepared.passed).toBe(true);
     expect(prepared.prepared.checks.map((c) => `${c.id}:${c.status}`)).toEqual(['spoken-forms:PASS', 'words:PASS', 'sentences:PASS', 'boundaries:PASS', 'quotations:PASS', 'vocabulary:PASS', 'markup:PASS', 'density:PASS', 'restraint:PASS']);
-    // v4 has no speed setting: the slow pace is carried by the direction, the setting is unchanged.
+    // v4 has no speed setting: the slow pace is carried by the direction, the setting is unchanged; every setting is kept, two are sent.
     expect(prepared.prepared.settings.speed).toBe(1);
+    expect(prepared.prepared.settings).toEqual({ stability: 0.5, similarity: 0.75, style: 0, speakerBoost: true, speed: 1 });
+    expect(prepared.prepared.sent).toEqual({ stability: 0.5, similarity: 0.75 });
     expect(chunk.text).toBe("Nobody at this table has seen what he is buying.\nWhat changes hands is not a flower.\nIt's a promise.");
   });
 
@@ -90,6 +92,60 @@ describe('performance preparation (the canonical text never changes)', () => {
     const tags = take(blocks, 'RESTRAINED').prepared;
     expect(tags.rendered.text).toBe('[tense] It begins. [pause] [matter-of-fact] Then it is over, quickly, for everyone who had bought in late.');
     expect(tags.rendered.text).not.toContain('<break');
+  });
+});
+
+describe("provider settings: every one kept, sent as the model takes them, the chunk's pace on the speed setting", () => {
+  /** One slow (or fast) chunk of plain narration: no direction carries the pace. */
+  const paced = (pace: 'SLOW' | 'FAST', provider: Pick<VoiceProvider, 'render' | 'capabilities' | 'settings' | 'sentSettings'>, model: string, settings: ProviderSettingValues, strategy: 'PLAIN' | 'RESTRAINED' = 'RESTRAINED', rules = EARLIER_PERFORMANCE_RULES) => {
+    order = 0;
+    const blocks = [block('12.1', 'The guild met on Tuesdays, in the back room of the tavern.')];
+    const [chunk] = planChunks([{ id: 's', key: 'SC01', blocks }], { minWords: 150, maxWords: 200 });
+    const map = new Map<string, TakeBlock>(blocks.map((b) => [b.key, { delivery: b.delivery, infoClass: b.infoClass }]));
+    return prepareTake({ chunk: { ...chunk!, performance: { ...chunk!.performance, pace } }, blocks: map, strategy, numberStyle: 'UK', aliases: [], phonemes: [], provider, model, settings, context: { previousText: null, nextText: null }, seed: 7, rules }).prepared;
+  };
+  const defaults = v4.normalizeSettings({}).settings;
+
+  it('eleven v4 keeps all five settings and is sent stability and similarity; the pace is left to the text', () => {
+    const p = paced('SLOW', v4, 'eleven_v4', defaults);
+    expect(p.settings).toEqual({ stability: 0.5, similarity: 0.75, style: 0, speakerBoost: true, speed: 1 });
+    expect(p.sent).toEqual({ stability: 0.5, similarity: 0.75 });
+    expect(p.unsupported).toEqual(['slow pace: the model has no speed setting (left to the text)']);
+    // A plain take says nothing about pace, as before.
+    expect(paced('SLOW', v4, 'eleven_v4', defaults, 'PLAIN').unsupported).toEqual([]);
+  });
+
+  it("multilingual v2 takes a speed: a slow chunk is 0.94 of it in the settings and in what is sent; the factor is the rules'", () => {
+    const p = paced('SLOW', v4, 'eleven_multilingual_v2', defaults);
+    expect(p.settings).toEqual({ stability: 0.5, similarity: 0.75, style: 0, speakerBoost: true, speed: 0.94 });
+    expect(p.sent).toEqual(p.settings);
+    expect(p.unsupported).toEqual([]);
+    expect(paced('FAST', v4, 'eleven_multilingual_v2', defaults).settings.speed).toBe(1.06);
+    expect(paced('SLOW', v4, 'eleven_multilingual_v2', defaults, 'RESTRAINED', { ...EARLIER_PERFORMANCE_RULES, paceSpeed: { SLOW: 0.9, FAST: 1.1 } }).sent?.speed).toBe(0.9);
+    // Rounded to 0.01 (0.9 × 0.94 = 0.846) and kept within the setting's range (0.7–1.2).
+    expect(paced('SLOW', v4, 'eleven_multilingual_v2', { ...defaults, speed: 0.9 }).settings.speed).toBe(0.85);
+    expect(paced('SLOW', v4, 'eleven_multilingual_v2', { ...defaults, speed: 0.73 }).settings.speed).toBe(0.7);
+    expect(paced('FAST', v4, 'eleven_multilingual_v2', { ...defaults, speed: 1.17 }).settings.speed).toBe(1.2);
+  });
+
+  it("another provider's settings: its speed setting (tempo) takes the pace only where the model is sent it; nothing else is touched", () => {
+    const FAKE: VoiceSettingDescriptor[] = [
+      { key: 'warmth', label: 'Warmth', help: '', kind: 'NUMBER', default: 0.3, min: 0, max: 1, models: null, overridable: true },
+      { key: 'breathy', label: 'Breathy', help: '', kind: 'BOOLEAN', default: false, models: null, overridable: true },
+      { key: 'tempo', label: 'Tempo', help: '', kind: 'NUMBER', default: 1, min: 0.8, max: 1.1, models: ['paced'], overridable: true, role: 'SPEED' },
+    ];
+    const fake = { settings: FAKE, sentSettings: (s: ProviderSettingValues, m: string) => sentVoiceSettings(FAKE, s, m), capabilities: (m: string) => mock.capabilities(m), render: (segments: Parameters<VoiceProvider['render']>[0], m: string) => renderSegments(segments, mock.capabilities(m)) };
+    const settings = { warmth: 0.3, breathy: false, tempo: 1 };
+    const sent = paced('SLOW', fake, 'paced', settings);
+    expect(sent.settings).toEqual({ warmth: 0.3, breathy: false, tempo: 0.94 });
+    expect(sent.sent).toEqual({ warmth: 0.3, breathy: false, tempo: 0.94 });
+    expect(sent.unsupported).toEqual([]);
+    const notSent = paced('SLOW', fake, 'flat', settings);
+    expect(notSent.settings).toEqual(settings);
+    expect(notSent.sent).toEqual({ warmth: 0.3, breathy: false });
+    expect(notSent.unsupported).toEqual(['slow pace: the model has no speed setting (left to the text)']);
+    // Within tempo's own range, not another provider's.
+    expect(paced('FAST', fake, 'paced', { ...settings, tempo: 1.1 }).settings.tempo).toBe(1.1);
   });
 });
 

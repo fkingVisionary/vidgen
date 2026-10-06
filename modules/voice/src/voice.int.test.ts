@@ -1,4 +1,5 @@
-import { NarrationAlignment, PreparedNarration, VOICE_ACCEPTANCE_EXPERIMENT, type JobType } from '@docengine/core';
+import { NarrationAlignment, PreparedNarration, VOICE_ACCEPTANCE_EXPERIMENT, VoiceRunConfig, VoiceTakeConfig, type JobType } from '@docengine/core';
+import { Prisma } from '@docengine/database';
 import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers } from '@docengine/pipeline';
 import { ALL_MOCK, MockVoiceProvider, ProviderError, createProviders, type NarrationRequest, type NarrationResult, type ProviderSet } from '@docengine/providers';
 import { ScriptEditing, createScriptStage } from '@docengine/script';
@@ -110,6 +111,16 @@ describe('voice engine (MOCK voice, real database)', () => {
     const v = await view(s, projectId);
     const r = v.run!;
     expect(r).toMatchObject({ number, kind: 'AUDITION', scriptVersion: 1, chunkCount: plan.chunks.length, stale: false });
+    // The run keeps what it was made with: the house profile (the library default, made at the first plan), frozen; its first takes say they are the run's.
+    const row = await db.voiceRun.findUniqueOrThrow({ where: { id: r.id }, include: { generations: true } });
+    const snapshot = VoiceRunConfig.parse(row.config);
+    expect(snapshot).toMatchObject({ reconstructed: false, selection: { mode: 'DEFAULT', revision: 0 }, profile: { versionId: plan.profile.id, version: 1, name: 'House narrator', familyName: 'House narrator' }, projectOverrides: {}, runOptions: {}, provenance: {} });
+    expect(snapshot.effective).toEqual(plan.configuration.effective);
+    expect(snapshot.effective).toMatchObject({ provider: 'mock', model: 'mock', voiceId: 'mock-narrator-deep', outputFormat: 'wav_22050', strategy: 'RESTRAINED', chunking: { minWords: 20, maxWords: 30 }, context: { previousChars: 200, nextChars: 120, stitch: false } });
+    expect(row).toMatchObject({ strategy: 'RESTRAINED', settings: { chunking: snapshot.effective.chunking, context: snapshot.effective.context } });
+    for (const g of row.generations) expect(VoiceTakeConfig.parse(g.config)).toEqual({ reconstructed: false, base: 'RUN', override: null, profile: snapshot.profile, effective: snapshot.effective, provenance: {}, differs: [], identityDiffers: false });
+    // What was sent is what the snapshot says: every setting with the chunk's pace, the model sent what it takes.
+    expect(s.voice.calls.every((c) => c.settings.voiceId === 'mock-narrator-deep' && c.settings.model === 'mock' && c.settings.provider?.stability === 0.5)).toBe(true);
     for (const c of r.chunks) {
       const take = c.current!;
       expect(take).toMatchObject({ generation: 1, status: 'IN_REVIEW', variant: null, provider: 'mock', model: 'mock', voiceId: 'mock-narrator-deep', alignment: 'MOCK', mock: true });
@@ -346,11 +357,22 @@ describe('voice engine (MOCK voice, real database)', () => {
     await s.service.createRun(projectId, { scope: { kind: 'FULL' }, confirm: true }, 'editor');
     await s.runner.drain();
     expect(await statusOf(projectId)).toBe('VOICE_REVIEW');
-    const r = (await view(s, projectId)).run!;
+    let r = (await view(s, projectId)).run!;
     expect(r.assembly).toMatchObject({ complete: true, status: 'IN_REVIEW' });
     await expect(s.projects.recordApproval(projectId, { gate: 'VOICE', decision: 'APPROVED' }, 'editor')).rejects.toThrow(/not approved yet/);
+    // One chunk retaken with a temporary override: kept with the take only, the profile unchanged, a warning (not a block) in QA.
+    const profilesBefore = await db.voiceProfile.findMany({ orderBy: { id: 'asc' } });
+    await s.service.regenerate(r.id, { chunkIds: [r.chunks[1]!.id], override: { providerSettings: { stability: 0.3 } } }, 'editor');
+    await s.runner.drain();
+    expect(await db.voiceProfile.findMany({ orderBy: { id: 'asc' } })).toEqual(profilesBefore);
+    const retake = await db.voiceGeneration.findFirstOrThrow({ where: { chunkId: r.chunks[1]!.id, generation: 2 } });
+    expect(VoiceTakeConfig.parse(retake.config)).toMatchObject({ base: 'RUN', override: { providerSettings: { stability: 0.3 } }, differs: ['stability: 0.3 (run: 0.5)'], identityDiffers: true, provenance: { 'providerSettings.stability': 'TAKE' } });
+    expect(s.voice.calls.at(-1)!.settings.provider).toMatchObject({ stability: 0.3 });
+    r = (await view(s, projectId)).run!;
+    expect(r.qa.filter((f) => f.kind === 'CONFIGURATION_DIFFERS')).toEqual([{ kind: 'CONFIGURATION_DIFFERS', severity: 'WARNING', ref: '#2', detail: "Chunk 2's take 2 was made with a temporary override: stability: 0.3 (run: 0.5)" }]);
     const { approved } = await s.service.approveAll(r.id, 'editor');
     expect(approved).toBe(r.chunks.length);
+    // The VOICE gate (no providers: it reads what the takes stored) approves it.
     const { approval } = await s.projects.recordApproval(projectId, { gate: 'VOICE', decision: 'APPROVED', notes: 'Narration approved (test).' }, 'editor');
     expect(approval.voiceAssemblyId).toBe(r.assembly!.id);
     expect(await statusOf(projectId)).toBe('VOICE_COMPLETE');
@@ -410,6 +432,12 @@ describe('voice engine (MOCK voice, real database)', () => {
     ]);
     expect(chunk.generations[0]!.performanceText).toMatch(/^\[reflective\] /);
     expect(chunk.generations.slice(0, 2).every((g) => g.audioUrl && g.durationMs && g.words.length && g.note === 'A/B (test)')).toBe(true);
+    // Each variant records what it was made with: the run's configuration, its strategy as a TAKE override.
+    const made = await db.voiceGeneration.findMany({ where: { chunkId: chunk.id, generation: { in: [2, 3] } }, orderBy: { generation: 'asc' } });
+    expect(made.map((g) => VoiceTakeConfig.parse(g.config)).map((c) => [c.base, c.override, c.differs, c.identityDiffers])).toEqual([
+      ['RUN', { strategy: 'RESTRAINED' }, [], false],
+      ['RUN', null, [], false],
+    ]);
     expect(r.assembly!.version).toBe(before.assembly!.version);
     expect(r.chunks.slice(1).map((c) => c.current!.id)).toEqual(before.chunks.slice(1).map((c) => c.current!.id));
 
@@ -477,12 +505,88 @@ describe('voice engine (MOCK voice, real database)', () => {
     expect(run('G 12–20 s chunks').chunkCount).toBeLessThan(run('B restrained').chunkCount);
   });
 
-  it('refuses a profile whose audio format cannot be measured or joined', async () => {
+  it('refuses a profile whose audio format cannot be measured or joined, made or edited', async () => {
+    // Pinned behaviour moved on purpose: the per-project profile route (createProfile) is gone; profiles are a library of families and versions, with the same refusal.
     const s = setup();
-    const p = await s.projects.createProject(tulipInput, 'test');
-    await expect(s.service.createProfile(p.id, { outputFormat: 'opus_48000_64' }, 'editor')).rejects.toThrow(/Output format "opus_48000_64" cannot be measured or joined here/);
+    await expect(s.service.createProfileFamily({ name: 'Opus narrator', fields: { outputFormat: 'opus_48000_64' } }, 'editor')).rejects.toThrow(/Output format "opus_48000_64" cannot be measured or joined here/);
     expect(await db.voiceProfile.count({ where: { outputFormat: 'opus_48000_64' } })).toBe(0);
-    await expect(s.service.createProfile(p.id, { outputFormat: 'wav_44100' }, 'editor')).resolves.toMatchObject({ outputFormat: 'wav_44100', version: 2 });
+    expect(await db.voiceProfileFamily.count()).toBe(0);
+    const made = await s.service.createProfileFamily({ name: 'Tulip narrator', fields: { outputFormat: 'wav_44100' } }, 'editor');
+    await expect(s.service.newProfileVersion(made.familyId, { fields: { outputFormat: 'opus_48000_64' } }, 'editor')).rejects.toThrow(/Output format "opus_48000_64" cannot be measured or joined here/);
+    await expect(s.service.newProfileVersion(made.familyId, { fields: { outputFormat: 'mp3_44100_128' } }, 'editor')).resolves.toMatchObject({ familyId: made.familyId, version: 2 });
+    expect((await db.voiceProfile.findMany({ where: { familyId: made.familyId }, orderBy: { version: 'asc' } })).map((v) => [v.version, v.outputFormat, v.active])).toEqual([
+      [1, 'wav_44100', false],
+      [2, 'mp3_44100_128', false],
+    ]);
+  });
+
+  it('regenerates a run made before saved profiles with its own configuration: the same text and settings it sent', async () => {
+    const s = setup();
+    const projectId = await approvedScript(s);
+    // House narrator v1 as code from before saved profiles wrote it (no family, the earlier config shape): adopted at the first plan.
+    await db.voiceProfile.create({
+      data: { name: 'House narrator', version: 1, provider: 'mock', voiceId: 'mock-narrator-deep', modelId: 'mock', language: 'en', outputFormat: 'wav_22050', active: true, config: { settings: { stability: 0.5, similarity: 0.75, style: 0, speakerBoost: true, speed: 1 }, strategy: 'RESTRAINED', chunking: { minWords: 20, maxWords: 30 }, context: { previousChars: 200, nextChars: 120, stitch: false }, numberStyle: 'UK' } },
+    });
+    await s.service.createRun(projectId, { scope: { kind: 'AUDITION', seconds: 60 }, options: { strategy: 'EXPRESSIVE' } }, 'editor');
+    await s.runner.drain();
+    const r = (await view(s, projectId)).run!;
+    // As a run of production: no configuration stored on it or its takes.
+    await db.voiceRun.update({ where: { id: r.id }, data: { config: Prisma.DbNull } });
+    await db.voiceGeneration.updateMany({ where: { runId: r.id }, data: { config: Prisma.DbNull } });
+    const first = await db.voiceGeneration.findMany({ where: { runId: r.id }, orderBy: { chunk: { chunkIndex: 'asc' } } });
+    const sentBefore = s.voice.calls.slice();
+    await s.service.regenerate(r.id, { all: true, confirm: true }, 'editor');
+    await s.runner.drain();
+    const again = await db.voiceGeneration.findMany({ where: { runId: r.id, generation: 2 }, orderBy: { chunk: { chunkIndex: 'asc' } } });
+    expect(again).toHaveLength(first.length);
+    for (const [i, g] of again.entries()) {
+      expect(g.performanceText).toBe(first[i]!.performanceText);
+      expect(PreparedNarration.parse(g.prepared).settings).toEqual(PreparedNarration.parse(first[i]!.prepared).settings);
+      expect(PreparedNarration.parse(g.prepared).context).toEqual(PreparedNarration.parse(first[i]!.prepared).context);
+      expect(g).toMatchObject({ strategy: 'EXPRESSIVE', profileId: first[i]!.profileId, model: 'mock', voiceId: 'mock-narrator-deep' });
+      // Recorded now: the run's configuration as reconstructed.
+      expect(VoiceTakeConfig.parse(g.config)).toMatchObject({ reconstructed: false, base: 'RUN', override: null, differs: [], identityDiffers: false, effective: { strategy: 'EXPRESSIVE', numberStyle: 'UK' } });
+    }
+    // Every request as it was sent (two workers: compared whatever their order).
+    const requests = (calls: typeof sentBefore) => calls.map((c) => JSON.stringify([c.text, c.settings, c.previousText ?? null, c.nextText ?? null, c.outputFormat, c.language])).sort();
+    expect(requests(s.voice.calls.slice(sentBefore.length))).toEqual(requests(sentBefore));
+  });
+
+  it('regenerates with the production profile now (labelled, the run’s chunk kept), refused when its format, language or revision does not fit', async () => {
+    const s = setup();
+    const projectId = await approvedScript(s);
+    await s.service.createRun(projectId, { scope: { kind: 'AUDITION', seconds: 60 } }, 'editor');
+    await s.runner.drain();
+    const r = (await view(s, projectId)).run!;
+    const tulip = await s.service.createProfileFamily({ name: 'Tulip narrator', fields: { strategy: 'EXPRESSIVE', chunking: { minWords: 30, maxWords: 50 } } }, 'editor');
+    await s.service.setSelection(projectId, { familyId: tulip.familyId, overrides: { providerSettings: { stability: 0.4 } }, revision: 0 }, 'editor');
+    // Edited after it was chosen: production is v2 now.
+    const v2 = await s.service.newProfileVersion(tulip.familyId, { fields: { voiceId: 'mock-narrator-bright' } }, 'editor');
+    const target = r.chunks[0]!;
+    await s.service.regenerate(r.id, { chunkIds: [target.id], configuration: 'PRODUCTION', selectionRevision: 1 }, 'editor');
+    await s.runner.drain();
+    const take = await db.voiceGeneration.findFirstOrThrow({ where: { chunkId: target.id, generation: 2 } });
+    const made = VoiceTakeConfig.parse(take.config);
+    expect(take).toMatchObject({ status: 'IN_REVIEW', profileId: v2.versionId, voiceId: 'mock-narrator-bright', strategy: 'EXPRESSIVE' });
+    expect(made).toMatchObject({ base: 'PRODUCTION', override: null, profile: { versionId: v2.versionId, version: 2, familyName: 'Tulip narrator' }, identityDiffers: true, provenance: { 'providerSettings.stability': 'PROJECT' } });
+    // The chunk is the run's: its chunk size, not production's.
+    expect(made.effective.chunking).toEqual({ minWords: 20, maxWords: 30 });
+    expect(made.differs).toEqual(['voice: mock-narrator-bright (run: mock-narrator-deep)', 'performance: expressive (run: restrained)', 'stability: 0.4 (run: 0.5)']);
+    expect(s.voice.calls.at(-1)!.settings).toMatchObject({ voiceId: 'mock-narrator-bright', provider: { stability: 0.4 } });
+    const qa = (await view(s, projectId)).run!.qa.filter((f) => f.kind === 'CONFIGURATION_DIFFERS');
+    expect(qa).toEqual([expect.objectContaining({ severity: 'WARNING', ref: '#1', detail: expect.stringMatching(/^Chunk 1's take 2 was made with the production profile Tulip narrator v2: voice: mock-narrator-bright/) })]);
+    // Refused: a plan made at another revision, another output format, another language.
+    await expect(s.service.regenerate(r.id, { chunkIds: [target.id], configuration: 'PRODUCTION', selectionRevision: 0 }, 'editor')).rejects.toThrow(/^The project's voice profile or its overrides changed since this was planned \(revision 0, now 1\): plan again$/);
+    await s.service.newProfileVersion(tulip.familyId, { fields: { outputFormat: 'wav_44100' } }, 'editor');
+    await expect(s.service.regenerate(r.id, { chunkIds: [target.id], configuration: 'PRODUCTION' }, 'editor')).rejects.toThrow(/^The production profile Tulip narrator v3 makes wav_44100 and voice run \d+ is wav_22050: clips of one run share a format — start a new run with the production profile$/);
+    const spanish = await s.service.duplicateProfile(tulip.familyId, { fromVersionId: v2.versionId, name: 'Tulip narrator (Spanish)', fields: { language: 'es' } }, 'editor');
+    // A choice for another language cannot be saved for en; one left behind (written directly) is refused when it is used.
+    await expect(s.service.setSelection(projectId, { familyId: spanish.familyId, revision: 1 }, 'editor')).rejects.toThrow(/is for es; this narration is en/);
+    await db.voiceSelection.updateMany({ where: { projectId }, data: { familyId: spanish.familyId } });
+    await expect(s.service.regenerate(r.id, { chunkIds: [target.id], configuration: 'PRODUCTION' }, 'editor')).rejects.toThrow(/^The production profile cannot be used: Profile Tulip narrator \(Spanish\) v1 is for es; this narration is en$/);
+    // A temporary override the provider does not take, or a chunk size for one take: refused before anything is queued.
+    await expect(s.service.regenerate(r.id, { chunkIds: [target.id], override: { providerSettings: { warmth: 1 } } }, 'editor')).rejects.toThrow(/^Temporary override: warmth: not a setting this provider has$/);
+    expect(await db.job.count({ where: { projectId, type: 'VOICE' } })).toBe(2);
   });
 
   it('refuses paid narration without durable storage', async () => {

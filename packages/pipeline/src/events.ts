@@ -39,8 +39,10 @@ export const EVENT = {
   VOICE_TAKE_DECIDED: 'VOICE_TAKE_DECIDED',
   /** The editor decided how a term in the pronunciation list is said. */
   VOICE_PRONUNCIATION_UPDATED: 'VOICE_PRONUNCIATION_UPDATED',
-  /** A new voice profile version was created. */
+  /** A voice profile version was made from the project: a voice run's configuration saved as a profile, new or a new version (before saved profiles: a version made on its Voice page). */
   VOICE_PROFILE_CREATED: 'VOICE_PROFILE_CREATED',
+  /** The editor chose the voice profile a language version narrates with (follow its current version, pin one, or the library default), or changed the project's overrides of it. */
+  VOICE_PROFILE_SELECTED: 'VOICE_PROFILE_SELECTED',
   /** An earlier approved narration was superseded by approving a newer assembly. */
   VOICE_ASSEMBLY_SUPERSEDED: 'VOICE_ASSEMBLY_SUPERSEDED',
   /** A mock job succeeded where the transition requires real providers (e.g. publishing). */

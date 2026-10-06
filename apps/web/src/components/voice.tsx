@@ -6,22 +6,24 @@ import {
   type ArtifactStatus,
   type DirectorMark,
   type PerformanceMark,
+  type RegenerateVoiceInput,
   type VoiceChunkView,
   type VoiceGenerationStatus,
   type VoiceGenerationView,
+  type VoiceProductionView,
   type VoiceQaFinding,
+  type VoiceRunView,
+  type VoiceSettingDescriptor,
 } from '@docengine/core';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '../api.ts';
-import { formatUsd } from '../format.ts';
-import { outsideNatural, parseDirections, sentenceSpans } from '../voice-plan.ts';
+import { configDifferences, isEmptyOverrides, outsideNatural, overrideProblems, parseDirections, productionRefusal, profileLabel, profileNameFor, pruneOverrides, sentenceSpans, takeCostText, takeLabels, type EditedOverrides } from '../voice-plan.ts';
+import { button, link, OverridesEditor, pill, SaveAsProfile, secondary, useVoiceRequest, type OverrideField } from './voice-profiles.tsx';
 
-export const button = 'rounded-md px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40';
-export const pill = 'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap';
-export const secondary = `${button} bg-white text-stone-800 ring-1 ring-stone-300 hover:bg-stone-50`;
-/** A text-styled button that is still at least 24 px tall to tap. */
-export const link = 'inline-flex min-h-6 items-center text-xs text-stone-600 underline disabled:cursor-not-allowed disabled:opacity-40';
+export { button, link, pill, secondary, useVoiceRequest };
+
+/** A label whose text varies (a profile's name, an override): it wraps on a phone rather than overflow. */
+const tag = 'inline-flex max-w-full items-center rounded-full px-2 py-0.5 text-xs font-medium break-words';
 
 export const seconds = (ms: number | null | undefined) => (ms === null || ms === undefined ? '—' : `${(ms / 1000).toFixed(1)} s`);
 export const clock = (ms: number) => {
@@ -56,19 +58,6 @@ const ASSEMBLY_STATUS: Record<ArtifactStatus, [string, string]> = {
 export function AssemblyStatus({ status }: { status: ArtifactStatus }) {
   const [label, tone] = ASSEMBLY_STATUS[status];
   return <span className={`${pill} ${tone}`}>{label}</span>;
-}
-
-/** Invalidate the voice view and the project after a change. */
-export function useVoiceRequest<T, R = unknown>(fn: (arg: T) => Promise<R>, onDone?: () => void) {
-  const queryClient = useQueryClient();
-  return useMutation<R, Error, T>({
-    mutationFn: fn,
-    onSuccess: () => onDone?.(),
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['voice'] });
-      void queryClient.invalidateQueries({ queryKey: ['project'] });
-    },
-  });
 }
 
 export function Findings({ findings, empty = 'Nothing flagged.' }: { findings: VoiceQaFinding[]; empty?: string }) {
@@ -125,9 +114,19 @@ export function NumberedText({ text, className = '' }: { text: string; className
 const MARK_SOURCE: Record<PerformanceMark['source'], string> = { SCRIPT: 'script', STRATEGY: 'strategy', DIRECTOR: 'director' };
 const markWords = (m: { emotion?: string | null; delivery?: string | null; vocalAction?: string | null }) => [m.emotion, m.delivery, m.vocalAction].filter(Boolean).join(', ');
 
-function TakeLine({ take, chunk, newer = false, busy, onDecide }: { take: VoiceGenerationView; chunk: VoiceChunkView; newer?: boolean; busy: boolean; onDecide: (id: string, action: 'APPROVE' | 'REJECT' | 'RESTORE') => void }) {
+/** What a chunk card needs beyond its chunk: its run, the project's production profile now, and the provider's settings (for "Regenerate with…" and saving a take's configuration). */
+export interface ChunkContext {
+  run: VoiceRunView;
+  production: VoiceProductionView;
+  settings: readonly VoiceSettingDescriptor[];
+  projectId: string;
+  projectTitle: string;
+}
+
+function TakeLine({ take, chunk, context, newer = false, busy, onDecide }: { take: VoiceGenerationView; chunk: VoiceChunkView; context: ChunkContext; newer?: boolean; busy: boolean; onDecide: (id: string, action: 'APPROVE' | 'REJECT' | 'RESTORE') => void }) {
   const [showText, setShowText] = useState(false);
   const marks = take.prepared?.marks ?? [];
+  const labels = takeLabels(take.configuration, take.variant);
   return (
     <div className={`rounded-md border p-2 ${take.current ? 'border-stone-300 bg-white' : 'border-stone-200 bg-stone-50'}`} data-take={take.generation} data-current={take.current}>
       <div className="flex flex-wrap items-center gap-2 text-xs text-stone-600">
@@ -136,15 +135,33 @@ function TakeLine({ take, chunk, newer = false, busy, onDecide }: { take: VoiceG
         {take.current && <span className={`${pill} bg-stone-900 text-white`}>current</span>}
         {newer && !take.current && <span className={`${pill} bg-sky-50 text-sky-800`}>newer, not current</span>}
         {take.variant && <span className={`${pill} bg-indigo-100 text-indigo-800`}>A/B · {take.variant}</span>}
+        {labels.production && (
+          <span className={`${tag} bg-sky-100 text-sky-800`} data-take-config="production">
+            {labels.production}
+          </span>
+        )}
+        {labels.override && (
+          <span className={`${tag} bg-amber-100 text-amber-900`} data-take-config="override">
+            {labels.override}
+          </span>
+        )}
         {take.mock && <span className={`${pill} bg-amber-100 text-amber-900`}>MOCK</span>}
         {take.durationMs !== null ? <Length sec={take.durationMs / 1000} /> : <span>—</span>}
         <span>{take.strategy.toLowerCase()}</span>
-        {take.characters !== null && <span>{take.characters} chars</span>}
-        {take.cost && <span title={take.cost.note ?? ''}>{take.cost.actualUsd !== null ? formatUsd(take.cost.actualUsd) : take.cost.estimatedUsd !== null ? `~${formatUsd(take.cost.estimatedUsd)}` : 'unpriced'} ({(take.cost.basis ?? '').toLowerCase()})</span>}
+        {take.cost ? (
+          <span className="min-w-0 break-words" title={take.cost.note ?? ''}>
+            {takeCostText(take.cost)}
+            {take.cost.reestimated ? ' · re-estimated' : ''}
+          </span>
+        ) : (
+          take.characters !== null && <span>{take.characters} chars</span>
+        )}
         <span className="min-w-0 break-all">
-          {take.model} · voice {take.voiceId} · {take.profile.name} v{take.profile.version}
+          {take.model} · voice {take.voiceId} · {profileLabel(take.profile)}
         </span>
       </div>
+      {labels.differs && <p className="mt-1 text-xs break-words text-stone-600">{labels.differs}</p>}
+      {take.cost?.reestimated && take.cost.note && <p className="mt-1 text-xs text-stone-500">{take.cost.note}</p>}
       {marks.length > 0 && (
         <p className="mt-1 text-xs text-stone-600">
           Directions: {marks.map((m) => `${m.sentence + 1}: ${markWords(m.intent) || m.intent.pacing.toLowerCase()} (${MARK_SOURCE[m.source]})`).join(' · ')}
@@ -185,6 +202,9 @@ function TakeLine({ take, chunk, newer = false, busy, onDecide }: { take: VoiceG
           </button>
         )}
       </div>
+      {take.configuration.override && take.audioUrl && (
+        <SaveAsProfile runId={context.run.id} generationId={take.id} projectId={context.projectId} production={context.production} defaultName={profileNameFor(context.projectTitle)} what="take" />
+      )}
       {showText && take.performanceText && (
         <div className="mt-1 space-y-1 text-xs">
           <p className="text-stone-500">Derived text sent to the voice (the script is unchanged):</p>
@@ -199,30 +219,104 @@ function TakeLine({ take, chunk, newer = false, busy, onDecide }: { take: VoiceG
               {take.prepared.seed !== null ? ` · seed ${take.prepared.seed}` : ''}
             </p>
           )}
+          {take.prepared?.sent && <p className="text-stone-600">Settings sent: {Object.entries(take.prepared.sent).map(([k, v]) => `${k} ${String(v)}`).join(', ') || 'none'}</p>}
         </div>
       )}
     </div>
   );
 }
 
+// ── What a new take is made with ─────────────────────────────────────────────
+
+/** RUN: the run's configuration; PRODUCTION: the project's production profile now; OVERRIDE: the run's configuration with a temporary override. */
+export interface TakeChoice {
+  base: 'RUN' | 'PRODUCTION' | 'OVERRIDE';
+  override: EditedOverrides;
+}
+export const RUN_CHOICE: TakeChoice = { base: 'RUN', override: {} };
+
+/** The request's part for a choice: the production profile at the revision shown, or the override (nothing for the run's own configuration). */
+export function choiceRequest(c: TakeChoice, production: VoiceProductionView): Pick<RegenerateVoiceInput, 'configuration' | 'override' | 'selectionRevision'> {
+  if (c.base === 'PRODUCTION') return { configuration: 'PRODUCTION', selectionRevision: production.revision };
+  if (c.base === 'OVERRIDE' && !isEmptyOverrides(c.override)) return { override: pruneOverrides(c.override) };
+  return {};
+}
+
+/** Why a choice cannot be sent yet (null when it can). */
+export function choiceProblem(c: TakeChoice, context: Pick<ChunkContext, 'run' | 'production' | 'settings'>): string | null {
+  if (c.base === 'PRODUCTION') return productionRefusal(context.run.configuration.effective, context.production);
+  if (c.base !== 'OVERRIDE') return null;
+  if (isEmptyOverrides(c.override)) return 'Tick at least one setting to override';
+  return overrideProblems(c.override, context.settings, 'TAKE')[0] ?? null;
+}
+
+/**
+ * What new takes are made with: the run's configuration, the production
+ * profile now (refused with its reason when the run's chunks cannot take
+ * it; what differs from the run is said), or a temporary override kept with
+ * the takes only.
+ */
+export function TakeChoiceFields({ context, value, onChange, fields, name }: { context: Pick<ChunkContext, 'run' | 'production' | 'settings'>; value: TakeChoice; onChange: (c: TakeChoice) => void; fields: readonly OverrideField[]; name: string }) {
+  const { run, production } = context;
+  const refusal = productionRefusal(run.configuration.effective, production);
+  const differs = !refusal && production.effective ? configDifferences(run.configuration.effective, { ...production.effective, chunking: run.configuration.effective.chunking }) : [];
+  const label = production.profile ? profileLabel({ name: production.profile.name, version: production.profile.version, familyName: production.family?.name ?? null }) : 'none yet';
+  return (
+    <fieldset className="min-w-0 space-y-1 text-sm" data-take-choice>
+      <legend className="text-xs text-stone-500">Made with</legend>
+      <label className="flex min-h-6 items-center gap-2">
+        <input type="radio" name={name} checked={value.base === 'RUN'} onChange={() => onChange({ ...value, base: 'RUN' })} /> This run's configuration
+      </label>
+      <label className={`flex min-h-6 items-start gap-2 ${refusal ? 'text-stone-500' : ''}`}>
+        <input type="radio" name={name} className="mt-1" disabled={!!refusal} checked={value.base === 'PRODUCTION'} onChange={() => onChange({ ...value, base: 'PRODUCTION' })} />
+        <span className="min-w-0">
+          The production profile now: {label}
+          {refusal ? (
+            <span className="block text-xs text-red-700">{refusal}</span>
+          ) : (
+            <span className="block text-xs break-words text-stone-500">{differs.length ? `differs from the run: ${differs.join('; ')}` : "the same as this run's configuration"}</span>
+          )}
+        </span>
+      </label>
+      <label className="flex min-h-6 items-center gap-2">
+        <input type="radio" name={name} checked={value.base === 'OVERRIDE'} onChange={() => onChange({ ...value, base: 'OVERRIDE' })} /> A temporary override
+      </label>
+      {value.base === 'OVERRIDE' && <OverridesEditor base={run.configuration.effective} value={value.override} onChange={(override) => onChange({ ...value, override })} settings={context.settings} scope="TAKE" fields={fields} />}
+      {value.base === 'OVERRIDE' && <p className="text-xs text-stone-500">The override is kept with the new take only; the profile is not changed.</p>}
+      {value.base === 'PRODUCTION' && <p className="text-xs text-stone-500">The take records the production profile it was made with; the chunk is still this run's, and no profile is changed.</p>}
+    </fieldset>
+  );
+}
+
 /** Takes that still need attention: in progress, failed, or an A/B take not chosen yet. */
 const OPEN = new Set<VoiceGenerationStatus>(['PENDING', 'GENERATING', 'FAILED', 'GENERATED']);
+const TAKE_FIELDS: OverrideField[] = ['strategy', 'context', 'numberStyle', 'rules', 'settings'];
 
 /**
  * One chunk and its takes: takes newer than the current one that still need
  * attention (in progress, failed, an A/B take to choose) above it; every
- * other take folded below.
+ * other take folded below. "Regenerate" makes a take with the run's
+ * configuration; "Regenerate with…" with the production profile or a
+ * temporary override, and a director's directions.
  */
-export function ChunkCard({ chunk, runId, canGenerate, selected, onSelect }: { chunk: VoiceChunkView; runId: string; canGenerate: boolean; selected?: boolean; onSelect?: (on: boolean) => void }) {
+export function ChunkCard({ chunk, context, canGenerate, selected, onSelect }: { chunk: VoiceChunkView; context: ChunkContext; canGenerate: boolean; selected?: boolean; onSelect?: (on: boolean) => void }) {
   const [open, setOpen] = useState(false);
   const [direct, setDirect] = useState(false);
+  const [choice, setChoice] = useState<TakeChoice>(RUN_CHOICE);
   const [directions, setDirections] = useState('');
   const [note, setNote] = useState('');
   const decide = useVoiceRequest(({ id, action }: { id: string; action: 'APPROVE' | 'REJECT' | 'RESTORE' }) => api.decideTake(id, { action }));
   const regenerate = useVoiceRequest(
-    (marks: DirectorMark[] | undefined) => api.regenerateVoice(runId, { chunkIds: [chunk.id], ...(marks?.length ? { marks } : {}), ...(marks?.length && note.trim() ? { note: note.trim() } : {}) }),
+    (args: { marks?: DirectorMark[]; choice?: TakeChoice } | undefined) =>
+      api.regenerateVoice(context.run.id, {
+        chunkIds: [chunk.id],
+        ...(args?.choice ? choiceRequest(args.choice, context.production) : {}),
+        ...(args?.marks?.length ? { marks: args.marks } : {}),
+        ...(args?.choice && note.trim() ? { note: note.trim() } : {}),
+      }),
     () => {
       setDirect(false);
+      setChoice(RUN_CHOICE);
       setDirections('');
       setNote('');
     },
@@ -235,6 +329,7 @@ export function ChunkCard({ chunk, runId, canGenerate, selected, onSelect }: { c
   const working = newer.find((g) => g.status === 'PENDING' || g.status === 'GENERATING');
   const sentences = sentenceSpans(chunk.text).length;
   const parsed = directions.trim() ? parseDirections(directions, sentences) : [];
+  const problem = choiceProblem(choice, context);
   const error = decide.error ?? regenerate.error;
   const onDecide = (id: string, action: 'APPROVE' | 'REJECT' | 'RESTORE') => decide.mutate({ id, action });
   return (
@@ -264,13 +359,13 @@ export function ChunkCard({ chunk, runId, canGenerate, selected, onSelect }: { c
       {newer.length > 0 && (
         <div className="mt-2 space-y-2">
           {newer.map((g) => (
-            <TakeLine key={g.id} take={g} chunk={chunk} newer={!!take} busy={decide.isPending} onDecide={onDecide} />
+            <TakeLine key={g.id} take={g} chunk={chunk} context={context} newer={!!take} busy={decide.isPending} onDecide={onDecide} />
           ))}
         </div>
       )}
       {take && (
         <div className="mt-2">
-          <TakeLine take={take} chunk={chunk} busy={decide.isPending} onDecide={onDecide} />
+          <TakeLine take={take} chunk={chunk} context={context} busy={decide.isPending} onDecide={onDecide} />
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -281,7 +376,7 @@ export function ChunkCard({ chunk, runId, canGenerate, selected, onSelect }: { c
         )}
         {canGenerate && (
           <button onClick={() => setDirect((x) => !x)} aria-expanded={direct} className={link}>
-            {direct ? 'Cancel directions' : 'Regenerate with directions'}
+            {direct ? 'Cancel' : 'Regenerate with…'}
           </button>
         )}
         {older.length > 0 && (
@@ -291,9 +386,10 @@ export function ChunkCard({ chunk, runId, canGenerate, selected, onSelect }: { c
         )}
       </div>
       {direct && (
-        <div className="mt-2 space-y-1">
+        <div className="mt-2 space-y-2 rounded-md border border-stone-200 p-2">
+          <TakeChoiceFields context={context} value={choice} onChange={setChoice} fields={TAKE_FIELDS} name={`made-with-${chunk.id}`} />
           <label className="block text-xs text-stone-600" htmlFor={`dir-${chunk.id}`}>
-            One line per direction, by the sentence numbers above: <span className="font-mono">sentence: emotion, delivery</span> — e.g. <span className="font-mono">2: curious</span> or <span className="font-mono">3: quiet, deliberate</span>. Plain words only; they add to the house style, they do not replace it.
+            Directions (optional), one line per direction, by the sentence numbers above: <span className="font-mono">sentence: emotion, delivery</span> — e.g. <span className="font-mono">2: curious</span> or <span className="font-mono">3: quiet, deliberate</span>. Plain words only; they add to the house style, they do not replace it.
           </label>
           <textarea id={`dir-${chunk.id}`} value={directions} onChange={(e) => setDirections(e.target.value)} rows={2} className="w-full rounded-md border border-stone-300 px-2 py-1 font-mono text-xs" />
           {parsed === null && <p className="text-xs text-red-700">Write each line as "sentence: emotion" or "sentence: emotion, delivery": a sentence number from 1 to {sentences}, once each, and plain words of 2–30 letters.</p>}
@@ -301,15 +397,16 @@ export function ChunkCard({ chunk, runId, canGenerate, selected, onSelect }: { c
             Note (kept with the take, e.g. why, or which experiment arm)
             <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={1000} className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1 text-xs" />
           </label>
-          <button disabled={parsed === null || !parsed.length || regenerate.isPending} onClick={() => regenerate.mutate(parsed ?? undefined)} className={`${button} bg-stone-900 text-white hover:bg-stone-800`}>
-            Regenerate with these directions
+          {problem && choice.base !== 'PRODUCTION' && <p className="text-xs text-red-700">{problem}</p>}
+          <button disabled={parsed === null || !!problem || regenerate.isPending} onClick={() => regenerate.mutate({ marks: parsed ?? [], choice })} className={`${button} bg-stone-900 text-white hover:bg-stone-800`}>
+            Generate the new take
           </button>
         </div>
       )}
       {open && (
         <div className="mt-2 space-y-2">
           {older.map((g) => (
-            <TakeLine key={g.id} take={g} chunk={chunk} busy={decide.isPending} onDecide={onDecide} />
+            <TakeLine key={g.id} take={g} chunk={chunk} context={context} busy={decide.isPending} onDecide={onDecide} />
           ))}
         </div>
       )}

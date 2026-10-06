@@ -1,4 +1,4 @@
-import { DEFAULT_DELIVERY, DEFAULT_VOICE_PROFILE_CONFIG, type ScriptDelivery } from '@docengine/core';
+import { DEFAULT_DELIVERY, type ScriptDelivery } from '@docengine/core';
 import { ElevenLabsVoiceProvider, stripMarkup, type CharacterAlignment } from '@docengine/providers';
 import { describe, expect, it } from 'vitest';
 import { alignTake } from './alignment.ts';
@@ -19,7 +19,7 @@ const block = (key: string, text: string, d: Partial<ScriptDelivery> = {}): Chun
 function prepared(blocks: ChunkBlock[]) {
   const [chunk] = planChunks([{ id: 's', key: 'SC01', blocks }], { minWords: 150, maxWords: 200 });
   const map = new Map<string, TakeBlock>(blocks.map((b) => [b.key, { delivery: b.delivery, infoClass: b.infoClass }]));
-  const take = prepareTake({ chunk: chunk!, blocks: map, strategy: 'RESTRAINED', numberStyle: 'UK', aliases: [], phonemes: [], provider: v4, model: 'eleven_v4', settings: DEFAULT_VOICE_PROFILE_CONFIG.settings, context: { previousText: null, nextText: null }, seed: 7 });
+  const take = prepareTake({ chunk: chunk!, blocks: map, strategy: 'RESTRAINED', numberStyle: 'UK', aliases: [], phonemes: [], provider: v4, model: 'eleven_v4', settings: v4.normalizeSettings({}).settings, context: { previousText: null, nextText: null }, seed: 7 });
   return { chunk: chunk!, take };
 }
 

@@ -1,4 +1,4 @@
-import { VOICE_ACCEPTANCE_EXPERIMENT, VoiceQaFinding, type JobType } from '@docengine/core';
+import { VOICE_ACCEPTANCE_EXPERIMENT, VoiceQaFinding, VoiceTakeConfig, type JobType } from '@docengine/core';
 import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers, type JobRunnerOptions, type Logger } from '@docengine/pipeline';
 import {
   ALL_MOCK,
@@ -230,6 +230,9 @@ describe('voice stage (MOCK voice, real database)', () => {
         textHash: c.textHash,
         performanceTextHash: take.performanceTextHash,
         jobAttempt: 1,
+        // What the take was made with: the version and its base.
+        profile: { familyId: expect.any(String), family: 'House narrator', versionId: take.profileId, version: 1 },
+        configuration: { base: 'RUN', override: null },
       });
       expect(take.providerCall!.response).toHaveProperty('dictionary', null);
     }
@@ -255,7 +258,18 @@ describe('voice stage (MOCK voice, real database)', () => {
       blockKeys: first.blockKeys,
       words: first.words,
       characters: first.current!.characters,
-      take: { id: first.current!.id, generation: 1, status: 'IN_REVIEW', current: true, strategy: 'RESTRAINED', performanceText: first.current!.performanceText, durationMs: first.current!.durationMs, alignment: { source: 'MOCK', unmatchedWords: 0 }, cost: { ledgerId: first.current!.providerCallId, status: 'SUCCEEDED', basis: 'MOCK' } },
+      take: {
+        id: first.current!.id,
+        generation: 1,
+        status: 'IN_REVIEW',
+        current: true,
+        strategy: 'RESTRAINED',
+        configuration: { base: 'RUN', override: null, profile: 'House narrator v1', source: 'run configuration', differs: [], reconstructed: false },
+        performanceText: first.current!.performanceText,
+        durationMs: first.current!.durationMs,
+        alignment: { source: 'MOCK', unmatchedWords: 0 },
+        cost: { ledgerId: first.current!.providerCallId, status: 'SUCCEEDED', basis: 'MOCK', characters: first.current!.characters, reported: [], reestimated: false },
+      },
     });
     expect(chunkLines[0].estimatedSec).toBeGreaterThan(0);
     expect(chunkLines[0].take.alignment.characters).toBeGreaterThan(0);
@@ -272,7 +286,9 @@ describe('voice stage (MOCK voice, real database)', () => {
       strategy: 'RESTRAINED',
       chunking: { minWords: 20, maxWords: 30 },
       context: { previousChars: 200, nextChars: 120, stitch: false },
-      profile: { version: 1 },
+      profile: { familyId: expect.any(String), family: 'House narrator', versionId: run.chunks[0]!.current!.profileId, version: 1, name: 'House narrator' },
+      configuration: { reconstructed: false, selection: { mode: 'DEFAULT', revision: 0 }, projectOverrides: {}, runOptions: {}, provenance: {}, overrides: 'none' },
+      effective: { providerSettings: { stability: 0.5, similarity: 0.75, style: 0, speakerBoost: true, speed: 1 }, sent: { stability: 0.5, similarity: 0.75, style: 0, speakerBoost: true, speed: 1 }, ignored: [], numberStyle: 'UK', pronunciation: { rules: [] } },
       provider: 'mock',
       model: 'mock',
       voiceId: 'mock-narrator-deep',
@@ -284,6 +300,9 @@ describe('voice stage (MOCK voice, real database)', () => {
       durations: { totalMs: durations.reduce((n, d) => n + d, 0), shortestMs: Math.min(...durations), longestMs: Math.max(...durations) },
       stopped: null,
     });
+    const sent = run.chunks.reduce((n, c) => n + c.current!.characters!, 0);
+    expect(summary).toMatchObject({ characters: sent, providerReported: [], costText: `sent ${String(sent).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} characters; provider reported none`, reestimated: false });
+    expect(summary).not.toHaveProperty('reportedCharacters');
     expect(summary.takes).toEqual({ IN_REVIEW: run.chunks.length });
     expect(summary.qa.blocking).toMatchObject({ TAKE_UNREVIEWED: run.chunks.length });
     expect(summary.pronunciation.unresolved).toEqual(expect.any(Array));
@@ -402,6 +421,9 @@ describe('voice stage (MOCK voice, real database)', () => {
     ]);
     expect(takes[1]!.error).toMatch(/^Interrupted mid-request/);
     expect(takes[2]).toMatchObject({ strategy: caught!.strategy, variant: caught!.variant, jobId: job.id });
+    // The replacement is made with what the caught take was to be made with.
+    expect(caught!.config).not.toBeNull();
+    expect(takes[2]!.config).toEqual(caught!.config);
     expect(s.voice.calls.length).toBe(calls + 1);
     expect((await db.voiceChunk.findUniqueOrThrow({ where: { id: target.id } })).currentGenerationId).toBe(takes[2]!.id);
 
@@ -588,6 +610,36 @@ describe('voice stage (MOCK voice, real database)', () => {
       ['A', false],
       ['B', false],
     ]);
+    // Takes written without a configuration (as before saved profiles) are made, and logged, as the run's with their own strategy.
+    expect(regen.chunks[0].takes.map((t: { configuration: unknown }) => t.configuration)).toEqual([
+      { base: 'RUN', override: { strategy: 'PLAIN' }, profile: 'House narrator v1', source: 'temporary override', differs: ['performance: plain (run: restrained)'], reconstructed: true },
+      { base: 'RUN', override: { strategy: 'DIRECTED' }, profile: 'House narrator v1', source: 'temporary override', differs: ['performance: directed (run: restrained)'], reconstructed: true },
+    ]);
+    expect(regen).toMatchObject({ configurations: { run: 2, production: 0, overridden: 2 }, profiles: ['House narrator v1'] });
+  });
+
+  it('names the production profile on a take made with it, in the progress line, the ledger and the regeneration summary', async () => {
+    const s = setup();
+    const projectId = await approvedScript(s);
+    const { run: number } = await s.service.createRun(projectId, { scope: AUDITION }, 'editor');
+    await s.runner.drain();
+    const run = await runOf(projectId, number);
+    const tulip = await s.service.createProfileFamily({ name: 'Tulip narrator', fields: { providerSettings: { stability: 0.4 } } }, 'editor');
+    await s.service.setSelection(projectId, { familyId: tulip.familyId, revision: 0 }, 'editor');
+    const target = run.chunks[2]!;
+    const { job } = await s.service.regenerate(run.id, { chunkIds: [target.id], configuration: 'PRODUCTION', override: { strategy: 'PLAIN' } }, 'editor');
+    await s.runner.drain();
+    const [take] = (await takesOf(target.id)).slice(-1);
+    expect(VoiceTakeConfig.parse(take!.config)).toMatchObject({ base: 'PRODUCTION', override: { strategy: 'PLAIN' }, profile: { versionId: tulip.versionId } });
+    const progress = s.log.lines.filter((l) => l.obj.jobId === job.id && l.msg.startsWith(`Voice run ${number}: chunk 3 take 2`));
+    expect(progress.map((l) => l.msg)).toEqual([expect.stringMatching(new RegExp(`^Voice run ${number}: chunk 3 take 2 \\(production profile Tulip narrator v1, temporary override: performance plain\\) — \\d+\\.\\d s, \\d+ characters$`))]);
+    const ledger = await db.providerCall.findUniqueOrThrow({ where: { id: take!.providerCallId! } });
+    expect(ledger.request).toMatchObject({ profile: { familyId: tulip.familyId, family: 'Tulip narrator', versionId: tulip.versionId, version: 1 }, configuration: { base: 'PRODUCTION', override: { strategy: 'PLAIN' } } });
+    const regen = s.log.of('voice regeneration summary').find((l) => l.jobId === job.id);
+    expect(regen).toMatchObject({ configurations: { run: 0, production: 1, overridden: 1 }, profiles: ['Tulip narrator v1'] });
+    expect(regen.chunks[0].takes[0].configuration).toEqual({ base: 'PRODUCTION', override: { strategy: 'PLAIN' }, profile: 'Tulip narrator v1', source: 'temporary override', differs: ['performance: plain (run: restrained)', 'stability: 0.4 (run: 0.5)'], reconstructed: false });
+    const chunkLine = s.log.of('voice chunk').filter((l) => l.jobId === job.id).find((l) => l.chunk === 3);
+    expect(chunkLine.take.configuration).toMatchObject({ base: 'PRODUCTION', source: 'temporary override' });
   });
 
   it('runs each variant of the acceptance experiment with its own strategy, context and chunking, and logs the comparison', async () => {
@@ -618,15 +670,18 @@ describe('voice stage (MOCK voice, real database)', () => {
     expect(lines.map((l) => l.variant)).toEqual([...byLabel.keys()]);
     expect(lines.every((l) => l.experiment === VOICE_ACCEPTANCE_EXPERIMENT.name)).toBe(true);
     const [comparison] = s.log.of('voice experiment comparison').filter((l) => l.jobId === job.id);
-    expect(comparison.rows.map((r: { variant: string; strategy: string; context: string; chunking: string }) => [r.variant, r.strategy, r.context, r.chunking])).toEqual([
-      ['A plain', 'PLAIN', 'previous 200 / next 120 chars', '20–30 words'],
-      ['B restrained', 'RESTRAINED', 'previous 200 / next 120 chars', '20–30 words'],
-      ['C expressive', 'EXPRESSIVE', 'previous 200 / next 120 chars', '20–30 words'],
-      ['D over-directed', 'DIRECTED', 'previous 200 / next 120 chars', '20–30 words'],
-      ['E no context', 'RESTRAINED', 'none', '20–30 words'],
-      ['F 5–8 s chunks', 'RESTRAINED', 'previous 200 / next 120 chars', '13–20 words'],
-      ['G 12–20 s chunks', 'RESTRAINED', 'previous 200 / next 120 chars', '30–50 words'],
+    expect(comparison.rows.map((r: { variant: string; profile: string; strategy: string; context: string; chunking: string; overrides: string }) => [r.variant, r.profile, r.strategy, r.context, r.chunking, r.overrides])).toEqual([
+      ['A plain', 'House narrator v1', 'PLAIN', 'previous 200 / next 120 chars', '20–30 words', 'none'],
+      ['B restrained', 'House narrator v1', 'RESTRAINED', 'previous 200 / next 120 chars', '20–30 words', 'none'],
+      ['C expressive', 'House narrator v1', 'EXPRESSIVE', 'previous 200 / next 120 chars', '20–30 words', 'none'],
+      ['D over-directed', 'House narrator v1', 'DIRECTED', 'previous 200 / next 120 chars', '20–30 words', 'none'],
+      ['E no context', 'House narrator v1', 'RESTRAINED', 'none', '20–30 words', 'none'],
+      ['F 5–8 s chunks', 'House narrator v1', 'RESTRAINED', 'previous 200 / next 120 chars', '13–20 words', 'none'],
+      ['G 12–20 s chunks', 'House narrator v1', 'RESTRAINED', 'previous 200 / next 120 chars', '30–50 words', 'none'],
     ]);
+    expect(comparison.table[2]).toMatch(/^C expressive \| House narrator v1 \| EXPRESSIVE \| context previous 200 \/ next 120 chars \| 20–30 words \| \d+ chunks \| /);
+    // Each run line names its version and what the variant set over it.
+    expect(lines.map((l) => [l.profile.name, l.configuration.selection.mode, l.configuration.overrides])[2]).toEqual(['House narrator', 'DEFAULT', 'performance expressive, chunk size 20–30 words, context previous 200 / next 120 chars']);
     expect(comparison.rows.every((r: { totalMs: number; characters: number }) => r.totalMs > 0 && r.characters > 0)).toBe(true);
     expect(comparison.table).toHaveLength(7);
     expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).result).toMatchObject({ kind: 'EXPERIMENT' });

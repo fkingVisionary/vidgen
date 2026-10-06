@@ -1,8 +1,11 @@
+import type { ProviderSettingValues } from '@docengine/core';
 import { audioMetadata } from '../audio.ts';
 import { ProviderError } from '../types.ts';
 import { renderSegments } from '../voice-markup.ts';
+import { normalizeVoiceSettings, sentVoiceSettings } from '../voice-settings.ts';
 import type { AudioMetadata, CharacterAlignment, NarrationRequest, NarrationResult, PerformanceSegment, RenderedNarration, Voice, VoiceCheck, VoiceModelCapabilities, VoiceProvider, WordTiming } from '../voice.ts';
 import { MOCK_FAIL_MARKER, MOCK_LABEL, mockId, mockInfo, mockMeta } from './common.ts';
+import { MOCK_VOICE_SETTINGS } from './voice-settings.ts';
 import { synthesizeMockNarration } from './wav.ts';
 
 /** Typical documentary narration pace at speed 1.0. */
@@ -14,7 +17,6 @@ const MOCK_PAUSE_MS: Record<string, number> = { '[pause]': 500, '[long pause]': 
 const MOCK_CAPABILITIES: Omit<VoiceModelCapabilities, 'model'> = {
   directions: true,
   pauses: 'TAGS',
-  settings: { stability: true, similarity: true, style: true, speakerBoost: true, speed: true },
   phonemes: true,
   contextText: true,
   stitching: true,
@@ -32,9 +34,19 @@ const MOCK_CAPABILITIES: Omit<VoiceModelCapabilities, 'model'> = {
 export class MockVoiceProvider implements VoiceProvider {
   readonly info = mockInfo('VOICE');
   readonly defaults = { model: 'mock', voiceId: 'mock-narrator-deep', outputFormat: 'wav_22050' };
+  readonly settings = MOCK_VOICE_SETTINGS;
+  readonly models: readonly string[] = ['mock'];
 
   capabilities(model: string): VoiceModelCapabilities {
     return { model, ...MOCK_CAPABILITIES };
+  }
+
+  normalizeSettings(input: Readonly<Record<string, unknown>>): { settings: ProviderSettingValues; problems: string[] } {
+    return normalizeVoiceSettings(this.settings, input);
+  }
+
+  sentSettings(settings: Readonly<ProviderSettingValues>, model: string): { sent: ProviderSettingValues; ignored: string[] } {
+    return sentVoiceSettings(this.settings, settings, model);
   }
 
   render(segments: readonly PerformanceSegment[], model: string): RenderedNarration {
@@ -52,7 +64,9 @@ export class MockVoiceProvider implements VoiceProvider {
     if (req.text.includes(MOCK_FAIL_MARKER)) throw new ProviderError('mock', 'Simulated TTS failure', true);
     if (!req.text.replace(/\[[^\]]*\]/g, '').trim()) throw new ProviderError('mock', 'Narration text is empty', false);
 
-    const msPerWord = 60_000 / (MOCK_WORDS_PER_MINUTE * (req.settings.speed || 1));
+    // Speed from the provider settings, else the shorthand from before them.
+    const speed = req.settings.provider ? req.settings.provider.speed : req.settings.speed;
+    const msPerWord = 60_000 / (MOCK_WORDS_PER_MINUTE * (typeof speed === 'number' && speed > 0 ? speed : 1));
     const chars: string[] = [];
     const startMs: number[] = [];
     const endMs: number[] = [];

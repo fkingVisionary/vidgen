@@ -1,4 +1,4 @@
-import { DEFAULT_DELIVERY, DEFAULT_VOICE_PROFILE_CONFIG, type DirectorMark, type PerformanceMark, type PerformanceStrategy, type ScriptBlockClass, type ScriptDelivery } from '@docengine/core';
+import { DEFAULT_DELIVERY, DEFAULT_PERFORMANCE_RULES, EARLIER_PERFORMANCE_RULES, PERFORMANCE_STRATEGIES, type DirectorMark, type PerformanceMark, type PerformanceRules, type PerformanceStrategy, type ScriptBlockClass, type ScriptDelivery } from '@docengine/core';
 import { ElevenLabsVoiceProvider } from '@docengine/providers';
 import { describe, expect, it } from 'vitest';
 import { checkTake } from './checks.ts';
@@ -18,10 +18,10 @@ const v4 = new ElevenLabsVoiceProvider({ apiKey: 'test-key', model: 'eleven_v4',
 let order = 0;
 const block = (key: string, text: string, d: Partial<ScriptDelivery> = {}, infoClass: ScriptBlockClass = 'DOCUMENTED'): ChunkBlock => ({ id: `id-${key}`, key, text, delivery: { ...DEFAULT_DELIVERY, ...d }, speakerId: null, infoClass, order: order++ });
 
-function take(blocks: ChunkBlock[], strategy: PerformanceStrategy, director?: DirectorMark[]) {
+function take(blocks: ChunkBlock[], strategy: PerformanceStrategy, director?: DirectorMark[], rules?: PerformanceRules) {
   const [chunk] = planChunks([{ id: 's', key: 'SC01', blocks }], { minWords: 150, maxWords: 200 });
   const map = new Map<string, TakeBlock>(blocks.map((b) => [b.key, { delivery: b.delivery, infoClass: b.infoClass }]));
-  return prepareTake({ chunk: chunk!, blocks: map, strategy, ...(director ? { director } : {}), numberStyle: 'UK', aliases: [], phonemes: [], provider: v4, model: 'eleven_v4', settings: DEFAULT_VOICE_PROFILE_CONFIG.settings, context: { previousText: null, nextText: null }, seed: 7 });
+  return prepareTake({ chunk: chunk!, blocks: map, strategy, ...(director ? { director } : {}), numberStyle: 'UK', aliases: [], phonemes: [], provider: v4, model: 'eleven_v4', settings: v4.normalizeSettings({}).settings, context: { previousText: null, nextText: null }, seed: 7, ...(rules ? { rules } : {}) });
 }
 const marks = (t: ReturnType<typeof take>) => t.prepared.marks.map((m) => [m.sentence, [m.intent.emotion, m.intent.delivery].filter(Boolean).join(', '), m.source]);
 const status = (t: ReturnType<typeof take>, id: string) => t.prepared.checks.find((c) => c.id === id)?.status;
@@ -217,5 +217,118 @@ describe('expressive: the house style plus one deliberate moment where the scrip
     const sentences = PROMISE().map((b) => ({ text: b.text, blockKey: b.key, delivery: b.delivery, infoClass: b.infoClass, blockStart: true }));
     const checks = checkTake({ canonical: t.spokenText, forms: [], spoken: t.spokenText, spokenSentences: t.spokenSentences, rendered, marks: [second, ...t.prepared.marks], sentences, strategy: 'EXPRESSIVE', director: false, caps: v4.capabilities('eleven_v4') });
     expect(checks.find((c) => c.id === 'density')!.status).toBe('FAIL');
+  });
+});
+
+/** The earlier rules with some changed (nested words replaced whole). */
+const rules = (over: Partial<PerformanceRules>): PerformanceRules => ({ ...EARLIER_PERFORMANCE_RULES, ...over });
+const emotions = (over: Partial<PerformanceRules['emotionWords']>) => ({ emotionWords: { ...EARLIER_PERFORMANCE_RULES.emotionWords, ...over } });
+const manners = (over: Partial<PerformanceRules['deliveryWords']>) => ({ deliveryWords: { ...EARLIER_PERFORMANCE_RULES.deliveryWords, ...over } });
+const sentencesOf = (blocks: readonly ChunkBlock[]): PreparedSentence[] => blocks.map((b) => ({ text: b.text, blockKey: b.key, delivery: b.delivery, infoClass: b.infoClass, blockStart: true }));
+const recheck = (t: ReturnType<typeof take>, blocks: readonly ChunkBlock[], strategy: PerformanceStrategy, r?: PerformanceRules) =>
+  checkTake({ canonical: t.spokenText, forms: [], spoken: t.spokenText, spokenSentences: t.spokenSentences, rendered: t.rendered, marks: t.prepared.marks, sentences: sentencesOf(blocks), strategy, director: false, caps: v4.capabilities('eleven_v4'), ...(r ? { rules: r } : {}) });
+
+describe("a profile's performance rules", () => {
+  it('without rules, or with the earlier or the default ones, every strategy gives the same marks and takes (every combination of three blocks)', () => {
+    const DELIVERIES: Partial<ScriptDelivery>[] = [{}, { emotion: 'CURIOUS' }, { emotion: 'SOMBER', energy: 'HIGH', pace: 'SLOW' }, { energy: 'LOW', pace: 'SLOW' }, { emotion: 'EXCITED', pace: 'FAST' }];
+    const PAUSES: Partial<ScriptDelivery>[] = [{}, { pauseAfter: { length: 'MEDIUM', reason: 'REVEAL' } }, { pauseAfter: { length: 'LONG', reason: 'IMPACT' } }, { pauseAfter: { length: 'SHORT', reason: 'EMOTIONAL_TURN' } }];
+    const kinds = DELIVERIES.flatMap((d) => PAUSES.map((p) => ({ ...d, ...p })));
+    for (const a of kinds) {
+      for (const b of kinds) {
+        for (const c of kinds) {
+          order = 0;
+          const blocks = [block('1.1', 'The buyers met in the tavern every night.', a), block('1.2', 'What did they write on the slates in chalk?', b), block('1.3', 'Nobody in the room had seen a single bulb.', c)];
+          const [chunk] = planChunks([{ id: 's', key: 'SC01', blocks }], { minWords: 150, maxWords: 200 });
+          const sentences = sentencesOf(blocks);
+          for (const strategy of PERFORMANCE_STRATEGIES) {
+            const plain = performanceMarks(sentences, strategy, chunk!.performance.pauses, [{ sentence: 1, emotion: 'reflective' }]);
+            expect(performanceMarks(sentences, strategy, chunk!.performance.pauses, [{ sentence: 1, emotion: 'reflective' }], EARLIER_PERFORMANCE_RULES)).toEqual(plain);
+            expect(performanceMarks(sentences, strategy, chunk!.performance.pauses, [{ sentence: 1, emotion: 'reflective' }], DEFAULT_PERFORMANCE_RULES)).toEqual(plain);
+          }
+        }
+      }
+    }
+    for (const strategy of PERFORMANCE_STRATEGIES) {
+      for (const [blocks, director] of [[PROMISE(), undefined], [BIDDING(), [{ sentence: 1, delivery: 'quiet' }, { sentence: 2, emotion: 'somber' }]]] as const) {
+        const without = take([...blocks], strategy, director ? [...director] : undefined);
+        expect(take([...blocks], strategy, director ? [...director] : undefined, DEFAULT_PERFORMANCE_RULES)).toEqual(without);
+      }
+    }
+  });
+
+  it('the limits: at most maxMarksPerChunk house directions, minWordsBetweenMarks apart, and the density check holds a take to the same rules', () => {
+    const one = take(PROMISE(), 'RESTRAINED', undefined, rules({ maxMarksPerChunk: 1 }));
+    expect(one.rendered.text).toBe("Nobody at this table has seen what he is buying. [curious] What changes hands is not a flower. It's a promise.");
+    expect(one.prepared.checks.find((c) => c.id === 'density')).toMatchObject({ status: 'PASS', detail: '1 direction(s) in 20 words (house style: at most 1, 6+ words apart)' });
+    // Seven words after "curious" is too close at eight: back to the plain register instead (a direction carries forward).
+    const apart = take(PROMISE(), 'RESTRAINED', undefined, rules({ minWordsBetweenMarks: 8 }));
+    expect(apart.rendered.text).toBe("Nobody at this table has seen what he is buying. [curious] What changes hands is not a flower. [matter-of-fact] It's a promise.");
+    expect(status(apart, 'density')).toBe('PASS');
+    // The house take under the earlier rules, checked under others.
+    const house = take(PROMISE(), 'RESTRAINED');
+    expect(recheck(house, PROMISE(), 'RESTRAINED').find((c) => c.id === 'density')!.status).toBe('PASS');
+    expect(recheck(house, PROMISE(), 'RESTRAINED', rules({ maxMarksPerChunk: 1 })).find((c) => c.id === 'density')).toMatchObject({ status: 'FAIL', detail: '2 direction(s) in 20 words (house style: at most 1, 6+ words apart)' });
+    expect(recheck(house, PROMISE(), 'RESTRAINED', rules({ minWordsBetweenMarks: 8 })).find((c) => c.id === 'density')!.status).toBe('FAIL');
+  });
+
+  it("the words: a feeling, a manner, the reset and a turn's manner are the rules'; over-direction keeps its own loud words", () => {
+    expect(take(PROMISE(), 'RESTRAINED', undefined, rules(emotions({ CURIOUS: 'intrigued' }))).rendered.text).toBe("Nobody at this table has seen what he is buying. [intrigued] What changes hands is not a flower. [quiet] It's a promise.");
+    // No word for a feeling: no direction for it.
+    expect(take(PROMISE(), 'RESTRAINED', undefined, rules(emotions({ CURIOUS: null }))).rendered.text).toBe("Nobody at this table has seen what he is buying. What changes hands is not a flower. [quiet] It's a promise.");
+    // After a marked block it is told plainly, never in the direction before it (a direction carries forward).
+    order = 0;
+    const turned = [block('3.1', 'For a few weeks the certainty held in every tavern in town.', { emotion: 'REFLECTIVE' }), block('3.2', 'Then the bidding stopped and nobody said a word for a long while.', { emotion: 'TENSE' })];
+    for (const strategy of ['RESTRAINED', 'EXPRESSIVE'] as const) {
+      expect(take(turned, strategy, undefined, rules(emotions({ TENSE: null }))).rendered.text).toBe('[reflective] For a few weeks the certainty held in every tavern in town. [matter-of-fact] Then the bidding stopped and nobody said a word for a long while.');
+    }
+    expect(take(turned, 'RESTRAINED').rendered.text).toBe('[reflective] For a few weeks the certainty held in every tavern in town. [tense] Then the bidding stopped and nobody said a word for a long while.');
+    expect(take(PROMISE(), 'EXPRESSIVE', undefined, rules(manners({ lowEnergy: 'hushed' }))).rendered.text).toBe("Nobody at this table has seen what he is buying. [curious] What changes hands is not a flower. [hushed, deliberate] It's a promise.");
+    expect(take(BIDDING(), 'RESTRAINED', undefined, rules({ resetWord: 'plain' })).rendered.text).toBe('[tense] And then the bidding stopped. Nobody in the tavern said a word for a long while. The slates stayed blank. [plain] The records of the next weeks are mostly court papers and letters.');
+    // A turn the script gives no delivery: slower after a reveal (slowPace), quieter after an emotional turn (lowEnergy).
+    order = 0;
+    const reveal = [block('4.1', 'Nobody at this table has seen what he is buying.', { pauseAfter: { length: 'MEDIUM', reason: 'REVEAL' } }), block('4.2', "What changes hands is not a flower. It's a promise."), block('4.3', 'The buyers meet in taverns, in back rooms, over wine and pipe smoke.')];
+    expect(take(reveal, 'EXPRESSIVE', undefined, rules({ ...manners({ slowPace: 'unhurried' }), resetWord: 'plain' })).rendered.text).toBe("Nobody at this table has seen what he is buying. [pause] [unhurried] What changes hands is not a flower. It's a promise. [plain] The buyers meet in taverns, in back rooms, over wine and pipe smoke.");
+    order = 0;
+    const turn = [block('5.1', 'For a few weeks the certainty held, in every tavern and every back room in town.', { pauseAfter: { length: 'SHORT', reason: 'EMOTIONAL_TURN' } }), block('5.2', 'Not one buyer came to the auction in Haarlem that morning.')];
+    expect(marks(take(turn, 'EXPRESSIVE'))).toEqual([[1, 'quiet', 'STRATEGY']]);
+    expect(marks(take(turn, 'EXPRESSIVE', undefined, rules(manners({ lowEnergy: 'hushed' }))))).toEqual([[1, 'hushed', 'STRATEGY']]);
+    expect(take(PROMISE(), 'DIRECTED', undefined, rules({ ...emotions({ CURIOUS: 'intrigued' }), ...manners({ lowEnergy: 'hushed' }) })).rendered.text).toBe(
+      "[dramatic, intense] Nobody at this table has seen what he is buying. [pause] [intrigued, intense] What changes hands is not a flower. [pause] [dramatic, hushed] It's a promise.",
+    );
+  });
+
+  it("the reset is the rules' word: it may follow a direction closely, and under other rules it is a direction like any other", () => {
+    order = 0;
+    const short = [block('6.1', 'It ended.', { emotion: 'TENSE' }), block('6.2', 'The records of the next weeks are mostly court papers.')];
+    const plain = rules({ resetWord: 'plain' });
+    const t = take(short, 'RESTRAINED', undefined, plain);
+    expect(t.rendered.text).toBe('[tense] It ended. [plain] The records of the next weeks are mostly court papers.');
+    expect(status(t, 'density')).toBe('PASS');
+    expect(isReset(t.prepared.marks[1]!.intent, plain)).toBe(true);
+    expect(isReset(t.prepared.marks[1]!.intent)).toBe(false);
+    // Under the earlier rules "plain" is a direction two words after another.
+    expect(recheck(t, short, 'RESTRAINED').find((c) => c.id === 'density')!.status).toBe('FAIL');
+    expect(recheck(t, short, 'RESTRAINED', plain).find((c) => c.id === 'density')!.status).toBe('PASS');
+  });
+
+  it("the director's directions warn above one per directorWordsPerMark words", () => {
+    const crowd: DirectorMark[] = [{ sentence: 1, delivery: 'quiet' }, { sentence: 2, emotion: 'somber' }];
+    // Four directions in 32 words.
+    expect(take(BIDDING(), 'RESTRAINED', crowd).prepared.checks.find((c) => c.id === 'density')).toMatchObject({ status: 'WARN', detail: "4 direction(s) in 32 words (house style: at most 2, 6+ words apart); 2 of them the director's, more than one in ten words" });
+    expect(status(take(BIDDING(), 'RESTRAINED', crowd, rules({ directorWordsPerMark: 8 })), 'density')).toBe('PASS');
+    expect(take(BIDDING(), 'RESTRAINED', [{ sentence: 1, delivery: 'quiet' }], rules({ directorWordsPerMark: 20 })).prepared.checks.find((c) => c.id === 'density')!.detail).toBe("4 direction(s) in 32 words (house style: at most 2, 6+ words apart); 2 of them the director's, more than one in 20 words");
+  });
+
+  it("heightened delivery on uncertain narration is the rules' excited word, or over-direction's \"dramatic\"", () => {
+    order = 0;
+    const uncertain = [{ ...block('10.1', 'Some said a single bulb once bought a brewery outright.', { emotion: 'EXCITED' }), infoClass: 'UNCERTAIN' as const }];
+    const thrilled = rules(emotions({ EXCITED: 'thrilled' }));
+    expect(take(uncertain, 'RESTRAINED', undefined, thrilled).prepared.checks.find((c) => c.id === 'info-class')).toMatchObject({ status: 'WARN', detail: 'sentence 1 (uncertain): thrilled' });
+    // "excited" at low intensity is no longer the heightened word.
+    const excited = take(uncertain, 'RESTRAINED');
+    expect(recheck(excited, uncertain, 'RESTRAINED').map((c) => c.id)).toContain('info-class');
+    expect(recheck(excited, uncertain, 'RESTRAINED', thrilled).map((c) => c.id)).not.toContain('info-class');
+    const dramatic = { ...excited, prepared: { ...excited.prepared, marks: [{ ...excited.prepared.marks[0]!, intent: { ...excited.prepared.marks[0]!.intent, emotion: 'dramatic' } }] } };
+    expect(recheck(dramatic, uncertain, 'RESTRAINED', thrilled).find((c) => c.id === 'info-class')!.detail).toBe('sentence 1 (uncertain): dramatic');
   });
 });

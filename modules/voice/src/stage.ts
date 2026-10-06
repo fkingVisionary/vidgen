@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { DirectorMark, type VoiceProfileSettings, type VoiceQaFinding } from '@docengine/core';
-import type { Prisma, VoiceChunk, VoiceGeneration, VoiceGenerationStatus, VoiceProfile, VoiceRun } from '@docengine/database';
+import { DirectorMark, type VoiceQaFinding, type VoiceTakeConfig } from '@docengine/core';
+import type { Prisma, VoiceChunk, VoiceGeneration, VoiceGenerationStatus, VoiceRun } from '@docengine/database';
 import { NonRetryableError, type StageContext, type StageHandler } from '@docengine/pipeline';
 import { ProviderError, buildAssetKey, type NarrationResult, type PutOptions, type StorageProvider } from '@docengine/providers';
 import { z } from 'zod';
 import { alignTake } from './alignment.ts';
+import { describeOverrides, profileLabel, runConfig, takeConfig, takeSource, type ProfileRow } from './config.ts';
 import { prepareTake, type TakeBlock } from './prepare.ts';
-import { profileConfig } from './profiles.ts';
 import { rulesFor } from './pronunciation.ts';
 import { takeQa } from './qa.ts';
 import { headSentences, lexicon, readPerformance, readSpans, rebuildAssembly, seedFor, tailSentences } from './runs.ts';
@@ -17,8 +17,10 @@ import { sentenceSpans, sha256 } from './text.ts';
 
 /**
  * The VOICE job: generates the pending takes of one or more voice runs, one
- * small chunk per request. For each take: the derived text is prepared and
- * checked (nothing failing a check is sent), the provider is called through
+ * small chunk per request. For each take, with the configuration it records
+ * (the run's, the production profile, or a temporary override): the
+ * derived text is prepared and checked (nothing failing a check is sent),
+ * the provider is called through
  * the ledger, the audio is stored, its timestamps are mapped to the script's
  * words, the take is checked, and it becomes its chunk's current take, to
  * review (the one before is superseded, never deleted; an A/B variant take
@@ -53,7 +55,9 @@ const FATAL_STATUS = new Set([401, 402, 403, 404]);
 const SUPERSEDABLE = new Set<VoiceGenerationStatus>(['IN_REVIEW', 'GENERATED', 'APPROVED']);
 
 type ChunkWithTakes = VoiceChunk & { current: VoiceGeneration | null };
-type Take = VoiceGeneration & { chunk: ChunkWithTakes; run: VoiceRun & { profile: VoiceProfile } };
+type RunRow = VoiceRun & { profile: ProfileRow };
+/** A take to generate, with what it is made with (stored on it, or its run's for a take made before saved profiles). */
+type Take = VoiceGeneration & { chunk: ChunkWithTakes; run: RunRow; made: VoiceTakeConfig };
 
 interface Tally {
   generated: number;
@@ -84,7 +88,7 @@ export function createVoiceStage(config: Partial<VoiceStageConfig> = {}): StageH
       if (!voice.info.mock && storage.info.mock) {
         throw new NonRetryableError('Real narration needs durable storage: the configured storage is in memory (STORAGE_PROVIDER=mock) and would lose paid audio on restart. Set STORAGE_PROVIDER=s3 with a bucket.');
       }
-      const runs = await ctx.db.voiceRun.findMany({ where: { id: { in: input.data.runIds }, projectId: ctx.project.id }, include: { profile: true }, orderBy: { number: 'asc' } });
+      const runs = await ctx.db.voiceRun.findMany({ where: { id: { in: input.data.runIds }, projectId: ctx.project.id }, include: { profile: { include: { family: true } } }, orderBy: { number: 'asc' } });
       if (runs.length !== input.data.runIds.length) throw new NonRetryableError('A voice run of this job no longer exists');
       // Narration is made from the approved script only: a job queued or retried after another version was approved stops here.
       const approved = await approvedScript(ctx.db, ctx.project.id);
@@ -135,29 +139,36 @@ const reason = (err: unknown) => (err instanceof Error ? err.message : String(er
 
 /** The run's lines (each chunk, the run, and what a regeneration changed) on the job's logger. */
 async function logRun(ctx: StageContext, runId: string, before: RunSnapshot | null, stopped: unknown): Promise<RunLine> {
-  const { run, chunks } = await summarizeRun(ctx.db, runId, ctx.job.id, stopped ? reason(stopped) : null);
+  const { run, chunks } = await summarizeRun(ctx.db, ctx.providers.voice, runId, ctx.job.id, stopped ? reason(stopped) : null);
   for (const c of chunks) ctx.logger.info(c, 'voice chunk');
   ctx.logger.info(run, 'voice run summary');
-  if (before) ctx.logger.info(await summarizeRegeneration(ctx.db, before, ctx.job.id), 'voice regeneration summary');
+  if (before) ctx.logger.info(await summarizeRegeneration(ctx.db, ctx.providers.voice, before, ctx.job.id), 'voice regeneration summary');
   return run;
 }
 
-async function generateRun(ctx: StageContext, run: VoiceRun & { profile: VoiceProfile }, script: VoiceScript, only: readonly string[] | null, cfg: VoiceStageConfig, tally: Tally): Promise<void> {
+/** Whether a take's configuration stitches requests (its context asks for it and its model can). */
+const stitches = (ctx: StageContext, t: Take) => t.made.effective.context.stitch && ctx.providers.voice.capabilities(t.made.effective.model).stitching;
+
+async function generateRun(ctx: StageContext, run: RunRow, script: VoiceScript, only: readonly string[] | null, cfg: VoiceStageConfig, tally: Tally): Promise<void> {
   const { voice } = ctx.providers;
   const chunks = await ctx.db.voiceChunk.findMany({ where: { runId: run.id }, orderBy: { chunkIndex: 'asc' }, include: { current: true } });
   const open = await openTakes(ctx, run.id, only);
+  const config = runConfig(run, voice);
   const takes: Take[] = [];
   for (const g of open) {
     const take = g.status === 'GENERATING' ? await replaceInterrupted(ctx, g) : g;
-    takes.push({ ...take, chunk: chunks.find((c) => c.id === take.chunkId)!, run });
+    takes.push({ ...take, chunk: chunks.find((c) => c.id === take.chunkId)!, run, made: takeConfig(take, config) });
   }
   takes.sort((a, b) => a.chunk.chunkIndex - b.chunk.chunkIndex);
   if (!takes.length) return;
-  const settings = run.settings as { context?: { previousChars?: number; nextChars?: number; stitch?: boolean } };
-  const context = { previousChars: settings.context?.previousChars ?? 0, nextChars: settings.context?.nextChars ?? 0, stitch: settings.context?.stitch ?? false };
-  const stitching = context.stitch && voice.capabilities(run.profile.modelId).stitching;
-  const words = await lexicon(ctx.db, run.projectId, run.profile.language);
-  await ctx.progress(`Voice run ${run.number}: generating ${takes.length} take(s) with ${run.profile.provider} ${run.profile.modelId}${voice.info.mock ? ' (MOCK)' : ''}`, { run: run.number, takes: takes.length });
+  for (const t of takes) {
+    if (t.made.effective.provider !== voice.info.name) throw new NonRetryableError(`Voice run ${run.number}: take ${t.generation} of chunk ${t.chunk.chunkIndex + 1} is made with a ${t.made.effective.provider} profile; the configured voice provider is ${voice.info.name}`);
+  }
+  // One worker when any take stitches: each then follows the one before it.
+  const stitching = takes.some((t) => stitches(ctx, t));
+  const words = await lexicon(ctx.db, run.projectId, config.effective.language);
+  const models = [...new Set(takes.map((t) => `${t.made.effective.provider} ${t.made.effective.model}`))].join(', ');
+  await ctx.progress(`Voice run ${run.number}: generating ${takes.length} take(s) with ${models}${voice.info.mock ? ' (MOCK)' : ''}`, { run: run.number, takes: takes.length });
 
   let next = 0;
   // The first error stops every worker: a fatal one, an unexpected one, or the job being interrupted.
@@ -175,7 +186,7 @@ async function generateRun(ctx: StageContext, run: VoiceRun & { profile: VoicePr
           tally.failed++;
           continue;
         }
-        await generateTake(ctx, take, chunks, script, words, context, stitching, cfg, tally);
+        await generateTake(ctx, take, chunks, script, words, cfg, tally);
       } catch (err) {
         halt ??= err;
       }
@@ -193,13 +204,14 @@ async function generateRun(ctx: StageContext, run: VoiceRun & { profile: VoicePr
  * interruption (a later generation of the same chunk). A take still
  * GENERATING was caught mid-request by an attempt that did not finish.
  */
-async function openTakes(ctx: StageContext, runId: string, only: readonly string[] | null): Promise<VoiceGeneration[]> {
+async function openTakes(ctx: StageContext, runId: string, only: readonly string[] | null): Promise<(VoiceGeneration & { profile: ProfileRow })[]> {
   const chosen = only ? await ctx.db.voiceGeneration.findMany({ where: { runId, id: { in: [...only] } }, select: { chunkId: true, generation: true } }) : null;
   const floor = new Map<string, number>();
   for (const g of chosen ?? []) floor.set(g.chunkId, Math.min(floor.get(g.chunkId) ?? g.generation, g.generation));
   const open = await ctx.db.voiceGeneration.findMany({
     where: { runId, status: { in: ['PENDING', 'GENERATING'] }, ...(chosen ? { chunkId: { in: [...floor.keys()] } } : {}) },
     orderBy: [{ createdAt: 'asc' }],
+    include: { profile: { include: { family: true } } },
   });
   return chosen ? open.filter((g) => g.generation >= floor.get(g.chunkId)!) : open;
 }
@@ -208,9 +220,10 @@ async function openTakes(ctx: StageContext, runId: string, only: readonly string
  * A take left GENERATING by an attempt that did not finish: its request may
  * have reached the provider (and been billed), so it is never sent again on
  * the same row. It is closed as FAILED and the chunk's next generation, with
- * the same strategy, directions, note and variant, takes its place.
+ * the same configuration, strategy, directions, note and variant, takes its
+ * place.
  */
-async function replaceInterrupted(ctx: StageContext, g: VoiceGeneration): Promise<VoiceGeneration> {
+async function replaceInterrupted(ctx: StageContext, g: VoiceGeneration): Promise<VoiceGeneration & { profile: ProfileRow }> {
   return ctx.db.$transaction(async (tx) => {
     await tx.voiceGeneration.update({
       where: { id: g.id },
@@ -229,6 +242,7 @@ async function replaceInterrupted(ctx: StageContext, g: VoiceGeneration): Promis
         model: g.model,
         voiceId: g.voiceId,
         strategy: g.strategy,
+        ...(g.config !== null ? { config: g.config as Prisma.InputJsonValue } : {}),
         variant: g.variant,
         canonicalText: g.canonicalText,
         textHash: g.textHash,
@@ -236,6 +250,7 @@ async function replaceInterrupted(ctx: StageContext, g: VoiceGeneration): Promis
         note: g.note,
         createdBy: g.createdBy,
       },
+      include: { profile: { include: { family: true } } },
     });
   });
 }
@@ -251,36 +266,36 @@ async function generateTake(
   chunks: readonly ChunkWithTakes[],
   script: VoiceScript,
   words: Awaited<ReturnType<typeof lexicon>>,
-  context: { previousChars: number; nextChars: number; stitch: boolean },
-  stitching: boolean,
   cfg: VoiceStageConfig,
   tally: Tally,
 ): Promise<void> {
   const { voice, storage } = ctx.providers;
-  const { run, chunk } = take;
-  const profile = run.profile;
-  const config = profileConfig(profile);
+  const { run, chunk, made } = take;
+  const { effective } = made;
+  const { context } = effective;
   const sentences = chunkSentences(chunk);
   const blocks = new Map<string, TakeBlock>([...script.blocks.values()].map((b) => [b.key, { delivery: b.delivery, infoClass: b.infoClass }]));
-  const rules = rulesFor(chunk.sourceText, words);
+  // The project's approved pronunciations, then the profile's own rules for terms the project has not decided.
+  const rules = rulesFor(chunk.sourceText, words, effective.pronunciation.rules);
   const prev = chunks.find((c) => c.chunkIndex === chunk.chunkIndex - 1 && c.sectionKey === chunk.sectionKey);
   const nextChunk = chunks.find((c) => c.chunkIndex === chunk.chunkIndex + 1 && c.sectionKey === chunk.sectionKey);
   // Neighbouring narration is heard as it is spoken (figures and approved aliases in words), like the chunk itself.
-  const spoken = (text: string) => toSpoken(text.replace(/\n/g, ' '), { style: config.numberStyle, aliases: rulesFor(text, words).aliases }).text;
+  const spoken = (text: string) => toSpoken(text.replace(/\n/g, ' '), { style: effective.numberStyle, aliases: rulesFor(text, words, effective.pronunciation.rules).aliases }).text;
   const previousText = prev ? tailSentences(spoken(prev.sourceText), context.previousChars) : null;
   const nextText = nextChunk ? headSentences(spoken(nextChunk.sourceText), context.nextChars) : null;
   const directions = z.array(DirectorMark).catch([]).parse(take.directions ?? []);
   const prepared = prepareTake({
     chunk: { text: chunk.sourceText, sentences, performance: readPerformance(chunk.performance) },
     blocks,
-    strategy: take.strategy,
+    strategy: effective.strategy,
     ...(directions.length ? { director: directions } : {}),
-    numberStyle: config.numberStyle,
+    numberStyle: effective.numberStyle,
     aliases: rules.aliases,
     phonemes: rules.phonemes,
     provider: voice,
-    model: take.model,
-    settings: config.settings,
+    model: effective.model,
+    settings: effective.providerSettings,
+    rules: effective.performanceRules,
     context: { previousText, nextText },
     seed: seedFor(take.textHash, take.generation),
   });
@@ -299,9 +314,8 @@ async function generateTake(
 
   // Request stitching: the previous chunk's current take, if recent and from the same model.
   const prevTake = prev ? await ctx.db.voiceChunk.findUnique({ where: { id: prev.id }, include: { current: true } }).then((c) => c?.current ?? null) : null;
-  const stitchIds = stitching && prevTake?.providerRequestId && prevTake.model === take.model && prevTake.completedAt && Date.now() - prevTake.completedAt.getTime() < STITCH_WINDOW_MS ? [prevTake.providerRequestId] : undefined;
+  const stitchIds = stitches(ctx, take) && prevTake?.providerRequestId && prevTake.model === effective.model && prevTake.completedAt && Date.now() - prevTake.completedAt.getTime() < STITCH_WINDOW_MS ? [prevTake.providerRequestId] : undefined;
 
-  const s: VoiceProfileSettings = prepared.prepared.settings;
   let callId: string | null = null;
   let result: NarrationResult;
   try {
@@ -311,13 +325,14 @@ async function generateTake(
       () =>
         voice.generateNarration({
           text: prepared.rendered.text,
-          language: profile.language,
-          settings: { voiceId: take.voiceId, model: take.model, stability: s.stability, similarity: s.similarity, style: s.style, speed: s.speed, speakerBoost: s.speakerBoost },
+          language: effective.language,
+          // Every setting with the chunk's pace applied; the provider sends what the model takes.
+          settings: { voiceId: effective.voiceId, model: effective.model, provider: prepared.prepared.settings },
           withTimestamps: true,
           ...(previousText ? { previousText } : {}),
           ...(nextText ? { nextText } : {}),
           ...(stitchIds ? { previousRequestIds: stitchIds } : {}),
-          outputFormat: profile.outputFormat,
+          outputFormat: effective.outputFormat,
           ...(prepared.prepared.seed !== null ? { seed: prepared.prepared.seed } : {}),
           ...(prepared.phonemes.length ? { pronunciations: prepared.phonemes } : {}),
           signal: ctx.signal,
@@ -335,10 +350,12 @@ async function generateTake(
           generationId: take.id,
           take: take.generation,
           variant: take.variant,
-          model: take.model,
-          voiceId: take.voiceId,
+          model: effective.model,
+          voiceId: effective.voiceId,
           characters,
-          strategy: take.strategy,
+          strategy: effective.strategy,
+          profile: { familyId: made.profile.familyId, family: made.profile.familyName, versionId: made.profile.versionId, version: made.profile.version },
+          configuration: { base: made.base, override: made.override },
           textHash: take.textHash,
           performanceTextHash,
           jobAttempt: ctx.job.attempts,
@@ -365,7 +382,7 @@ async function generateTake(
   tally.characters += characters;
   const ext = result.mimeType === 'audio/mpeg' ? 'mp3' : 'wav';
   const assetId = randomUUID();
-  const key = buildAssetKey({ projectId: ctx.project.id, language: profile.language, kind: 'NARRATION_AUDIO', assetId, ext });
+  const key = buildAssetKey({ projectId: ctx.project.id, language: effective.language, kind: 'NARRATION_AUDIO', assetId, ext });
   let stored = false;
   let alignment: ReturnType<typeof alignTake>;
   try {
@@ -403,7 +420,11 @@ async function generateTake(
     throw new NonRetryableError(`take ${take.generation} of chunk ${chunk.chunkIndex + 1} came back but could not be kept, and a retry would buy it again: ${reason(err)}`);
   }
   tally.generated++;
-  await ctx.progress(`Voice run ${run.number}: chunk ${chunk.chunkIndex + 1} take ${take.generation}${take.variant ? ` (${take.variant})` : ''} — ${(result.durationMs / 1000).toFixed(1)} s, ${characters} characters${alignment ? '' : ', no timestamps'}`, {
+  // A take not made with the run's own configuration says so ("production profile Tulip narrator v2", "temporary override: stability 0.3").
+  const source = takeSource(made);
+  const withWhat = made.base === 'PRODUCTION' ? `production profile ${profileLabel(made.profile)}${made.override ? `, temporary override: ${describeOverrides(made.override)}` : ''}` : source === 'temporary override' && !take.variant ? `temporary override: ${describeOverrides(made.override)}` : null;
+  const labels = [take.variant, withWhat].filter(Boolean).join('; ');
+  await ctx.progress(`Voice run ${run.number}: chunk ${chunk.chunkIndex + 1} take ${take.generation}${labels ? ` (${labels})` : ''} — ${(result.durationMs / 1000).toFixed(1)} s, ${characters} characters${alignment ? '' : ', no timestamps'}`, {
     run: run.number,
     chunk: chunk.chunkIndex + 1,
     take: take.generation,

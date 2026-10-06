@@ -88,7 +88,7 @@ export class ElevenLabsScriptAdapter implements VoiceScriptAdapter {
 }
 
 /** The requests a voice provider would receive for a render plan (no call is made). */
-export function narrationRequests(plan: VoiceRenderPlan, language: string, settings: NarrationSettings): NarrationRequest[] {
+export function narrationRequests(plan: VoiceRenderPlan, language: string, settings: NarrationSettings & { speed: number }): NarrationRequest[] {
   return plan.segments.map((s) => ({ text: s.text, language, settings: { ...settings, speed: settings.speed * s.speed }, withTimestamps: true, previousText: s.previousText ?? undefined, nextText: s.nextText ?? undefined }));
 }
 

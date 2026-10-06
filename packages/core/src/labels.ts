@@ -1,4 +1,5 @@
 import type { HistoricalValueKey, OpportunityScoreKey, StoryScoreKey, StoryValueKey } from './contracts/story.ts';
+import type { ConfigSource, PerformanceRules, SelectionMode, VoiceProfileOrigin, VoiceTakeConfig } from './contracts/voice.ts';
 import type {
   ApprovalGate,
   ArchitectureOrigin,
@@ -459,6 +460,35 @@ export const CHUNK_BOUNDARY_LABELS: Record<ChunkBoundary, string> = {
 export const PRONUNCIATION_STATUS_LABELS: Record<PronunciationStatus, string> = { PENDING: 'To check', APPROVED: 'Approved', FLAGGED: 'Heard wrong' };
 export const PRONUNCIATION_METHOD_LABELS: Record<PronunciationMethod, string> = { DEFAULT: "The voice's own reading", ALIAS: 'Say it as (alias)', IPA: 'Phonemes (IPA)', CMU: 'Phonemes (CMU Arpabet)' };
 export const PRONUNCIATION_TERM_KIND_LABELS: Record<PronunciationTermKind, string> = { NAME: 'Name', PLACE: 'Place', ORGANISATION: 'Organisation', FOREIGN: 'Foreign word', TERM: 'Term', ABBREVIATION: 'Abbreviation' };
+/** Where a setting came from (chips beside an effective value). */
+export const CONFIG_SOURCE_LABELS: Record<ConfigSource, string> = { PROFILE: 'profile', PROJECT: 'project', RUN: 'run', TAKE: 'take' };
+/** How a run's or a language version's profile version was chosen. */
+export const SELECTION_MODE_LABELS: Record<SelectionMode, string> = {
+  FOLLOW: 'follows the current version',
+  PIN: 'pinned to a version',
+  DEFAULT: 'library default',
+  EXPLICIT: 'chosen for the run',
+};
+/** What a take was made with. */
+export const TAKE_CONFIG_BASE_LABELS: Record<VoiceTakeConfig['base'], string> = { RUN: "the run's configuration", PRODUCTION: 'the production profile' };
+export const PERFORMANCE_RULE_LABELS: Record<keyof PerformanceRules, string> = {
+  maxMarksPerChunk: 'Directions per chunk (at most)',
+  minWordsBetweenMarks: 'Words between directions (at least)',
+  directorWordsPerMark: "Director's directions: warn above one per this many words",
+  emotionWords: 'Word for each scripted feeling',
+  deliveryWords: 'Word for each scripted manner',
+  resetWord: 'Word for back to the plain register',
+  paceSpeed: 'Speed of slow and fast passages',
+};
+/** How a profile version was made. */
+export const VOICE_PROFILE_ORIGIN_LABELS: Record<VoiceProfileOrigin['kind'] | 'LEGACY', string> = {
+  DEFAULTS: 'made from the configured defaults',
+  LIBRARY: 'made in the library',
+  EDIT: 'an edit',
+  DUPLICATE: 'a duplicate',
+  RUN: "saved from a voice run's configuration",
+  LEGACY: 'made before saved profiles',
+};
 
 // ── Writing Engine 2 ─────────────────────────────────────────────────────────
 

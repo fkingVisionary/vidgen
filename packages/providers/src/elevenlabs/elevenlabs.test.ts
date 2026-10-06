@@ -66,7 +66,7 @@ describe('ElevenLabs v4 requests', () => {
   it('sends one chunk to the timestamps endpoint with v4 settings only, context, seed and language, and measures the audio it gets back', async () => {
     const text = '[reflective, intimate] It is a promise.';
     const audio = fakeMp3(100);
-    const { p, calls } = provider([ok({ audio_base64: Buffer.from(audio).toString('base64'), alignment: ALIGNMENT(text), normalized_alignment: null }, { 'request-id': 'req-123', 'character-cost': '39' })]);
+    const { p, calls } = provider([ok({ audio_base64: Buffer.from(audio).toString('base64'), alignment: ALIGNMENT(text), normalized_alignment: null }, { 'request-id': 'req-123', 'character-cost': '4' })]);
     const r = await p.generateNarration(request(text, { previousText: 'Nobody has seen it.', nextText: 'And it grows.', seed: 42 }));
 
     expect(calls).toHaveLength(1);
@@ -91,10 +91,21 @@ describe('ElevenLabs v4 requests', () => {
     expect(r.characters!.startMs.slice(0, 3)).toEqual([0, 50, 100]);
     // Word timings skip the bracketed direction.
     expect(r.alignment!.map((w) => w.word)).toEqual(['It', 'is', 'a', 'promise.']);
-    expect(r.meta).toEqual({ provider: 'elevenlabs', model: 'eleven_v4', mock: false, usage: [{ unit: 'CHARACTERS', quantity: 39 }], usageSource: 'REPORTED', attempts: 1, costNote: '39 character(s) reported by ElevenLabs (character-cost)', providerRequestId: 'req-123' });
+    // The 39 characters sent are the usage; the header's figure is kept raw beside it.
+    expect(r.meta).toEqual({
+      provider: 'elevenlabs',
+      model: 'eleven_v4',
+      mock: false,
+      usage: [{ unit: 'CHARACTERS', quantity: 39 }],
+      usageSource: 'COUNTED',
+      reportedUsage: [{ name: 'character-cost', quantity: 4 }],
+      attempts: 1,
+      costNote: "39 characters sent (the estimate's basis: an upper bound); ElevenLabs reported 4 (character-cost header; its unit is unverified, so it is not priced)",
+      providerRequestId: 'req-123',
+    });
   });
 
-  it('prices reported characters at the documented list price (an estimate: the API reports characters, not dollars), or at a configured rate', () => {
+  it('prices characters at the documented list price (an estimate: the API reports characters, not dollars), or at a configured rate', () => {
     const { p } = provider([]);
     expect(estimateCost('elevenlabs', 'eleven_v4', [{ unit: 'CHARACTERS', quantity: 1000 }], p.info.rates)).toEqual({ costUsd: 0.08, unpriced: [] });
     expect(estimateCost('elevenlabs', 'some_future_model', [{ unit: 'CHARACTERS', quantity: 1000 }], p.info.rates).unpriced).toEqual([{ unit: 'CHARACTERS', quantity: 1000 }]);
@@ -107,7 +118,8 @@ describe('ElevenLabs v4 requests', () => {
     const r = await p.generateNarration(request('Short line.'));
     expect(r.meta.usage).toEqual([{ unit: 'CHARACTERS', quantity: 11 }]);
     expect(r.meta.usageSource).toBe('COUNTED');
-    expect(r.meta.costNote).toBe('ElevenLabs reported no character cost: 11 character(s) counted as sent');
+    expect(r.meta).not.toHaveProperty('reportedUsage');
+    expect(r.meta.costNote).toBe("11 characters sent (the estimate's basis: an upper bound); ElevenLabs reported no character cost");
     // Missing alignment is not an error here: the take records it, voice QA flags it.
     expect(r.characters).toBeNull();
     expect(r.alignment).toBeNull();
@@ -175,6 +187,109 @@ describe('ElevenLabs models', () => {
   });
 });
 
+describe('ElevenLabs voice settings', () => {
+  const take = () => ok({ audio_base64: Buffer.from(fakeMp3(5)).toString('base64'), alignment: null });
+  const SETTINGS = { stability: 0.4, similarity: 0.8, style: 0.2, speakerBoost: false, speed: 1.1 };
+  const withProvider = (model: string, provider: Record<string, number | boolean | string>, extra: Partial<NarrationRequest> = {}) => request('Hello.', { settings: { voiceId: 'voice-abc', model, provider }, ...extra });
+
+  it('sends each model the provider settings it takes, under ElevenLabs names: eleven_v4 stability and similarity only', async () => {
+    const { p, calls } = provider([take(), take(), take()]);
+    await p.generateNarration(withProvider('eleven_v4', SETTINGS));
+    await p.generateNarration(withProvider('eleven_multilingual_v2', SETTINGS));
+    await p.generateNarration(withProvider('eleven_v3', SETTINGS));
+    expect(calls.map((c) => c.body!.voice_settings)).toEqual([
+      { stability: 0.4, similarity_boost: 0.8 },
+      { stability: 0.4, similarity_boost: 0.8, style: 0.2, use_speaker_boost: false, speed: 1.1 },
+      { stability: 0.4 },
+    ]);
+  });
+
+  it('reads the provider settings over the flat shorthand, which is read only without them', async () => {
+    const { p, calls } = provider([take(), take()]);
+    await p.generateNarration(request('Hello.', { settings: { voiceId: 'voice-abc', model: 'eleven_multilingual_v2', provider: SETTINGS, stability: 0.9, speed: 0.7 } }));
+    await p.generateNarration(request('Hello.', { settings: { voiceId: 'voice-abc', model: 'eleven_multilingual_v2', stability: 0.9, speed: 0.7 } }));
+    expect(calls.map((c) => c.body!.voice_settings)).toEqual([
+      { stability: 0.4, similarity_boost: 0.8, style: 0.2, use_speaker_boost: false, speed: 1.1 },
+      { stability: 0.9, speed: 0.7 },
+    ]);
+  });
+
+  it('sends no setting without a value and no key it does not describe', async () => {
+    const { p, calls } = provider([take()]);
+    await p.generateNarration(withProvider('eleven_multilingual_v2', { stability: 0.4, notASetting: 'not-sent' }));
+    expect(calls[0]!.body!.voice_settings).toEqual({ stability: 0.4 });
+    expect(JSON.stringify(calls[0]!.body)).not.toContain('not-sent');
+  });
+
+  it('refuses a value that does not fit before anything is sent; one the model is not sent is not checked', async () => {
+    const { p, calls } = provider([take()]);
+    const high = (await p.generateNarration(withProvider('eleven_v4', { ...SETTINGS, stability: 1.5 })).catch((e: unknown) => e)) as ProviderError;
+    expect(high).toBeInstanceOf(ProviderError);
+    expect(high.retryable).toBe(false);
+    expect(high.message).toBe('[elevenlabs] Voice settings for eleven_v4 do not fit: stability: 1.5 is outside 0–1; not sent');
+    await expect(p.generateNarration(withProvider('eleven_multilingual_v2', { ...SETTINGS, speakerBoost: 'yes' }))).rejects.toThrow('speakerBoost: true or false is needed (got "yes"); not sent');
+    expect(calls).toHaveLength(0);
+    // Eleven v4 is not sent speed: the value stays in the record and is not refused.
+    await p.generateNarration(withProvider('eleven_v4', { ...SETTINGS, speed: 3 }));
+    expect(calls[0]!.body!.voice_settings).toEqual({ stability: 0.4, similarity_boost: 0.8 });
+  });
+
+  it("points a take with provider settings at the engine's pronunciation dictionary only", async () => {
+    const { p, calls } = provider([ok({ pronunciation_dictionaries: [], has_more: false }), ok({ id: 'dict-1', version_id: 'ver-1' }), take()]);
+    const r = await p.generateNarration(withProvider('eleven_v4', SETTINGS, { text: 'In Haarlem.', pronunciations: [{ term: 'Haarlem', method: 'IPA', pronunciation: 'ˈɦaːrlɛm' }] }));
+    expect(calls[2]!.body!.pronunciation_dictionary_locators).toEqual([{ pronunciation_dictionary_id: 'dict-1', version_id: 'ver-1' }]);
+    expect(r.dictionary).toEqual({ id: 'dict-1', version: 'ver-1' });
+  });
+});
+
+/**
+ * Pinned behaviour changed on purpose: the usage was ElevenLabs'
+ * character-cost figure (REPORTED). Its unit is unverified (under eleven_v4
+ * it read about a ninth of the characters sent), so the estimate's basis is
+ * now the characters sent (COUNTED, an upper bound), and the header is kept
+ * raw beside it, never priced.
+ */
+describe('ElevenLabs cost basis', () => {
+  const LINE = 'In the winter of 1636, a single tulip bulb could change hands several times in one day, each buyer certain that the next would pay more. Nobody at the table had seen the flower itself.';
+  const audio = () => Buffer.from(fakeMp3(5)).toString('base64');
+
+  it('uses the characters sent as the usage and records the character-cost header raw beside them', async () => {
+    expect(LINE).toHaveLength(184);
+    const { p } = provider([ok({ audio_base64: audio(), alignment: null }, { 'character-cost': '20' })]);
+    const r = await p.generateNarration(request(LINE));
+    expect(r.meta).toMatchObject({ usage: [{ unit: 'CHARACTERS', quantity: 184 }], usageSource: 'COUNTED', reportedUsage: [{ name: 'character-cost', quantity: 20 }] });
+    expect(r.meta.costNote).toBe("184 characters sent (the estimate's basis: an upper bound); ElevenLabs reported 20 (character-cost header; its unit is unverified, so it is not priced)");
+    // Priced from the characters sent: 184 × $0.08 per 1,000.
+    expect(estimateCost('elevenlabs', 'eleven_v4', r.meta.usage, p.info.rates).costUsd).toBeCloseTo(0.01472, 10);
+  });
+
+  it('records nothing reported when the header is missing or not a count', async () => {
+    // A blank header is not a report of 0 (Number('') is 0).
+    for (const headers of [{}, { 'character-cost': 'n/a' }, { 'character-cost': '-3' }, { 'character-cost': '' }, { 'character-cost': ' ' }, { 'character-cost': '0x14' }] as Record<string, string>[]) {
+      const { p } = provider([ok({ audio_base64: audio(), alignment: null }, headers)]);
+      const r = await p.generateNarration(request(LINE));
+      expect(r.meta.usage).toEqual([{ unit: 'CHARACTERS', quantity: 184 }]);
+      expect(r.meta).not.toHaveProperty('reportedUsage');
+      expect(r.meta.costNote).toBe("184 characters sent (the estimate's basis: an upper bound); ElevenLabs reported no character cost");
+    }
+    // A header of 0 is a report of 0.
+    const { p } = provider([ok({ audio_base64: audio(), alignment: null }, { 'character-cost': '0' })]);
+    expect((await p.generateNarration(request(LINE))).meta.reportedUsage).toEqual([{ name: 'character-cost', quantity: 0 }]);
+  });
+
+  it('keeps both on a failure that may have been billed', async () => {
+    const { p } = provider([ok({ alignment: null }, { 'character-cost': '20' })]);
+    const err = (await p.generateNarration(request(LINE)).catch((e: unknown) => e)) as ProviderError;
+    expect(err.message).toBe('[elevenlabs] Response had no audio');
+    expect(err.meta).toMatchObject({
+      usage: [{ unit: 'CHARACTERS', quantity: 184 }],
+      usageSource: 'COUNTED',
+      reportedUsage: [{ name: 'character-cost', quantity: 20 }],
+      costNote: "Response unusable; characters may have been billed. 184 characters sent (the estimate's basis: an upper bound); ElevenLabs reported 20 (character-cost header; its unit is unverified, so it is not priced)",
+    });
+  });
+});
+
 describe('ElevenLabs failures', () => {
   it('does not retry a rejected key, and reports the code and message', async () => {
     const { p, calls } = provider([fail(401, { detail: { type: 'authentication_error', code: 'invalid_api_key', message: 'Invalid API key', request_id: 'x' } })]);
@@ -227,16 +342,24 @@ describe('ElevenLabs failures', () => {
     // Each came after a 2xx, so the characters may have been billed: the error keeps the usage for the ledger.
     const served = [
       provider([bad('<html>oops</html>')]),
-      provider([ok({ alignment: null }, { 'character-cost': '6', 'request-id': 'req-9' })]),
+      provider([ok({ alignment: null }, { 'character-cost': '1', 'request-id': 'req-9' })]),
       provider([ok({ audio_base64: Buffer.from('not audio at all').toString('base64'), alignment: null })]),
     ];
     const errors = await Promise.all(served.map(async ({ p: x }) => (await x.generateNarration(request('Hello.')).catch((e: unknown) => e)) as ProviderError));
-    expect(errors.map((e) => [e.retryable, e.status, e.attempts, e.meta?.usage, e.meta?.usageSource])).toEqual([
-      [true, 200, 1, [{ unit: 'CHARACTERS', quantity: 6 }], 'COUNTED'],
-      [true, 200, 1, [{ unit: 'CHARACTERS', quantity: 6 }], 'REPORTED'],
-      [true, 200, 1, [{ unit: 'CHARACTERS', quantity: 6 }], 'COUNTED'],
+    // The characters sent are the usage either way; a character-cost header is kept raw beside them.
+    expect(errors.map((e) => [e.retryable, e.status, e.attempts, e.meta?.usage, e.meta?.usageSource, e.meta?.reportedUsage])).toEqual([
+      [true, 200, 1, [{ unit: 'CHARACTERS', quantity: 6 }], 'COUNTED', undefined],
+      [true, 200, 1, [{ unit: 'CHARACTERS', quantity: 6 }], 'COUNTED', [{ name: 'character-cost', quantity: 1 }]],
+      [true, 200, 1, [{ unit: 'CHARACTERS', quantity: 6 }], 'COUNTED', undefined],
     ]);
-    expect(errors[1]!.meta).toMatchObject({ provider: 'elevenlabs', model: 'eleven_v4', mock: false, providerRequestId: 'req-9', costNote: 'Response unusable; characters may have been billed. 6 character(s) reported by ElevenLabs (character-cost)' });
+    expect(errors[1]!.meta).toMatchObject({
+      provider: 'elevenlabs',
+      model: 'eleven_v4',
+      mock: false,
+      providerRequestId: 'req-9',
+      costNote: "Response unusable; characters may have been billed. 6 characters sent (the estimate's basis: an upper bound); ElevenLabs reported 1 (character-cost header; its unit is unverified, so it is not priced)",
+    });
+    expect(errors[0]!.meta?.costNote).toBe("Response unusable; characters may have been billed. 6 characters sent (the estimate's basis: an upper bound); ElevenLabs reported no character cost");
     // Never sent twice: a served request is not retried.
     expect(served.map((x) => x.calls.length)).toEqual([1, 1, 1]);
     // A malformed alignment is dropped, not trusted.
@@ -282,7 +405,7 @@ describe('ElevenLabs response bodies', () => {
     expect(err).toBeInstanceOf(ProviderError);
     expect(err.message).toBe('[elevenlabs] /v1/text-to-speech/voice-abc/with-timestamps: HTTP 200, then reading the response timed out after 120000 ms');
     expect(err).toMatchObject({ retryable: true, status: 200, attempts: 1 });
-    expect(err.meta).toMatchObject({ usage: [{ unit: 'CHARACTERS', quantity: 11 }], usageSource: 'COUNTED', costNote: 'Response unusable; characters may have been billed. ElevenLabs reported no character cost: 11 character(s) counted as sent' });
+    expect(err.meta).toMatchObject({ usage: [{ unit: 'CHARACTERS', quantity: 11 }], usageSource: 'COUNTED', costNote: "Response unusable; characters may have been billed. 11 characters sent (the estimate's basis: an upper bound); ElevenLabs reported no character cost" });
     expect(calls).toHaveLength(1);
   });
 

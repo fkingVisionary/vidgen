@@ -43,6 +43,7 @@ export async function lexicon(db: Db, projectId: string, language: string): Prom
     status: r.status as PronunciationStatus,
     source: r.source as LexiconEntry['source'],
     hint: r.hint,
+    edited: r.updatedBy !== null,
   }));
 }
 

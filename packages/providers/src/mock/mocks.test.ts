@@ -95,6 +95,15 @@ describe('mock voice timing', () => {
     expect(MOCK_WORDS_PER_MINUTE).toBe(150);
   });
 
+  it('reads speed from the provider settings, which replace the flat shorthand', async () => {
+    const voice = new MockVoiceProvider();
+    const text = Array.from({ length: 150 }, (_, i) => `word${i}`).join(' ');
+    const { settings: normalised } = voice.normalizeSettings({ speed: 1.2 });
+    expect((await voice.generateNarration({ text, language: 'en', settings: { voiceId: 'mock-narrator-deep', model: 'mock', provider: normalised } })).durationMs).toBe(50_200);
+    // The shorthand is read only without provider settings: their speed (here the default, 1) wins.
+    expect((await voice.generateNarration({ text, language: 'en', settings: { ...settings, speed: 1.2, provider: voice.normalizeSettings({}).settings } })).durationMs).toBe(60_200);
+  });
+
   it('returns character timestamps shaped like a tag-aware provider: words evenly spaced, markup taking no time, pauses leaving silence', async () => {
     const r = await new MockVoiceProvider().generateNarration({ text: '[curious] one two [pause] three four', language: 'en', settings, withTimestamps: true });
     expect(r.alignment).toEqual([

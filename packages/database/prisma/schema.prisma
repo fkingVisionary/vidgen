@@ -468,6 +468,7 @@ model Project {
   storyExplorations    StoryExploration[]
   scripts              Script[]
   voiceRuns            VoiceRun[]
+  voiceSelections      VoiceSelection[]
   voicePronunciations  VoicePronunciation[]
   writingExamples      WritingExample[]
   storyboards          Storyboard[]
@@ -498,16 +499,17 @@ model LanguageVersion {
   createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  jobs          Job[]
-  narrations    SceneNarration[]
-  voiceRuns     VoiceRun[]
-  timelines     Timeline[]
-  renders       Render[]
-  assets        MediaAsset[]
-  providerCalls ProviderCall[]
-  approvals     Approval[]
-  qaReports     QaReport[]
+  project        Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  jobs           Job[]
+  narrations     SceneNarration[]
+  voiceRuns      VoiceRun[]
+  voiceSelection VoiceSelection?
+  timelines      Timeline[]
+  renders        Render[]
+  assets         MediaAsset[]
+  providerCalls  ProviderCall[]
+  approvals      Approval[]
+  qaReports      QaReport[]
 
   @@unique([projectId, language])
   @@map("language_versions")
@@ -1290,32 +1292,101 @@ model ScriptBlockClaim {
 // Voice
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A narrator: provider, voice, model, language, output format and everything else that shapes a take
-/// (VoiceProfileConfig: voice settings, performance strategy, chunking, context, number style).
-/// Never edited once created: a change is a new version, so every take keeps the exact profile it used.
+/// A saved voice profile: a stable identity and display name whose settings live in immutable versions
+/// (voice_profiles). Every edit is a new version; the current version is the newest. Its provider and language are
+/// those of its versions (fixed: another language is a duplicate).
+model VoiceProfileFamily {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  /// Unique (the service also compares names case-insensitively).
+  name        String    @unique
+  description String?
+  /// The library default: what a language version narrates with before its project chooses a profile (for the
+  /// provider and language of its current version; at most one per provider and language).
+  isDefault   Boolean   @default(false) @map("is_default")
+  /// Kept with every version, offered for no new choice; projects already using it keep it.
+  archivedAt  DateTime? @map("archived_at") @db.Timestamptz(3)
+  createdBy   String?   @map("created_by")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  versions   VoiceProfile[]
+  selections VoiceSelection[]
+
+  @@map("voice_profile_families")
+}
+
+/// One version of a saved voice profile (VoiceProfileFamily): provider, voice, model, language, output format and
+/// everything else that shapes a take (VoiceProfileConfig). Never edited once created: a change is a new version, so
+/// every run and take keeps the exact version it used.
 model VoiceProfile {
   id           String   @id @default(uuid(7)) @db.Uuid
-  /// Shared by every version ("House narrator").
+  /// The family's name when this version was made.
   name         String
+  /// Per family: 1, 2, 3…
   version      Int
   provider     String
   voiceId      String   @map("voice_id")
   modelId      String   @map("model_id")
   language     String
   outputFormat String   @map("output_format")
+  /// VoiceProfileConfig (strategy, chunking, context, number style, pronunciation, performance rules, provider
+  /// settings); versions made before saved profiles hold the earlier shape (`settings`), read by readProfileConfig.
   config       Json
-  /// The profile new runs use (one active version per name).
+  /// Before saved profiles: the version new runs used for its provider and language. The library default is now
+  /// VoiceProfileFamily.isDefault: this is read only to adopt a version made without a family; new versions are
+  /// written false.
   active       Boolean  @default(true)
   notes        String?
   createdBy    String?  @map("created_by")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// The saved profile this is a version of (every version since 20261006120000; earlier ones backfilled by name,
+  /// provider and language).
+  familyId     String?  @map("family_id") @db.Uuid
+  /// The version this one was made from (an edit, a duplicate), if any.
+  basedOnId    String?  @map("based_on_id") @db.Uuid
+  /// VoiceProfileOrigin: defaults, the library, an edit, a duplicate, or a run's configuration (null: made before
+  /// saved profiles).
+  origin       Json?
 
+  family      VoiceProfileFamily? @relation(fields: [familyId], references: [id], onDelete: Restrict)
+  basedOn     VoiceProfile?       @relation("ProfileBasedOn", fields: [basedOnId], references: [id], onDelete: SetNull)
+  derived     VoiceProfile[]      @relation("ProfileBasedOn")
+  pinnedBy    VoiceSelection[]
   runs        VoiceRun[]
   generations VoiceGeneration[]
   assemblies  VoiceAssembly[]
 
   @@unique([name, version])
+  @@unique([familyId, version])
   @@map("voice_profiles")
+}
+
+/// The voice profile a project's language version narrates with: a saved profile (following its current version or
+/// pinned to one) or the library default, and the project's own overrides of supported settings (never stored on the
+/// profile). Runs are per language version, and so is this choice.
+model VoiceSelection {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  projectId         String   @map("project_id") @db.Uuid
+  languageVersionId String   @unique @map("language_version_id") @db.Uuid
+  /// Null: the library default.
+  familyId          String?  @map("family_id") @db.Uuid
+  /// Null: follow the family's current version.
+  pinnedVersionId   String?  @map("pinned_version_id") @db.Uuid
+  /// VoiceConfigOverrides.
+  overrides         Json     @default("{}")
+  /// Incremented by every change; a plan made at another revision is refused at generation.
+  revision          Int      @default(1)
+  updatedBy         String?  @map("updated_by")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion LanguageVersion     @relation(fields: [languageVersionId], references: [id], onDelete: Cascade)
+  family          VoiceProfileFamily? @relation(fields: [familyId], references: [id], onDelete: Restrict)
+  pinnedVersion   VoiceProfile?       @relation(fields: [pinnedVersionId], references: [id], onDelete: Restrict)
+
+  @@index([familyId])
+  @@map("voice_selections")
 }
 
 /// One voice run ("Voice Run 3"): a scope of one approved script version narrated with one profile.
@@ -1334,6 +1405,10 @@ model VoiceRun {
   strategy          PerformanceStrategy
   /// Chunking and context used (the profile's, with the run's overrides).
   settings          Json
+  /// VoiceRunConfig, frozen when the run was made: the profile version, the project's overrides, the run's options,
+  /// the effective configuration and provider settings as sent, with provenance. Null before saved profiles (read back
+  /// reconstructed from `profile`, `strategy` and `settings`).
+  config            Json?
   /// A comparison: runs narrating the same scope different ways share an experiment name and carry a variant label.
   experiment        String?
   variant           String?
@@ -1423,6 +1498,10 @@ model VoiceGeneration {
   prepared            Json?
   /// The editor's directions for this take (DirectorMark[]), if any.
   directions          Json?
+  /// VoiceTakeConfig: what this take was made with — the run's configuration or the production profile, any temporary
+  /// override, the effective configuration, and how it differs from the run's. Null before saved profiles (the run's,
+  /// with this take's `strategy`).
+  config              Json?
   audioAssetId        String?               @unique @map("audio_asset_id") @db.Uuid
   durationMs          Int?                  @map("duration_ms")
   /// NarrationAlignment: word timings in the canonical text, and the provider's character timestamps.

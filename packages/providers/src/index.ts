@@ -2,6 +2,7 @@ export * from './types.ts';
 export * from './ai.ts';
 export * from './research.ts';
 export * from './voice.ts';
+export * from './voice-settings.ts';
 export * from './voice-render.ts';
 export * from './voice-markup.ts';
 export * from './audio.ts';

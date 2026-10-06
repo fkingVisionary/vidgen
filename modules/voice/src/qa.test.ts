@@ -1,6 +1,6 @@
 import type { VoiceChunk, VoiceGeneration, VoiceGenerationStatus } from '@docengine/database';
 import { describe, expect, it } from 'vitest';
-import { takeQa } from './qa.ts';
+import { configurationFindings, takeQa } from './qa.ts';
 import { assemblyMismatch, runQa, takeStatus, usableTake, type RunChunk } from './runs.ts';
 import { toSpoken } from './spoken.ts';
 import { wordSpans } from './text.ts';
@@ -77,5 +77,24 @@ describe('the assembly against the current takes', () => {
     expect(assemblyMismatch(chunks, null)).toMatchObject({ ref: null, detail: expect.stringMatching(/^Chunk\(s\) #1, #2 have takes but the run has no assembly yet/) });
     // Unreadable entries are not the current takes either.
     expect(assemblyMismatch(chunks, { version: 1, entries: 'garbage' })).toMatchObject({ kind: 'ASSEMBLY_MISMATCH' });
+  });
+});
+
+describe('takes made with another voice than their run', () => {
+  const ref = { familyId: '0199b3a0-0000-7000-8000-000000000001', familyName: 'Tulip narrator', versionId: '0199b3a0-0000-7000-8000-000000000002', version: 2, name: 'Tulip narrator' };
+  const made = (generation: number, config: unknown) => ({ ...take(`t${generation}`, { generation }), config }) as VoiceGeneration;
+
+  it('warns, from what each current take stored, when its voice differs from the run’s — never for performance alone or a take made before saved profiles', () => {
+    const chunks = [
+      chunk(0, made(1, null)),
+      chunk(1, made(3, { base: 'PRODUCTION', override: null, profile: ref, differs: ['voice: v2 (run: v1)', 'stability: 0.4 (run: 0.5)'], identityDiffers: true })),
+      chunk(2, made(2, { base: 'RUN', override: { providerSettings: { stability: 0.3 } }, profile: ref, differs: ['stability: 0.3 (run: 0.5)'], identityDiffers: true })),
+      chunk(3, made(2, { base: 'RUN', override: { strategy: 'EXPRESSIVE' }, profile: ref, differs: ['performance: expressive (run: restrained)'], identityDiffers: false })),
+      chunk(4, null),
+    ];
+    expect(configurationFindings(chunks)).toEqual([
+      { kind: 'CONFIGURATION_DIFFERS', severity: 'WARNING', ref: '#2', detail: "Chunk 2's take 3 was made with the production profile Tulip narrator v2: voice: v2 (run: v1), stability: 0.4 (run: 0.5)" },
+      { kind: 'CONFIGURATION_DIFFERS', severity: 'WARNING', ref: '#3', detail: "Chunk 3's take 2 was made with a temporary override: stability: 0.3 (run: 0.5)" },
+    ]);
   });
 });

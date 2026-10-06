@@ -275,6 +275,94 @@ production. The real VOICE stage runs when the script stage is real
 labelled MOCK beep. Real voice needs real storage: see [Enabling real
 narration](#enabling-real-narration-elevenlabs--a-railway-bucket).
 
+## Deploying saved voice profiles (Voice Engine V1, final)
+
+No new services or variables. The pre-deploy command applies one
+migration, additive only:
+
+- `20261006120000_voice_saved_profiles`: two tables,
+  `voice_profile_families` (a saved profile: name, description, archived,
+  library default) and `voice_selections` (a project's choice of profile
+  per language version, its overrides and a revision); nullable columns
+  `voice_profiles.family_id`, `based_on_id` and `origin`, with a unique
+  index on `(family_id, version)`; and a nullable `config` on `voice_runs`
+  and `voice_generations` (what each run and take was made with). The
+  backfill makes one family per existing profile name, provider and
+  language (versions keep their names and numbers; a name used for several
+  gets "(provider, language)" after it), and for each provider and
+  language makes the family of the newest active version — the one new runs
+  used — the library default. No existing column value, row or enum
+  changes.
+
+In production after it: "House narrator" is one family, the library
+default for `elevenlabs` / `en`, with v1 (`01a10ecc-…`) current. Its stored
+config (the earlier shape) is untouched and read as before. Tulip Mania has
+no selection row, so it narrates with the library default, exactly as
+before. Runs 1–7 and their takes have no `config` and read as
+reconstructed. The deploy generates nothing and saves no profile.
+
+**Rollback.** Code from before ignores the new tables and columns. Versions
+written since are `active = false`, so its `activeProfile` still finds House
+narrator v1; runs still carry `strategy` and `settings`. Under the old code
+a version saved in the new shape reads with the house voice settings (a
+stated limit), and versions it writes have no family: new code adopts them
+into a family the next time it plans. Never revert the migration by hand
+(there is no down migration, and it changes no existing value).
+
+### Post-deploy verification (read-only, nothing paid)
+
+With the dashboard's credentials, against production. None of these calls
+writes a row or reaches ElevenLabs (reads never create profiles).
+
+1. `GET /api/health`: 200, `storage: ok`, `voice: ok`.
+2. `GET /api/voice/profiles`: one family, "House narrator", `isDefault:
+   true`, `archived: false`, provider `elevenlabs`, language `en`,
+   `versions: 1`, `current.version: 1`, `current.origin.kind: LEGACY`,
+   `runs: 7`; `settings` lists ElevenLabs' five descriptors and `provider.models`
+   includes `eleven_v4`.
+3. `GET /api/projects/tulip-mania/voice/selection`: `mode: DEFAULT`,
+   `revision: 0`, `profile` House narrator v1, `problem: null`, `overrides:
+   {}`, `effective.model: eleven_v4`.
+4. `GET /api/projects/tulip-mania/voice?run=3`: `run.configuration.reconstructed:
+   true`; `run.configuration.effective` EXPRESSIVE, chunking 20–30 words,
+   context 200 / 120 without stitching, number style UK, `eleven_v4`,
+   `mp3_44100_128`; `run.characters: 1577`; `run.cost.reported:
+   [{ name: character-cost, quantity: 174 }]` and `run.cost.reestimated:
+   true` (the estimate now from the characters sent: about $0.13 at $0.08
+   per 1,000, where its ledger rows add up to $0.01392). The Run tab reads
+   "sent 1,577 characters · provider reported 174 (character-cost header)".
+5. The same view's `pronunciations`: "Meet Thijs" has `withdrawn: Thijs`
+   (listed apart on the Pronunciation tab, no longer blocking); no row was
+   changed.
+6. The dashboard's *Voice profiles* page and the Voice page's *Production
+   profile* tab load at 360 px with no console error.
+
+Nothing is generated and nothing is saved as a profile here: saving run 3
+and the regeneration test are the operator's (below).
+
+### Operator runbook: the accepted configuration as Tulip's profile, then the regeneration test
+
+1. **Save run 3.** Voice → run 3 (*Acceptance experiment — C expressive*)
+   → *Save this run's configuration as a voice profile* → a name (say
+   "Tulip narrator") → *Save profile*. It is saved as v1 of a new profile
+   (origin: voice run 3 of tulip-mania, reconstructed), with EXPRESSIVE,
+   20–30 words, 200 / 120 characters of context, `eleven_v4` and the House
+   narrator v1 voice and settings. It does not become the library default:
+   other documentaries keep House narrator.
+2. **Use it for this project.** *Use for this project*. The *Production
+   profile* tab shows it, following its current version, revision 1; the
+   project's events record the choice ("Voice profile for en: Tulip
+   narrator, follows the current version (v1)…"). There were no project
+   overrides to clear.
+3. **The regeneration test.** On a run of the opening, a chunk card →
+   *Regenerate with…* → *The production profile now* (or *A temporary
+   override*, e.g. stability 0.3) → regenerate. One new take of one chunk,
+   labelled "production profile · Tulip narrator v1" (or "temporary
+   override · stability 0.3"); the profile is unchanged. The job's `voice
+   regeneration summary` names the take's configuration (base, override,
+   profile, differs) and its cost ("sent … characters; provider reported …
+   (character-cost header)").
+
 ## Environment variables
 
 `✓` = read by V1 code. Planned variables are documented now so the shape is
@@ -368,8 +456,8 @@ narration has been generated yet.
    2026-10-05; the pricing page then gave v4 a launch price of $0.022 until
    2026-10-12). Set it to the account's actual rate to make the estimates
    match the bill; it then prices every model. Estimates are labelled
-   ESTIMATED; the provider's own character count is used where it reports
-   one (`character-cost`), else the characters sent, noted as counted.
+   ESTIMATED and use the characters sent (an upper bound); ElevenLabs'
+   `character-cost` header is recorded raw beside them and never priced.
 5. **Hard-stop guard:** `VOICE_MAX_CHARACTERS=12000` in production. One job
    (a run, an experiment, a regeneration) may not send more: a plan above
    it is shown as blocked, generating it is refused, and a running job stops
@@ -425,9 +513,10 @@ other voice job is queued or running.
 paid). Project page → **Voice** → *Audition & generate* → the panel
 *Acceptance experiment — eleven_v4* → **Plan the acceptance experiment
 (nothing is generated)**. The first plan creates the ElevenLabs voice
-profile ("House narrator") from the configured voice, model and output
-format, with the house settings (restrained, 20–30 words, neighbouring
-text); the *Voice profile* tab shows it. Check, for each of the seven
+profile ("House narrator", the library default) from the configured voice,
+model and output format, with the house settings (restrained, 20–30 words,
+neighbouring text), unless one exists; the *Production profile* tab shows
+it. Check, for each of the seven
 variants (A plain,
 B restrained, C expressive, D over-directed, E no context, F 5–8 s chunks,
 G 12–20 s chunks): the chunk count, the planned seconds per chunk (chunks
@@ -487,13 +576,21 @@ generating and a newer one failed), serves it with the job worker, and
 clicks through the Voice page with Playwright at 1280, 412 and 360 px
 (`scripts/ui/voice-ui.mjs`): plan, generate an audition, play the assembled
 audio, regenerate one chunk, approve, use the previous take, compare takes
-and variants; at 1280 also directions, selected chunks, an A/B, the
-acceptance experiment and a new profile version (which a confirmed plan is
-not moved to); on every width no horizontal overflow, every button in a
-chunk card at least 24 px tall, generation state visible and no console
-errors. It prints `ok` / `FAIL` per check, ends with "every check passed",
-and exits non-zero on any failure. MOCK voice and MOCK storage only: nothing
-is paid and no key is read.
+and variants; the profile library at every width (new profile from the
+provider's settings form, edit as a new version with its changes, duplicate,
+rename, archive and unarchive); at 1280 also directions, selected chunks, an
+A/B, the acceptance experiment, a run made before saved profiles read as
+reconstructed, a run's configuration saved as a profile and used for the
+project, a project override, regeneration with the production profile and
+with a temporary override, pinning a version, a comparison of saved
+profiles, a library edit refused because another tab saved a version (the
+edit kept, then saved on purpose), and a profile edited in another tab
+(which a confirmed plan is not moved to) or an override changed there
+(refused: "plan again"); on every width no horizontal overflow, every button
+in a card or form at least 24 px tall, generation state visible and no
+console errors. It prints `ok` / `FAIL` per check, ends with "every check
+passed", and exits non-zero on any failure. MOCK voice and MOCK storage
+only: nothing is paid and no key is read.
 
 It needs PostgreSQL (`DATABASE_URL`, read from `.env` if present), `psql`,
 and Playwright with Chromium. Options (environment variables):

@@ -10,6 +10,7 @@ import { ResearchPage } from './pages/ResearchPage.tsx';
 import { ScriptPage } from './pages/ScriptPage.tsx';
 import { StoryPage } from './pages/StoryPage.tsx';
 import { VoicePage } from './pages/VoicePage.tsx';
+import { VoiceProfilesPage } from './pages/VoiceProfilesPage.tsx';
 import { WritingPage } from './pages/WritingPage.tsx';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } } });
@@ -27,6 +28,8 @@ createRoot(document.getElementById('root')!).render(
             <Route path="/projects/:id/script" element={<ScriptPage />} />
             <Route path="/projects/:id/voice" element={<VoicePage />} />
             <Route path="/writing" element={<WritingPage />} />
+            <Route path="/voice-profiles" element={<VoiceProfilesPage />} />
+            <Route path="/voice-profiles/:id" element={<VoiceProfilesPage />} />
             <Route path="*" element={<p className="text-stone-500">Page not found.</p>} />
           </Routes>
         </Layout>

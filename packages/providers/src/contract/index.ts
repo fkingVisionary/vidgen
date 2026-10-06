@@ -6,6 +6,7 @@
  * provider is added (S3 against MinIO, ElevenLabs, Higgsfield…) the same suite
  * runs against it, so swapping vendors cannot silently change behaviour.
  */
+import type { ProviderSettingValues } from '@docengine/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { AIProvider } from '../ai.ts';
@@ -29,6 +30,11 @@ function expectMeta(meta: CallMeta, info: ProviderInfo) {
   expect(meta.provider).toBe(info.name);
   expect(meta.mock).toBe(info.mock);
   for (const u of meta.usage) expect(u.quantity).toBeGreaterThanOrEqual(0);
+  // What the vendor reported is named and raw (recorded, never priced).
+  for (const r of meta.reportedUsage ?? []) {
+    expect(r.name).toMatch(/\S/);
+    expect(r.quantity).toBeGreaterThanOrEqual(0);
+  }
 }
 
 export function runStorageContract(name: string, factory: Factory<StorageProvider>) {
@@ -117,6 +123,36 @@ export function runVoiceContract(name: string, factory: Factory<VoiceProvider>, 
         }
         expect(r.alignment.at(-1)!.endMs).toBeLessThanOrEqual(r.durationMs + 50);
       }
+    });
+
+    it('describes its settings: normalising nothing gives their defaults, and the defaults fit', async () => {
+      const v = await factory();
+      const keys = v.settings.map((d) => d.key);
+      expect(new Set(keys).size).toBe(keys.length);
+      const defaults = Object.fromEntries(v.settings.map((d) => [d.key, d.default]));
+      expect(v.normalizeSettings({})).toEqual({ settings: defaults, problems: [] });
+      expect(v.normalizeSettings(defaults)).toEqual({ settings: defaults, problems: [] });
+    });
+
+    it('sends a model a subset of the settings, and names every key it does not send', async () => {
+      const v = await factory();
+      const { settings } = v.normalizeSettings({});
+      const extra: ProviderSettingValues = { ...settings, notASetting: 1 };
+      for (const model of new Set([...v.models, v.defaults.model, 'not-a-model'])) {
+        const { sent, ignored } = v.sentSettings(extra, model);
+        for (const [key, value] of Object.entries(sent)) expect(extra[key]).toBe(value);
+        expect([...Object.keys(sent), ...ignored].sort()).toEqual(Object.keys(extra).sort());
+        expect(ignored).toContain('notASetting');
+      }
+    });
+
+    it('generates narration from provider settings', async () => {
+      const v = await factory();
+      const id = voiceId ?? (await v.getVoices())[0]!.id;
+      const r = await v.generateNarration({ text: 'The bulbs were never planted.', language: 'en', withTimestamps: true, settings: { voiceId: id, model: v.defaults.model, provider: v.normalizeSettings({}).settings } });
+      expectMeta(r.meta, v.info);
+      expect(r.audio.byteLength).toBeGreaterThan(0);
+      expect(r.durationMs).toBeGreaterThan(0);
     });
   });
 }

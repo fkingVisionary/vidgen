@@ -25,15 +25,24 @@ import type {
   ScriptView,
   UpdateScriptBlockInput,
   VoiceRenderPlan,
-  CreateVoiceProfileInput,
+  CreateVoiceProfileFamilyInput,
   CreateVoiceRunInput,
   DecideVoiceGenerationInput,
+  DuplicateVoiceProfileInput,
+  NewVoiceProfileVersionInput,
   PlanVoiceRunInput,
   RegenerateVoiceInput,
+  SaveRunAsProfileInput,
   UpdatePronunciationInput,
+  UpdateVoiceProfileFamilyInput,
+  VoiceConfigOverrides,
   VoiceExperimentInput,
   VoiceMomentView,
   VoicePlanView,
+  VoiceProductionView,
+  VoiceProfileHistoryView,
+  VoiceProfileLibraryView,
+  VoiceSelectionInput,
   VoiceView,
   StoryJobInput,
   StoryView,
@@ -42,6 +51,14 @@ import type {
 } from '@docengine/core';
 
 /** Thin typed client for the same-origin API. Provider credentials never reach the browser. */
+
+/** A voice the configured provider offers. */
+export interface VoiceOption {
+  id: string;
+  name: string;
+  language?: string;
+  description?: string;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -124,7 +141,26 @@ export const api = {
   approveAllTakes: (runId: string) => request<{ approved: number; skipped: number }>('POST', `/api/voice/runs/${runId}/approve-all`),
   decideTake: (generationId: string, input: DecideVoiceGenerationInput) => request<{ runId: string }>('POST', `/api/voice/generations/${generationId}/decision`, input),
   updatePronunciation: (id: string, input: UpdatePronunciationInput) => request<{ ok: true }>('PATCH', `/api/voice/pronunciations/${id}`, input),
-  createVoiceProfile: (id: string, input: CreateVoiceProfileInput) => request<{ id: string; name: string; version: number }>('POST', `/api/projects/${id}/voice/profiles`, input),
+  /** The voices the configured provider offers (for a profile's voice). */
+  voices: () => request<VoiceOption[]>('GET', '/api/voice/voices'),
+  /** The saved voice profile library (global), with the configured provider's settings for forms; archived profiles too when asked. */
+  voiceProfiles: (archived = false) => request<VoiceProfileLibraryView>('GET', `/api/voice/profiles${archived ? '?archived=true' : ''}`),
+  /** A saved profile and every version, newest first. */
+  voiceProfile: (familyId: string) => request<VoiceProfileHistoryView>('GET', `/api/voice/profiles/${familyId}`),
+  /** A new saved profile (its v1). */
+  createVoiceProfileFamily: (input: CreateVoiceProfileFamilyInput) => request<VoiceProfileHistoryView>('POST', '/api/voice/profiles', input),
+  /** Rename, describe, archive or unarchive a profile, or make it the library default (its versions are not touched). */
+  updateVoiceProfileFamily: (familyId: string, input: UpdateVoiceProfileFamilyInput) => request<VoiceProfileHistoryView>('PATCH', `/api/voice/profiles/${familyId}`, input),
+  /** An edit: always a new version (runs and takes keep the version they used). */
+  newVoiceProfileVersion: (familyId: string, input: NewVoiceProfileVersionInput) => request<VoiceProfileHistoryView>('POST', `/api/voice/profiles/${familyId}/versions`, input),
+  duplicateVoiceProfile: (familyId: string, input: DuplicateVoiceProfileInput) => request<VoiceProfileHistoryView>('POST', `/api/voice/profiles/${familyId}/duplicate`, input),
+  /** A run's configuration (or one of its takes') saved as a profile. */
+  saveRunAsProfile: (runId: string, input: SaveRunAsProfileInput) =>
+    request<{ profile: VoiceProfileHistoryView; production: VoiceProductionView | null; clearedOverrides: VoiceConfigOverrides | null }>('POST', `/api/voice/runs/${runId}/save-profile`, input),
+  /** What a project's language version narrates with now (the master language by default). */
+  voiceSelection: (id: string, language?: string) => request<VoiceProductionView>('GET', `/api/projects/${encodeURIComponent(id)}/voice/selection${language ? `?language=${encodeURIComponent(language)}` : ''}`),
+  /** Choose the production profile and the project's overrides, at the revision shown (another revision is refused with 409). */
+  setVoiceSelection: (id: string, input: VoiceSelectionInput) => request<VoiceProductionView>('PUT', `/api/projects/${id}/voice/selection`, input),
   voiceMoment: (id: string, run: number, at: string) => request<VoiceMomentView>('GET', `/api/projects/${encodeURIComponent(id)}/voice/moment?run=${run}&at=${encodeURIComponent(at)}`),
   /** What a content package request would contain (read only; nothing is generated). */
   contentPackage: (id: string, input: { documentary?: boolean; shorts?: number | 'all'; languages?: string[] }) => request<ContentPackageView>('POST', `/api/projects/${id}/content-package`, input),

@@ -1,4 +1,4 @@
-import type { EmphasisLevel, PauseLength, PerformanceIntent, VoiceSettings } from '@docengine/core';
+import type { EmphasisLevel, PauseLength, PerformanceIntent, ProviderSettingValues, VoiceSettingDescriptor } from '@docengine/core';
 import type { CallMeta, ProviderInfo } from './types.ts';
 
 export interface Voice {
@@ -9,8 +9,19 @@ export interface Voice {
   previewUrl?: string;
 }
 
-/** VoiceSettings without the provider name (the provider is implied by who receives it). */
-export type NarrationSettings = Omit<VoiceSettings, 'provider'> & { speakerBoost?: boolean };
+/** What a voice is asked with: the voice, the model and the provider's settings (the provider is implied by who receives it). */
+export interface NarrationSettings {
+  voiceId: string;
+  model: string;
+  /** Provider settings as `normalizeSettings` returns them (the provider sends what the model takes). */
+  provider?: ProviderSettingValues;
+  /** Shorthand from before provider settings (the mock stage, the script's render plan); read only when `provider` is absent. */
+  stability?: number;
+  similarity?: number;
+  style?: number;
+  speed?: number;
+  speakerBoost?: boolean;
+}
 
 /** A pronunciation rule a provider applies itself (phonemes; aliases are spoken text already). */
 export interface PronunciationRule {
@@ -88,8 +99,6 @@ export interface VoiceModelCapabilities {
   directions: boolean;
   /** How a pause inside one request is written: audio tags, SSML breaks, or line breaks and punctuation only. */
   pauses: 'TAGS' | 'BREAKS' | 'PUNCTUATION';
-  /** Voice settings the model takes (the rest are not sent). */
-  settings: { stability: boolean; similarity: boolean; style: boolean; speakerBoost: boolean; speed: boolean };
   /** Phoneme rules (IPA/CMU) in a pronunciation dictionary. */
   phonemes: boolean;
   /** Neighbouring text as context. */
@@ -139,7 +148,19 @@ export interface VoiceProvider {
   readonly info: ProviderInfo;
   /** Configured defaults (model, voice, output format) for new voice profiles. */
   readonly defaults: { model: string; voiceId: string | null; outputFormat: string };
+  /** The provider-specific settings a profile may set, described for forms (which models take each is `sentSettings`'s to say). */
+  readonly settings: readonly VoiceSettingDescriptor[];
+  /** Known model ids, for a profile's form (another id may still be used: it gets plain text and conservative settings). */
+  readonly models: readonly string[];
   capabilities(model: string): VoiceModelCapabilities;
+  /**
+   * Settings checked and completed: every described key present (defaults
+   * filled in); unknown keys and values of the wrong kind or out of range are
+   * left out and listed in `problems` — never clamped. Pure.
+   */
+  normalizeSettings(input: Readonly<Record<string, unknown>>): { settings: ProviderSettingValues; problems: string[] };
+  /** What a model is sent of these settings, and the keys it does not take (kept in the record, not sent). Pure. */
+  sentSettings(settings: Readonly<ProviderSettingValues>, model: string): { sent: ProviderSettingValues; ignored: string[] };
   /** The chunk's sentences in the model's own markup (pure). */
   render(segments: readonly PerformanceSegment[], model: string): RenderedNarration;
   getVoices(): Promise<Voice[]>;

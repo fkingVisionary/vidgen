@@ -2,19 +2,38 @@ import {
   CHUNK_SECONDS,
   DEFAULT_VOICE_PROFILE_CONFIG,
   DirectorMark,
+  PERFORMANCE_RULE_LABELS,
+  PERFORMANCE_STRATEGY_LABELS,
   SCRIPT_TIMING,
+  VOICE_PROFILE_ORIGIN_LABELS,
+  VoiceConfigOverrides,
+  VoiceTakeOverride,
   wordsForSeconds,
   type ChunkingSettings,
+  type ConfigProvenance,
+  type ConfigSource,
   type ContextSettings,
+  type EffectiveVoiceConfig,
+  type PerformanceRules,
   type VoiceChunkView,
+  type VoiceCostView,
   type VoicePlanView,
+  type VoiceProductionView,
+  type VoiceProfileRef,
+  type VoiceProfileView,
   type VoiceRunSummaryView,
+  type VoiceSettingDescriptor,
+  type VoiceSettingValue,
+  type VoiceTakeConfigView,
 } from '@docengine/core';
+import { formatUsd } from './format.ts';
 
 /**
  * The Voice page's arithmetic, kept out of the components: chunk sizes in
- * seconds of speech, sentence numbers a director's direction addresses, and
- * what a request would send and cost before it is confirmed.
+ * seconds of speech, sentence numbers a director's direction addresses,
+ * what a request would send and cost before it is confirmed, and how a
+ * voice profile's configuration, its overrides and where each setting came
+ * from read.
  */
 
 const sized = (min: number, max: number) => ({ label: `≈${min}–${max} s`, chunking: { minWords: wordsForSeconds(min), maxWords: wordsForSeconds(max) } });
@@ -150,7 +169,7 @@ export interface Estimate {
  * take sent this many characters (its text plus markup), priced at the
  * run's own rate. The server counts again when the request arrives.
  */
-export function takesEstimate(chunks: readonly VoiceChunkView[], variants: number, run: Pick<VoiceRunSummaryView, 'characters' | 'cost'>, mock: boolean): Estimate {
+export function takesEstimate(chunks: readonly VoiceChunkView[], variants: number, run: Pick<VoiceRunSummaryView, 'characters'> & { cost: Pick<VoiceRunSummaryView['cost'], 'totalUsd' | 'basis'> }, mock: boolean): Estimate {
   const characters =
     variants *
     chunks.reduce((n, c) => {
@@ -193,4 +212,256 @@ export function experimentRuns<R extends Pick<VoiceRunSummaryView, 'number' | 'e
     } else group.push(r);
   }
   return group.some((g) => g.number === number) ? group : [];
+}
+
+// ── Costs ────────────────────────────────────────────────────────────────────
+
+const thousands = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+/**
+ * "sent 1,577 characters · provider reported 174 (character-cost header)":
+ * the characters sent are the estimate's basis; the provider's own figures
+ * are shown raw under their name, never as dollars.
+ */
+export function costText(characters: number, reported: readonly { name: string; quantity: number }[]): string {
+  const figures = reported.map((r) => `${thousands(r.quantity)} (${r.name} header)`).join(', ');
+  return `sent ${thousands(characters)} character${characters === 1 ? '' : 's'} · provider reported ${figures || 'none'}`;
+}
+
+/** A take's cost: "~$0.0126 (estimated) · sent 157 characters · provider reported 17 (character-cost header)". */
+export function takeCostText(c: VoiceCostView): string {
+  const usd = c.actualUsd !== null ? formatUsd(c.actualUsd) : c.estimatedUsd !== null ? `~${formatUsd(c.estimatedUsd)}` : 'unpriced';
+  return `${usd}${c.basis ? ` (${c.basis.toLowerCase()})` : ''}${c.characters !== null ? ` · ${costText(c.characters, c.reported)}` : ''}`;
+}
+
+// ── Voice profiles and configuration ─────────────────────────────────────────
+
+/** "Tulip narrator v2", or "House narrator v1 (now Classic narrator)" after the profile was renamed. */
+export const profileLabel = (ref: Pick<VoiceProfileRef, 'name' | 'version' | 'familyName'>) => `${ref.name} v${ref.version}${ref.familyName && ref.familyName !== ref.name ? ` (now ${ref.familyName})` : ''}`;
+
+/** "{project title} narrator": the name offered when a run's configuration is saved. */
+export const profileNameFor = (title: string) => `${title.replace(/\s+/g, ' ').trim().slice(0, 70)} narrator`;
+
+/**
+ * A model is not sent a setting: the form's rule, which agrees with the
+ * provider's sentSettings for models it knows and for models it does not
+ * (those are sent every setting not listed in `except`).
+ */
+export const notSentTo = (d: Pick<VoiceSettingDescriptor, 'models' | 'except'>, model: string) => (d.models ? !d.models.includes(model) : !!d.except?.includes(model));
+
+/** Why a value does not fit its setting (never clamped: the form says so and the save waits). */
+export function settingProblem(d: VoiceSettingDescriptor, v: VoiceSettingValue | undefined): string | null {
+  if (v === undefined) return null;
+  if (d.kind === 'NUMBER') {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return `${d.label}: a number`;
+    if ((d.min !== undefined && v < d.min) || (d.max !== undefined && v > d.max)) return `${d.label}: ${d.min ?? '…'} to ${d.max ?? '…'}`;
+    return null;
+  }
+  if (d.kind === 'BOOLEAN') return typeof v === 'boolean' ? null : `${d.label}: on or off`;
+  return typeof v === 'string' && (d.choices ?? []).some((c) => c.value === v) ? null : `${d.label}: one of ${(d.choices ?? []).map((c) => c.label).join(', ')}`;
+}
+
+const RULE_WORDS: Record<string, string> = {
+  maxMarksPerChunk: 'directions per chunk',
+  minWordsBetweenMarks: 'words between directions',
+  directorWordsPerMark: "director's words per direction",
+  resetWord: 'reset word',
+  'paceSpeed.SLOW': 'slow pace speed',
+  'paceSpeed.FAST': 'fast pace speed',
+};
+const ruleWord = (path: string) => RULE_WORDS[path] ?? (path.startsWith('emotionWords.') ? `word for ${path.slice(13).toLowerCase()}` : path.startsWith('deliveryWords.') ? `word for ${path.slice(14).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()}` : path);
+const shown = (v: unknown): string => (v === null || v === undefined ? 'none' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+/** "previous 200 / next 120 chars", "none", "stitched" (as the engine's logs and labels write it). */
+const contextText = (c: ContextSettings) => [c.previousChars || c.nextChars ? `previous ${c.previousChars} / next ${c.nextChars} chars` : c.stitch ? '' : 'none', c.stitch ? 'stitched' : ''].filter(Boolean).join(', ');
+const flatRules = (r: Partial<PerformanceRules>): [string, unknown][] =>
+  Object.entries(r).flatMap(([key, value]) => (value && typeof value === 'object' ? Object.entries(value).map(([k, v]) => [`${key}.${k}`, v] as [string, unknown]) : value === undefined ? [] : [[key, value] as [string, unknown]]));
+
+/** "performance expressive, stability 0.3, context none", as the engine describes overrides in its logs; "none" when nothing is set. */
+export function describeOverrides(o: VoiceConfigOverrides | null | undefined): string {
+  if (!o) return 'none';
+  const parts: string[] = [];
+  if (o.strategy) parts.push(`performance ${o.strategy.toLowerCase()}`);
+  if (o.chunking) parts.push(`chunk size ${o.chunking.minWords}–${o.chunking.maxWords} words`);
+  if (o.context) parts.push(`context ${contextText(o.context)}`);
+  if (o.numberStyle) parts.push(`number style ${o.numberStyle}`);
+  for (const [path, value] of flatRules(o.performanceRules ?? {})) parts.push(`${ruleWord(path)} ${shown(value)}`);
+  for (const [key, value] of Object.entries(o.providerSettings ?? {})) if (value !== undefined) parts.push(`${key} ${shown(value)}`);
+  return parts.join(', ') || 'none';
+}
+
+/** Overrides as an editor holds them: a setting cleared in the form is undefined until they are sent. */
+export type EditedOverrides = Omit<VoiceConfigOverrides, 'providerSettings'> & { providerSettings?: Record<string, VoiceSettingValue | undefined> };
+
+/** Overrides with nothing left unset: no undefined values, and no empty rules or settings (what an editor sends). */
+export function pruneOverrides(o: EditedOverrides): VoiceConfigOverrides {
+  const out: VoiceConfigOverrides = {};
+  for (const [key, value] of Object.entries(o) as [keyof VoiceConfigOverrides, unknown][]) {
+    if (value === undefined) continue;
+    if (key === 'performanceRules' || key === 'providerSettings') {
+      const kept = Object.fromEntries(Object.entries(value as object).filter(([, v]) => v !== undefined));
+      if (Object.keys(kept).length) (out as Record<string, unknown>)[key] = kept;
+    } else (out as Record<string, unknown>)[key] = value;
+  }
+  return out;
+}
+
+export const isEmptyOverrides = (o: EditedOverrides | null | undefined) => !o || !Object.keys(pruneOverrides(o)).length;
+
+/** JSON with every object's keys in order, so equal settings compare equal whatever order they were written in. */
+const stable = (v: unknown): string => JSON.stringify(v, (_k, x: unknown) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
+
+/** The same overrides, whatever order their keys were set in (unset ones ignored). */
+export const sameOverrides = (a: EditedOverrides, b: EditedOverrides) => stable(pruneOverrides(a)) === stable(pruneOverrides(b));
+
+/**
+ * Why overrides cannot be saved or sent, before the server is asked: values
+ * the contract refuses (a take's chunk is its run's, so no chunk size), and
+ * provider settings the provider does not describe, does not let be
+ * overridden, or that do not fit.
+ */
+export function overrideProblems(o: EditedOverrides, settings: readonly VoiceSettingDescriptor[], scope: 'PROJECT' | 'RUN' | 'TAKE'): string[] {
+  const pruned = pruneOverrides(o);
+  const parsed = (scope === 'TAKE' ? VoiceTakeOverride : VoiceConfigOverrides).safeParse(pruned);
+  const problems = parsed.success ? [] : parsed.error.issues.map((i) => `${i.path.join('.') || 'overrides'}: ${i.message}`);
+  for (const [key, value] of Object.entries(pruned.providerSettings ?? {})) {
+    const d = settings.find((x) => x.key === key);
+    const problem = !d ? `${key}: not a setting of this provider` : !d.overridable ? `${d.label}: set on the profile only` : settingProblem(d, value);
+    if (problem) problems.push(problem);
+  }
+  return problems;
+}
+
+/** A profile version as a configuration with no layers: its columns and config. */
+export const versionEffective = (v: Pick<VoiceProfileView, 'config' | 'provider' | 'voiceId' | 'modelId' | 'language' | 'outputFormat'>): EffectiveVoiceConfig => ({
+  ...v.config,
+  provider: v.provider,
+  voiceId: v.voiceId,
+  model: v.modelId,
+  language: v.language,
+  outputFormat: v.outputFormat,
+});
+
+/** One row of a configuration table: a setting, its value, where it came from, and a note ("not sent to {model}"). */
+export interface ConfigRow {
+  path: string;
+  label: string;
+  value: string;
+  source: ConfigSource;
+  note: string | null;
+}
+
+/** "lowEnergy" → "low energy", "REFLECTIVE" → "reflective". */
+const keyWords = (k: string) => k.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+
+const ruleValue = (key: keyof PerformanceRules, v: PerformanceRules[keyof PerformanceRules]) =>
+  key === 'paceSpeed' ? `slow ${(v as PerformanceRules['paceSpeed']).SLOW} · fast ${(v as PerformanceRules['paceSpeed']).FAST}` : v && typeof v === 'object' ? Object.entries(v).map(([k, x]) => `${keyWords(k)}: ${x ?? 'none'}`).join(' · ') : String(v);
+
+/**
+ * A configuration as rows, each with where it came from (the profile unless
+ * a project, run or take set it) and, for a provider setting the model does
+ * not take, "not sent to {model}" (the server's `ignored` when it is known,
+ * else the descriptors').
+ */
+export function configRows(c: EffectiveVoiceConfig, provenance: ConfigProvenance, descriptors: readonly VoiceSettingDescriptor[], ignored?: readonly string[]): ConfigRow[] {
+  const row = (path: string, label: string, value: string, note: string | null = null): ConfigRow => ({ path, label, value, source: provenance[path] ?? 'PROFILE', note });
+  const rules = c.pronunciation.rules;
+  const keys = [...descriptors.map((d) => d.key).filter((k) => k in c.providerSettings), ...Object.keys(c.providerSettings).filter((k) => !descriptors.some((d) => d.key === k))];
+  return [
+    row('provider', 'Provider', c.provider),
+    row('voiceId', 'Voice', c.voiceId),
+    row('model', 'Model', c.model),
+    row('language', 'Language', c.language),
+    row('outputFormat', 'Output format', c.outputFormat),
+    row('strategy', 'Performance', PERFORMANCE_STRATEGY_LABELS[c.strategy]),
+    row('chunking', 'Chunk size', sizeLabel(c.chunking)),
+    row('context', 'Continuity', contextLabel(c.context)),
+    row('numberStyle', 'Number style', c.numberStyle === 'UK' ? 'UK ("one hundred and twenty")' : 'US ("one hundred twenty")'),
+    row('pronunciation', 'Pronunciation rules', rules.length ? rules.map((r) => `${r.term} → ${r.pronunciation} (${r.method.toLowerCase()})`).join('; ') : "none (the project's approved list applies)"),
+    ...(Object.keys(PERFORMANCE_RULE_LABELS) as (keyof PerformanceRules)[]).map((k) => row(`performanceRules.${k}`, PERFORMANCE_RULE_LABELS[k], ruleValue(k, c.performanceRules[k]))),
+    ...keys.map((k) => {
+      const d = descriptors.find((x) => x.key === k);
+      const off = ignored ? ignored.includes(k) : !!d && notSentTo(d, c.model);
+      return row(`providerSettings.${k}`, d?.label ?? k, shown(c.providerSettings[k]), off ? `not sent to ${c.model}` : null);
+    }),
+  ];
+}
+
+const chunkingText = (c: ChunkingSettings) => `${c.minWords}–${c.maxWords} words`;
+/** "Haarlem (alias Harlem)", or "none" (as the engine writes a profile's rules). */
+const rulesText = (r: EffectiveVoiceConfig['pronunciation']['rules']) => (r.length ? r.map((x) => `${x.term} (${x.method.toLowerCase()} ${x.pronunciation})`).join(', ') : 'none');
+
+/**
+ * What differs between two configurations, b against a, as the engine words
+ * a take against its run: "stability: 0.4 (run: 0.5)". Empty when equal.
+ */
+export function configDifferences(a: EffectiveVoiceConfig, b: EffectiveVoiceConfig): string[] {
+  const out: string[] = [];
+  const add = (label: string, before: string, after: string) => {
+    if (before !== after) out.push(`${label}: ${after} (run: ${before})`);
+  };
+  add('provider', a.provider, b.provider);
+  add('voice', a.voiceId, b.voiceId);
+  add('model', a.model, b.model);
+  add('language', a.language, b.language);
+  add('output format', a.outputFormat, b.outputFormat);
+  add('performance', a.strategy.toLowerCase(), b.strategy.toLowerCase());
+  add('chunk size', chunkingText(a.chunking), chunkingText(b.chunking));
+  add('context', contextText(a.context), contextText(b.context));
+  add('number style', a.numberStyle, b.numberStyle);
+  if (stable(a.pronunciation.rules) !== stable(b.pronunciation.rules)) out.push(`pronunciation rules: ${rulesText(b.pronunciation.rules)} (run: ${rulesText(a.pronunciation.rules)})`);
+  const before = new Map(flatRules(a.performanceRules));
+  for (const [path, value] of flatRules(b.performanceRules)) add(ruleWord(path), shown(before.get(path)), shown(value));
+  for (const key of new Set([...Object.keys(a.providerSettings), ...Object.keys(b.providerSettings)])) add(key, shown(a.providerSettings[key]), shown(b.providerSettings[key]));
+  return out;
+}
+
+/**
+ * Why a run's chunks cannot take the production profile now (null when they
+ * can): a problem with it, another language, or another output format
+ * (clips of one run share a format).
+ */
+export function productionRefusal(run: Pick<EffectiveVoiceConfig, 'language' | 'outputFormat'>, p: Pick<VoiceProductionView, 'problem' | 'effective' | 'profile'>): string | null {
+  if (p.problem) return p.problem;
+  if (!p.effective || !p.profile) return 'There is no production profile yet (it is made at the first plan)';
+  const label = `${p.profile.name} v${p.profile.version}`;
+  if (p.effective.language !== run.language) return `The production profile ${label} is for ${p.effective.language}; this run is ${run.language}`;
+  if (p.effective.outputFormat !== run.outputFormat) return `The production profile ${label} makes ${p.effective.outputFormat} and this run is ${run.outputFormat}: clips of one run share a format — start a new run with the production profile`;
+  return null;
+}
+
+/** How production's version is chosen: "follows the current version", "pinned to v1 (v2 available)", "library default". */
+export function productionMode(p: Pick<VoiceProductionView, 'mode' | 'profile' | 'newer'>): string {
+  if (p.mode === 'FOLLOW') return 'follows the current version';
+  if (p.mode === 'PIN') return `pinned to v${p.profile?.version ?? '?'}${p.newer ? ` (v${p.newer.version} available)` : ''}`;
+  return 'library default';
+}
+
+/** How a version was made: "saved from voice run 3 of tulip-mania (Acceptance experiment — C expressive)", "an edit of v1". */
+export function originText(o: VoiceProfileView['origin']): string {
+  switch (o.kind) {
+    case 'EDIT':
+      return `an edit of v${o.basedOnVersion}`;
+    case 'DUPLICATE':
+      return `a duplicate of ${o.fromFamily} v${o.fromVersion}`;
+    case 'RUN':
+      return `saved from ${o.takeId ? 'a take of ' : ''}voice run ${o.run} of ${o.project}${o.experiment ? ` (${o.experiment}${o.variant ? ` — ${o.variant}` : ''})` : ''}${o.reconstructed ? ', reconstructed from before saved profiles' : ''}`;
+    default:
+      return VOICE_PROFILE_ORIGIN_LABELS[o.kind];
+  }
+}
+
+/**
+ * A take's labels: the production profile it was made with, a temporary
+ * override, and how it differs from its run. None for a take made with its
+ * run's configuration. An A/B take's own strategy is its variant, not an
+ * override worth a label.
+ */
+export function takeLabels(c: VoiceTakeConfigView, variant: string | null): { production: string | null; override: string | null; differs: string | null } {
+  const override = c.override && variant ? { ...c.override, strategy: undefined } : c.override;
+  const differs = variant ? c.differs.filter((d) => !d.startsWith('performance: ')) : c.differs;
+  return {
+    production: c.base === 'PRODUCTION' ? `production profile · ${profileLabel(c.profile)}` : null,
+    override: isEmptyOverrides(override) ? null : `temporary override · ${describeOverrides(override)}`,
+    differs: differs.length ? `differs from the run: ${differs.join('; ')}` : null,
+  };
 }

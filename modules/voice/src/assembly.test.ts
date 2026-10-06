@@ -2,7 +2,8 @@ import { DEFAULT_DELIVERY, type NarrationAlignment, type ScriptVisual } from '@d
 import { audioMetadata, joinClips } from '@docengine/providers';
 import { describe, expect, it } from 'vitest';
 import { BETWEEN_TAKES_MS, assemble, clipDrift, formatClock, parseClock, pauseBetween, whatIsSaidAt, type AssemblyBlock, type AssemblyChunk } from './assembly.ts';
-import { detectTerms, proposeEntries, rulesFor, unresolvedIn } from './pronunciation.ts';
+import { detectTerms, proposeEntries, rulesFor, unresolvedIn, withdrawnTerms } from './pronunciation.ts';
+import { lexicon } from './runs.ts';
 import { wordSpans } from './text.ts';
 
 /** Assembly on the takes' measured clock, the narration timeline, and the pronunciation list. */
@@ -148,16 +149,113 @@ describe('pronunciation review list', () => {
       ['Alkmaar', 'PENDING', 'DEFAULT', 'DETECTED'],
     ]);
     expect(entries[1]!.hint).toBe('PEE-ter BOL · Dutch');
+    expect(entries.every((e) => !e.edited)).toBe(true);
   });
 
   it('applies only approved rules: aliases spoken by the engine, phonemes sent to the provider; lists what is unresolved', () => {
     const lexicon = [
-      { term: 'VOC', method: 'ALIAS' as const, pronunciation: 'V O C', status: 'APPROVED' as const },
-      { term: 'Haarlem', method: 'IPA' as const, pronunciation: 'ˈɦaːrlɛm', status: 'APPROVED' as const },
-      { term: 'Alkmaar', method: 'IPA' as const, pronunciation: 'ˈɑlkmaːr', status: 'PENDING' as const },
-      { term: 'Leiden', method: 'IPA' as const, pronunciation: 'ˈlɛidə(n)', status: 'APPROVED' as const },
+      { term: 'VOC', method: 'ALIAS' as const, pronunciation: 'V O C', status: 'APPROVED' as const, source: 'DETECTED' as const, edited: true },
+      { term: 'Haarlem', method: 'IPA' as const, pronunciation: 'ˈɦaːrlɛm', status: 'APPROVED' as const, source: 'SCRIPT' as const, edited: false },
+      { term: 'Alkmaar', method: 'IPA' as const, pronunciation: 'ˈɑlkmaːr', status: 'PENDING' as const, source: 'DETECTED' as const, edited: false },
+      { term: 'Leiden', method: 'IPA' as const, pronunciation: 'ˈlɛidə(n)', status: 'APPROVED' as const, source: 'EDITOR' as const, edited: true },
     ];
     expect(rulesFor(text, lexicon)).toEqual({ aliases: [{ term: 'VOC', alias: 'V O C' }], phonemes: [{ term: 'Haarlem', method: 'IPA', pronunciation: 'ˈɦaːrlɛm' }] });
     expect(unresolvedIn(text, lexicon)).toEqual(['Alkmaar']);
+    // No profile rules: the same.
+    expect(rulesFor(text, lexicon, [])).toEqual(rulesFor(text, lexicon));
+    expect(unresolvedIn(text, lexicon, [])).toEqual(['Alkmaar']);
+  });
+
+  /** The production audition's chunks 4 and 6 (Tulip Mania, script v5). */
+  const CHUNK_4 = "Meet Thijs, a Haarlem craftsman. He's invented, a companion rather than a source. One winter evening he stops at a tavern door, hears voices and the scrape of chalk, and steps inside.";
+  const CHUNK_6 = 'A satirical pamphlet printed in Haarlem in 1637 gives directions to rooms like this, in the voice of its florist, Gaergoedt.';
+  const terms = (t: string) => detectTerms(t).map((d) => d.term);
+
+  it('does not glue a sentence-opening ordinary word onto the name after it ("Meet Thijs" is Thijs)', () => {
+    expect(terms('Meet Thijs, a Haarlem craftsman.')).toEqual(['Thijs', 'Haarlem']);
+    expect(terms('Meet Jan van Goyen.')).toEqual(['Jan van Goyen']);
+    expect(terms('Consider Wouter Bartholomeusz.')).toEqual(['Wouter Bartholomeusz']);
+    expect(terms('Thijs Gaergoedt said so.')).toEqual(['Thijs Gaergoedt']);
+    expect(terms('The pamphlet speaks in the voice of its florist, Gaergoedt.')).toEqual(['Gaergoedt']);
+    expect(terms(CHUNK_4)).toEqual(['Thijs', 'Haarlem']);
+    expect(terms(CHUNK_6)).toEqual(['Haarlem', 'Gaergoedt']);
+    expect(terms([CHUNK_4, CHUNK_6].join('\n'))).toEqual(['Thijs', 'Haarlem', 'Gaergoedt']);
+    // The first word stays when something says it is part of the name: a particle (itself, or after it), or the same word capitalised inside a sentence elsewhere.
+    expect(terms('Van Goyen painted the dunes.')).toEqual(['Van Goyen']);
+    expect(terms('Jan Van Goyen painted the dunes.')).toEqual(['Jan Van Goyen']);
+    expect(terms('Wouter Bartholomeusz sold bulbs. Later, Wouter left.')).toEqual(['Wouter Bartholomeusz']);
+    // A stated limit: with nothing to say so, an opening first name is dropped.
+    expect(terms('Wouter Bartholomeusz sold bulbs.')).toEqual(['Bartholomeusz']);
+  });
+
+  it('withdraws a term the detector listed and no longer finds, replaced by the name it ends with; never one an editor decided or touched', () => {
+    const entry = (term: string, over: Partial<{ source: 'SCRIPT' | 'DETECTED' | 'EDITOR'; status: 'PENDING' | 'APPROVED' | 'FLAGGED'; edited: boolean }> = {}) => ({ term, source: 'DETECTED' as const, status: 'PENDING' as const, edited: false, ...over });
+    // The longest term it ends with: Pieter van Haarlem, not Haarlem (found too).
+    const text = `${CHUNK_4}\nMeet Jan van Goyen. Meet Pieter van Haarlem.`;
+    expect(withdrawnTerms(text, [entry('Meet Thijs'), entry('Meet Jan van Goyen'), entry('Meet Pieter van Haarlem'), entry('Haarlem'), entry('Meet Pieter')])).toEqual(
+      new Map([
+        ['Meet Thijs', 'Thijs'],
+        ['Meet Jan van Goyen', 'Jan van Goyen'],
+        ['Meet Pieter van Haarlem', 'Pieter van Haarlem'],
+      ]),
+    );
+    // Not written in the text: not replaced, though a term it ends with is found.
+    expect(withdrawnTerms(CHUNK_6, [entry('Meet Thijs'), entry('Pieter van Haarlem')]).size).toBe(0);
+    for (const over of [{ edited: true }, { status: 'APPROVED' as const }, { status: 'FLAGGED' as const }, { source: 'SCRIPT' as const }, { source: 'EDITOR' as const }]) {
+      expect(withdrawnTerms(CHUNK_4, [entry('Meet Thijs', over)]).size, JSON.stringify(over)).toBe(0);
+    }
+  });
+
+  it("a profile's rules cover the terms the project has not approved; the project's approved entry wins, also the voice's own reading", () => {
+    const text = [CHUNK_4, CHUNK_6].join('\n');
+    const project = [
+      { term: 'Haarlem', method: 'IPA' as const, pronunciation: 'ˈɦaːrlɛm', status: 'APPROVED' as const },
+      { term: 'Gaergoedt', method: 'DEFAULT' as const, pronunciation: null, status: 'APPROVED' as const },
+      { term: 'Thijs', method: 'DEFAULT' as const, pronunciation: null, status: 'PENDING' as const },
+    ];
+    const profile = [
+      { term: 'Haarlem', method: 'ALIAS' as const, pronunciation: 'Harlem' },
+      { term: 'Gaergoedt', method: 'IPA' as const, pronunciation: 'ˈxaːrxut' },
+      { term: 'Thijs', method: 'ALIAS' as const, pronunciation: 'Tice' },
+      { term: 'Thijs', method: 'ALIAS' as const, pronunciation: 'Tays' },
+      { term: 'Alkmaar', method: 'IPA' as const, pronunciation: 'ˈɑlkmaːr' },
+    ];
+    expect(rulesFor(text, project, profile)).toEqual({ aliases: [{ term: 'Thijs', alias: 'Tice' }], phonemes: [{ term: 'Haarlem', method: 'IPA', pronunciation: 'ˈɦaːrlɛm' }] });
+    // Not approved by the project: the profile's rule says it.
+    expect(rulesFor(text, project.filter((e) => e.term !== 'Haarlem'), profile).aliases).toEqual([
+      { term: 'Haarlem', alias: 'Harlem' },
+      { term: 'Thijs', alias: 'Tice' },
+    ]);
+    expect(rulesFor(text, project.filter((e) => e.term !== 'Gaergoedt'), profile).phonemes).toEqual([
+      { term: 'Haarlem', method: 'IPA', pronunciation: 'ˈɦaːrlɛm' },
+      { term: 'Gaergoedt', method: 'IPA', pronunciation: 'ˈxaːrxut' },
+    ]);
+  });
+
+  it('unresolved: neither approved, nor withdrawn by the detector, nor (while pending) covered by a profile rule', () => {
+    const text = [CHUNK_4, CHUNK_6].join('\n');
+    const entries = [
+      { term: 'Meet Thijs', status: 'PENDING' as const, source: 'DETECTED' as const, edited: false },
+      { term: 'Thijs', status: 'PENDING' as const, source: 'DETECTED' as const, edited: false },
+      { term: 'Haarlem', status: 'APPROVED' as const, source: 'SCRIPT' as const, edited: true },
+      { term: 'Gaergoedt', status: 'PENDING' as const, source: 'DETECTED' as const, edited: false },
+    ];
+    const profile = [{ term: 'Thijs', method: 'ALIAS' as const, pronunciation: 'Tice' }];
+    expect(unresolvedIn(text, entries)).toEqual(['Thijs', 'Gaergoedt']);
+    expect(unresolvedIn(text, entries, profile)).toEqual(['Gaergoedt']);
+    // Heard wrong stays to decide, rule or not; a "Meet Thijs" an editor has saved is the editor's.
+    expect(unresolvedIn(text, [{ term: 'Thijs', status: 'FLAGGED', source: 'DETECTED', edited: true }], profile)).toEqual(['Thijs']);
+    expect(unresolvedIn(text, [{ term: 'Meet Thijs', status: 'PENDING', source: 'DETECTED', edited: true }])).toEqual(['Meet Thijs']);
+  });
+
+  it('reads an entry as edited once an editor has saved it, so the detector no longer withdraws it', async () => {
+    const row = (term: string, updatedBy: string | null) => ({ id: `id-${term}`, term, kind: 'NAME', method: 'DEFAULT', pronunciation: null, status: 'PENDING', source: 'DETECTED', hint: null, updatedBy });
+    const db = { voicePronunciation: { findMany: async () => [row('Meet Thijs', null), row('Visit Thijs', 'editor')] } } as unknown as Parameters<typeof lexicon>[0];
+    const words = await lexicon(db, 'p', 'en');
+    expect(words.map((w) => [w.term, w.edited])).toEqual([
+      ['Meet Thijs', false],
+      ['Visit Thijs', true],
+    ]);
+    expect(unresolvedIn(`${CHUNK_4} Visit Thijs at home.`, words)).toEqual(['Visit Thijs']);
   });
 });

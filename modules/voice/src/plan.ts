@@ -1,10 +1,8 @@
-import { estimateCost, type AuditionCoverageView, type ContextSettings, type ChunkingSettings, type CostBasis, type PerformanceStrategy, type VoiceEstimateView, type VoicePlanChunkView } from '@docengine/core';
-import type { VoiceProfile } from '@docengine/database';
+import { estimateCost, type AuditionCoverageView, type CostBasis, type EffectiveVoiceConfig, type VoiceEstimateView, type VoicePlanChunkView } from '@docengine/core';
 import type { VoiceProvider } from '@docengine/providers';
 import { chunkSeconds, planChunks, type PlannedChunk } from './chunking.ts';
 import { isPlainDelivery } from './performance.ts';
 import { prepareTake, type PreparedTake, type TakeBlock } from './prepare.ts';
-import { profileConfig } from './profiles.ts';
 import { rulesFor, type LexiconEntry } from './pronunciation.ts';
 import { findSpokenForms } from './spoken.ts';
 import { chunkSections, type VoiceScript, type VoiceScriptBlock } from './script.ts';
@@ -14,14 +12,9 @@ import { isQuestion, sentenceSpans } from './text.ts';
  * Planning a voice run before anything is generated: its chunks, what each
  * would send, what it would cost, and what an audition covers. The same
  * preparation runs again at generation time (with the pronunciation list as
- * it is then), so what is planned is what is sent.
+ * it is then), with the same effective configuration, so what is planned
+ * is what is sent.
  */
-
-export interface RunSettings {
-  strategy: PerformanceStrategy;
-  chunking: ChunkingSettings;
-  context: ContextSettings;
-}
 
 export interface PlannedRun {
   chunks: PlannedChunk[];
@@ -30,28 +23,29 @@ export interface PlannedRun {
   estimate: Omit<VoiceEstimateView, 'needsConfirmation'>;
 }
 
-export function planRun(script: VoiceScript, blocks: readonly VoiceScriptBlock[], profile: VoiceProfile, settings: RunSettings, provider: VoiceProvider, words: readonly LexiconEntry[]): PlannedRun {
-  const chunks = planChunks(chunkSections(script, blocks), settings.chunking);
-  const config = profileConfig(profile);
+/** A run's chunks and first takes as they would be made with this configuration (the run's effective configuration). */
+export function planRun(script: VoiceScript, blocks: readonly VoiceScriptBlock[], config: EffectiveVoiceConfig, provider: VoiceProvider, words: readonly LexiconEntry[]): PlannedRun {
+  const chunks = planChunks(chunkSections(script, blocks), config.chunking);
   const takeBlocks = new Map<string, TakeBlock>([...script.blocks.values()].map((b) => [b.key, { delivery: b.delivery, infoClass: b.infoClass }]));
   const takes = chunks.map((c) => {
-    const rules = rulesFor(c.text, words);
+    const rules = rulesFor(c.text, words, config.pronunciation.rules);
     return prepareTake({
       chunk: c,
       blocks: takeBlocks,
-      strategy: settings.strategy,
+      strategy: config.strategy,
       numberStyle: config.numberStyle,
       aliases: rules.aliases,
       phonemes: rules.phonemes,
       provider,
-      model: profile.modelId,
-      settings: config.settings,
+      model: config.model,
+      settings: config.providerSettings,
+      rules: config.performanceRules,
       context: { previousText: null, nextText: null },
       seed: null,
     });
   });
   const characters = takes.reduce((n, t) => n + t.rendered.text.length, 0);
-  const cost = estimateCost(provider.info.name, profile.modelId, [{ unit: 'CHARACTERS', quantity: characters }], provider.info.rates);
+  const cost = estimateCost(provider.info.name, config.model, [{ unit: 'CHARACTERS', quantity: characters }], provider.info.rates);
   let basis: CostBasis;
   let note: string;
   if (provider.info.mock) {
@@ -59,10 +53,10 @@ export function planRun(script: VoiceScript, blocks: readonly VoiceScriptBlock[]
     note = 'MOCK voice: no cost';
   } else if (cost.unpriced.length) {
     basis = 'UNPRICED';
-    note = `No price configured for ${profile.modelId}: set ELEVENLABS_USD_PER_1K_CHARS`;
+    note = `No price configured for ${config.model}: set ELEVENLABS_USD_PER_1K_CHARS`;
   } else {
     basis = 'ESTIMATED';
-    const rate = provider.info.rates.find((r) => r.model === profile.modelId) ?? provider.info.rates.find((r) => !r.model);
+    const rate = provider.info.rates.find((r) => r.model === config.model) ?? provider.info.rates.find((r) => !r.model);
     note = `${characters} characters × $${((rate?.usdPerUnit ?? 0) * 1000).toFixed(3)} per 1,000 (${rate?.source ?? 'rate card'})`;
   }
   return {

@@ -71,8 +71,8 @@ const toJson = (value: unknown): Prisma.InputJsonValue | undefined =>
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/** The response summary with how the call went (HTTP attempts, whether usage was reported or counted), when the provider says. */
-function withCallFacts(summary: unknown, facts: { attempts?: number | undefined; usageSource?: CallMeta['usageSource'] }): unknown {
+/** The response summary with how the call went (HTTP attempts, whether usage was reported or counted, the vendor's own figures as `reported`, raw and unpriced), when the provider says. */
+function withCallFacts(summary: unknown, facts: { attempts?: number | undefined; usageSource?: CallMeta['usageSource']; reported?: CallMeta['reportedUsage'] }): unknown {
   const known = Object.fromEntries(Object.entries(facts).filter(([, v]) => v !== undefined));
   if (!Object.keys(known).length) return summary;
   if (summary === undefined) return known;
@@ -137,7 +137,7 @@ export function createStageContext(args: {
             providerJobId: 'providerJobId' in result && typeof result.providerJobId === 'string' ? result.providerJobId : (meta.providerJobId ?? null),
             providerRequestId: meta.providerRequestId ?? null,
             usage: toJson(meta.usage) ?? [],
-            response: toJson(withCallFacts(opts.summarize?.(result), { attempts: meta.attempts, usageSource: meta.usageSource })),
+            response: toJson(withCallFacts(opts.summarize?.(result), { attempts: meta.attempts, usageSource: meta.usageSource, reported: meta.reportedUsage })),
             estimatedCostUsd: price.estimatedCostUsd,
             actualCostUsd: price.actualCostUsd,
             costBasis: price.costBasis,
@@ -154,7 +154,7 @@ export function createStageContext(args: {
         // A failed call may still have been billed (e.g. truncated or invalid LLM output): record its usage.
         const failure = err instanceof ProviderError ? err : null;
         const billed = failure?.meta ? priceCall(failure.meta, info.rates) : null;
-        const response = withCallFacts(undefined, { attempts: failure?.meta?.attempts ?? failure?.attempts, usageSource: failure?.meta?.usageSource });
+        const response = withCallFacts(undefined, { attempts: failure?.meta?.attempts ?? failure?.attempts, usageSource: failure?.meta?.usageSource, reported: failure?.meta?.reportedUsage });
         await db.providerCall.update({
           where: { id: call.id },
           data: {

@@ -1,4 +1,6 @@
-import type { NarrationAlignment, PerformanceCheck, SpokenForm, VoiceQaFinding } from '@docengine/core';
+import { VoiceProfileRef, type NarrationAlignment, type PerformanceCheck, type SpokenForm, type VoiceQaFinding } from '@docengine/core';
+import { z } from 'zod';
+import { profileLabel } from './config.ts';
 import { unspokenLeft } from './spoken.ts';
 import { countWords } from './text.ts';
 
@@ -7,7 +9,8 @@ import { countWords } from './text.ts';
  * complete, a plausible speaking rate, no long silences, spoken forms worth
  * hearing, performance warnings. Per run: failed, rejected or unreviewed
  * takes, takes of other text, missing or duplicated chunks, stale script,
- * unresolved pronunciations, incomplete narration. BLOCKING findings stop
+ * unresolved pronunciations, incomplete narration, current takes made with
+ * another voice than their run's. BLOCKING findings stop
  * the final (VOICE gate) approval; they never hide a take from review.
  */
 
@@ -69,3 +72,24 @@ export function takeQa(t: TakeQaInput): VoiceQaFinding[] {
 }
 
 export const blockingCount = (fs: readonly VoiceQaFinding[]) => fs.filter((f) => f.severity === 'BLOCKING').length;
+
+/** As much of a take's stored configuration (VoiceTakeConfig) as a finding needs; a take made before saved profiles has none. */
+const StoredDifference = z.object({ base: z.enum(['RUN', 'PRODUCTION']), override: z.unknown().nullable(), profile: VoiceProfileRef, differs: z.array(z.string()), identityDiffers: z.boolean() });
+
+/**
+ * A WARNING per chunk whose current take was made with another voice than
+ * its run's (the production profile, or a temporary override of a provider
+ * setting), from what the take stored when it was asked for. Performance
+ * differences (strategy, context, rules) are per-take choices, not findings.
+ */
+export function configurationFindings(chunks: readonly { chunkIndex: number; current: { generation: number; config: unknown } | null }[]): VoiceQaFinding[] {
+  const out: VoiceQaFinding[] = [];
+  for (const c of chunks) {
+    const stored = StoredDifference.safeParse(c.current?.config ?? null);
+    if (!c.current || !stored.success || !stored.data.identityDiffers) continue;
+    const t = stored.data;
+    const made = t.base === 'PRODUCTION' ? `the production profile ${profileLabel(t.profile)}${t.override ? ' with a temporary override' : ''}` : 'a temporary override';
+    out.push({ kind: 'CONFIGURATION_DIFFERS', severity: 'WARNING', ref: `#${c.chunkIndex + 1}`, detail: `Chunk ${c.chunkIndex + 1}'s take ${c.current.generation} was made with ${made}: ${t.differs.join(', ')}` });
+  }
+  return out;
+}

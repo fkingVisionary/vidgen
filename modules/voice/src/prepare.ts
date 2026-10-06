@@ -1,4 +1,4 @@
-import type { ChunkPerformance, DirectorMark, PerformanceStrategy, PreparedNarration, ScriptBlockClass, ScriptDelivery, SpokenForm, VoiceProfileSettings } from '@docengine/core';
+import { EARLIER_PERFORMANCE_RULES, type ChunkPerformance, type DirectorMark, type PerformanceRules, type PerformanceStrategy, type PreparedNarration, type ProviderSettingValues, type ScriptBlockClass, type ScriptDelivery, type SpokenForm } from '@docengine/core';
 import type { PerformanceSegment, PronunciationRule, RenderedNarration, VoiceProvider } from '@docengine/providers';
 import { checkTake } from './checks.ts';
 import type { ChunkSentence } from './chunking.ts';
@@ -32,11 +32,14 @@ export interface PrepareTakeInput {
   numberStyle: NumberStyle;
   aliases: readonly AliasRule[];
   phonemes: readonly PronunciationRule[];
-  provider: Pick<VoiceProvider, 'render' | 'capabilities'>;
+  provider: Pick<VoiceProvider, 'render' | 'capabilities' | 'settings' | 'sentSettings'>;
   model: string;
-  settings: VoiceProfileSettings;
+  /** Normalised provider settings (the take's effective `providerSettings`). */
+  settings: ProviderSettingValues;
   context: { previousText: string | null; nextText: string | null };
   seed: number | null;
+  /** The take's performance rules (default EARLIER_PERFORMANCE_RULES: every existing call is unchanged). */
+  rules?: PerformanceRules;
 }
 
 export interface PreparedTake {
@@ -51,11 +54,21 @@ export interface PreparedTake {
   passed: boolean;
 }
 
-/** Pace as a speed multiplier, for models that take a speed. */
-const PACE_SPEED = { SLOW: 0.94, NORMAL: 1, FAST: 1.06 } as const;
+/**
+ * The chunk's pace on the provider's speed setting (role SPEED), where the
+ * model is sent it: the setting times the rules' factor, to 0.01, kept
+ * within the setting's range. Null when the model takes no speed.
+ */
+function pacedSpeed(input: PrepareTakeInput, pace: 'SLOW' | 'FAST', rules: PerformanceRules): { key: string; value: number } | null {
+  const d = input.provider.settings.find((s) => s.role === 'SPEED');
+  const value = d ? input.settings[d.key] : undefined;
+  if (!d || typeof value !== 'number' || !Object.hasOwn(input.provider.sentSettings(input.settings, input.model).sent, d.key)) return null;
+  return { key: d.key, value: Math.min(d.max ?? Number.POSITIVE_INFINITY, Math.max(d.min ?? Number.NEGATIVE_INFINITY, Math.round(value * rules.paceSpeed[pace] * 100) / 100)) };
+}
 
 export function prepareTake(input: PrepareTakeInput): PreparedTake {
   const { chunk } = input;
+  const rules = input.rules ?? EARLIER_PERFORMANCE_RULES;
   const spoken = toSpoken(chunk.text, { style: input.numberStyle, aliases: input.aliases });
   // A sentence never ends inside a spoken form (forms are numbers, dates and terms, sentences end at their punctuation).
   const spokenSentences = chunk.sentences.map((s) => ({ start: canonicalToSpoken(spoken.forms, s.start), end: canonicalToSpoken(spoken.forms, s.end) }));
@@ -64,7 +77,7 @@ export function prepareTake(input: PrepareTakeInput): PreparedTake {
     if (!block) throw new Error(`prepareTake: block ${s.blockKey} is not in the script`);
     return { text: chunk.text.slice(s.start, s.end), blockKey: s.blockKey, delivery: block.delivery, infoClass: block.infoClass, blockStart: i === 0 || chunk.sentences[i - 1]!.blockKey !== s.blockKey };
   });
-  const marks = performanceMarks(sentences, input.strategy, chunk.performance.pauses, input.director);
+  const marks = performanceMarks(sentences, input.strategy, chunk.performance.pauses, input.director, rules);
   const pauses = strategyPauses(input.strategy, sentencePauses(sentences.length, chunk.performance.pauses));
   const segments: PerformanceSegment[] = spokenSentences.map((s, i) => {
     const emphasis = sentenceEmphasis(chunk, i, sentences[i]!.delivery, spoken.forms, s.start);
@@ -74,10 +87,13 @@ export function prepareTake(input: PrepareTakeInput): PreparedTake {
   const caps = input.provider.capabilities(input.model);
 
   const unsupported = [...rendered.unsupported];
-  const settings = { ...input.settings };
-  if (chunk.performance.pace !== 'NORMAL') {
-    if (caps.settings.speed) settings.speed = Math.min(1.2, Math.max(0.7, Math.round(settings.speed * PACE_SPEED[chunk.performance.pace] * 100) / 100));
-    else if (input.strategy !== 'PLAIN' && !marks.length) unsupported.push(`${chunk.performance.pace.toLowerCase()} pace: the model has no speed setting (left to the text)`);
+  // Every setting is kept (what the model is not sent too); only the speed takes the chunk's pace.
+  const settings: ProviderSettingValues = { ...input.settings };
+  const pace = chunk.performance.pace;
+  if (pace !== 'NORMAL') {
+    const speed = pacedSpeed(input, pace, rules);
+    if (speed) settings[speed.key] = speed.value;
+    else if (input.strategy !== 'PLAIN' && !marks.length) unsupported.push(`${pace.toLowerCase()} pace: the model has no speed setting (left to the text)`);
   }
   const phonemes = caps.phonemes ? [...input.phonemes] : [];
   if (!caps.phonemes && input.phonemes.length) unsupported.push(`phoneme pronunciations not applied (the model takes none): ${input.phonemes.map((p) => p.term).join(', ')}`);
@@ -92,6 +108,7 @@ export function prepareTake(input: PrepareTakeInput): PreparedTake {
     strategy: input.strategy,
     director: !!input.director?.length,
     caps,
+    rules,
   });
   const prepared: PreparedNarration = {
     strategy: input.strategy,
@@ -100,6 +117,7 @@ export function prepareTake(input: PrepareTakeInput): PreparedTake {
     pauses: chunk.performance.pauses,
     context: input.context,
     settings,
+    sent: input.provider.sentSettings(settings, input.model).sent,
     seed: input.seed,
     dictionary: phonemes.map((p) => ({ term: p.term, method: p.method, pronunciation: p.pronunciation })),
     unsupported,

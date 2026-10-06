@@ -30,6 +30,8 @@ export interface CallMeta {
   costNote?: string;
   /** Whether `usage` is the vendor's own figure or what was counted as sent. */
   usageSource?: 'REPORTED' | 'COUNTED';
+  /** Figures the vendor reported about the call (e.g. ElevenLabs' character-cost header), raw, under their own name: their unit is the vendor's, so they are recorded and never priced. */
+  reportedUsage?: { name: string; quantity: number }[];
   /** HTTP attempts the call took, retries included. */
   attempts?: number;
 }

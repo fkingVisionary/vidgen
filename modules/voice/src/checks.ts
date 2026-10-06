@@ -1,6 +1,6 @@
-import type { PerformanceCheck, PerformanceMark, PerformanceStrategy, ScriptBlockClass, SpokenForm } from '@docengine/core';
+import { EARLIER_PERFORMANCE_RULES, type PerformanceCheck, type PerformanceMark, type PerformanceRules, type PerformanceStrategy, type ScriptBlockClass, type SpokenForm } from '@docengine/core';
 import { stripMarkup, type RenderedNarration, type VoiceModelCapabilities } from '@docengine/providers';
-import { HOUSE_STYLE, inForceAt, isHouseDirection, isPlainDelivery, isReset, type PreparedSentence } from './performance.ts';
+import { inForceAt, isHouseDirection, isPlainDelivery, isReset, type PreparedSentence } from './performance.ts';
 import { applyForms } from './spoken.ts';
 import { countWords, wordList, type TextSpan } from './text.ts';
 
@@ -26,6 +26,8 @@ export interface TakeCheckInput {
   director: boolean;
   /** The model's markup: what it would read aloud or reject is never sent. */
   caps: Pick<VoiceModelCapabilities, 'directions' | 'pauses'>;
+  /** The take's performance rules: the density limits, the reset and the heightened feeling (default EARLIER_PERFORMANCE_RULES). */
+  rules?: PerformanceRules;
 }
 
 const DESCRIPTOR = /^[a-z][a-z \-']*[a-z]$/;
@@ -33,7 +35,9 @@ const PAUSE_TAGS = new Set(['[pause]', '[long pause]']);
 const BREAK = /^<break time="\d+(?:\.\d+)?s" \/>$/;
 /** Classes whose delivery stays measured: told with their uncertainty, or declared as reconstruction or fiction. */
 const MEASURED: ReadonlySet<ScriptBlockClass> = new Set(['UNCERTAIN', 'RECONSTRUCTION', 'FICTION']);
-const HEIGHTENED = new Set(['excited', 'dramatic']);
+const SMALL = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+/** "more than one in ten words" (small numbers in words). */
+const moreThanOneIn = (words: number) => (words === 1 ? 'more than one a word' : `more than one in ${SMALL[words] ?? words} words`);
 
 function firstDifference(a: readonly string[], b: readonly string[]): string {
   const n = Math.max(a.length, b.length);
@@ -51,6 +55,7 @@ function quoteRanges(text: string): TextSpan[] {
 }
 
 export function checkTake(t: TakeCheckInput): PerformanceCheck[] {
+  const rules = t.rules ?? EARLIER_PERFORMANCE_RULES;
   const checks: PerformanceCheck[] = [];
   const add = (id: string, label: string, status: PerformanceCheck['status'], detail: string) => checks.push({ id, label, status, detail });
 
@@ -132,18 +137,19 @@ export function checkTake(t: TakeCheckInput): PerformanceCheck[] {
   const directions = t.rendered.markup.filter((m) => m.kind === 'DIRECTION').length;
   const words = countWords(t.spoken);
   const house = t.marks.filter((m) => m.source === 'SCRIPT');
-  const moments = t.marks.filter((m) => m.source === 'STRATEGY' && !isHouseDirection(m, t.sentences));
-  const crowded = t.director && directions * 10 > Math.max(words, 10);
-  const director = t.director ? `; ${t.marks.filter((m) => m.source === 'DIRECTOR').length} of them the director's${crowded ? ', more than one in ten words' : ''}` : '';
+  const moments = t.marks.filter((m) => m.source === 'STRATEGY' && !isHouseDirection(m, t.sentences, rules));
+  const per = rules.directorWordsPerMark;
+  const crowded = t.director && directions * per > Math.max(words, per);
+  const director = t.director ? `; ${t.marks.filter((m) => m.source === 'DIRECTOR').length} of them the director's${crowded ? `, ${moreThanOneIn(per)}` : ''}` : '';
   if (t.strategy === 'PLAIN') {
     const strategyMarks = t.marks.filter((m) => m.source !== 'DIRECTOR').length;
     const own = t.director ? strategyMarks : Math.max(strategyMarks, directions);
     add('density', 'Direction density', own ? 'FAIL' : crowded ? 'WARN' : 'PASS', own ? `${own} direction(s) in a plain take` : `no directions of its own (plain)${director}`);
   } else if (t.strategy === 'RESTRAINED' || t.strategy === 'EXPRESSIVE') {
-    const tooClose = house.some((m, i) => i > 0 && !isReset(m.intent) && wordsBetween(t.sentences, house[i - 1]!.sentence, m.sentence) < HOUSE_STYLE.minWordsBetweenMarks);
+    const tooClose = house.some((m, i) => i > 0 && !isReset(m.intent, rules) && wordsBetween(t.sentences, house[i - 1]!.sentence, m.sentence) < rules.minWordsBetweenMarks);
     const allowed = t.strategy === 'EXPRESSIVE' ? 1 : 0;
-    const over = house.length > HOUSE_STYLE.maxMarksPerChunk || tooClose || moments.length > allowed;
-    const limits = `house style: at most ${HOUSE_STYLE.maxMarksPerChunk}, ${HOUSE_STYLE.minWordsBetweenMarks}+ words apart${allowed ? `, plus ${allowed} expressive moment` : ''}`;
+    const over = house.length > rules.maxMarksPerChunk || tooClose || moments.length > allowed;
+    const limits = `house style: at most ${rules.maxMarksPerChunk}, ${rules.minWordsBetweenMarks}+ words apart${allowed ? `, plus ${allowed} expressive moment` : ''}`;
     add('density', 'Direction density', over ? 'FAIL' : crowded ? 'WARN' : 'PASS', `${t.marks.length} direction(s) in ${words} words (${limits})${director}`);
   } else {
     add('density', 'Direction density', 'WARN', `over-directed (comparison only): ${directions} direction(s) in ${words} words${director}`);
@@ -153,10 +159,11 @@ export function checkTake(t: TakeCheckInput): PerformanceCheck[] {
   const manufactured = t.marks.filter((m) => m.source === 'STRATEGY' && !!m.intent.emotion && isPlainDelivery(t.sentences[m.sentence]!.delivery));
   add('restraint', 'No manufactured emotion', manufactured.length ? 'WARN' : 'PASS', manufactured.length ? `${manufactured.length} direction(s) on narration the script marks as plain` : 'directions only where the script asks for a delivery');
 
-  // 10. Measured delivery where the script is uncertain, reconstructed or fictional (it must not sound like documented fact, or like drama) — under the direction in force there, which carries forward.
+  // 10. Measured delivery where the script is uncertain, reconstructed or fictional (it must not sound like documented fact, or like drama) — under the direction in force there, which carries forward. Heightened: the rules' excited word, or over-direction's "dramatic".
+  const loud = new Set([rules.emotionWords.EXCITED, 'dramatic'].filter((w): w is string => !!w));
   const heightened = t.sentences.flatMap((s, i) => {
     const m = inForceAt(t.marks, i);
-    if (!m || !MEASURED.has(s.infoClass) || (m.intent.intensity === 'LOW' && !HEIGHTENED.has(m.intent.emotion ?? ''))) return [];
+    if (!m || !MEASURED.has(s.infoClass) || (m.intent.intensity === 'LOW' && !loud.has(m.intent.emotion ?? ''))) return [];
     const said = [m.intent.emotion, m.intent.delivery].filter(Boolean).join(', ');
     return [`sentence ${i + 1} (${s.infoClass.toLowerCase()}): ${said}${m.intent.intensity !== 'LOW' ? `, ${m.intent.intensity.toLowerCase()} intensity` : ''}${m.sentence !== i ? ` (carried from sentence ${m.sentence + 1})` : ''}`];
   });

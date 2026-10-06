@@ -2,11 +2,12 @@
  * The Voice page's browser QA fixture (scripts/ui/voice-ui.sh runs it). MOCK
  * voice and MOCK storage, a fake model for the script: nothing is paid and
  * no key is read. It seeds a throwaway database with a project whose script
- * is approved, narrates it — a direction comparison, and an audition whose
- * chunks have a take still generating and a newer take that failed — checks
- * that the dashboard numbers sentences as the engine does, then serves the
- * API and the built dashboard with the job worker running and prints
- * "READY <json>".
+ * is approved, narrates it — a direction comparison whose first run reads as
+ * made before saved profiles (no stored configuration: reconstructed), and an
+ * audition whose chunks have a take still generating and a newer take that
+ * failed — checks that the dashboard numbers sentences as the engine does,
+ * then serves the API and the built dashboard with the job worker running
+ * and prints "READY <json>".
  *
  *   UI_DATABASE_URL=postgres://…/docengine_voice_ui PORT=3102 tsx scripts/ui/voice-fixture.ts
  *
@@ -21,6 +22,7 @@ import { FakeScriptAI } from '../../modules/script/src/testing.ts';
 import { seedFakeDossier } from '../../modules/story/src/testing.ts';
 import { chunkSentences } from '../../modules/voice/src/stage.ts';
 import { sentenceSpans as engineSentences } from '../../modules/voice/src/text.ts';
+import { Prisma } from '../../packages/database/src/index.ts';
 import { ALL_MOCK, createProviders } from '../../packages/providers/src/index.ts';
 
 const url = process.env.UI_DATABASE_URL;
@@ -50,6 +52,10 @@ await c.projects.recordApproval(p.id, { gate: 'SCRIPT', decision: 'APPROVED' }, 
 // A direction comparison: three runs of the first section, one job.
 const comparison = await c.voice.createExperiment(p.id, { scope: { kind: 'SECTION', section: 1 }, name: 'Performance direction', variants: [{ label: 'A plain', strategy: 'PLAIN' }, { label: 'B restrained', strategy: 'RESTRAINED' }, { label: 'C expressive', strategy: 'EXPRESSIVE' }], confirm: true }, actor);
 await c.runner.drain();
+// Its first run as made before saved profiles: no configuration stored on the run or its takes, so it reads back reconstructed.
+const legacy = await c.db.voiceRun.findFirstOrThrow({ where: { projectId: p.id, number: comparison.runs[0] }, select: { id: true } });
+await c.db.voiceRun.update({ where: { id: legacy.id }, data: { config: Prisma.DbNull } });
+await c.db.voiceGeneration.updateMany({ where: { runId: legacy.id }, data: { config: Prisma.DbNull } });
 
 // An audition whose first chunk has a newer take still generating and whose second has a newer take that failed.
 const states = await c.voice.createRun(p.id, { scope: { kind: 'AUDITION', seconds: 40 } }, actor);

@@ -1,4 +1,5 @@
-import { VOICE_ACCEPTANCE_EXPERIMENT, type HealthView, type JobView, type VoicePlanView, type VoiceRunView, type VoiceView } from '@docengine/core';
+import { VOICE_ACCEPTANCE_EXPERIMENT, type HealthView, type JobView, type VoicePlanView, type VoiceProductionView, type VoiceProfileHistoryView, type VoiceRunView, type VoiceView } from '@docengine/core';
+import { Prisma } from '@docengine/database';
 import { ALL_MOCK, ElevenLabsVoiceProvider, MockStorageProvider, audioMetadata, createProviders, type ProviderSet } from '@docengine/providers';
 import { FakeScriptAI } from '@docengine/script/testing';
 import { seedFakeDossier } from '@docengine/story/testing';
@@ -17,7 +18,11 @@ import { parseEnv } from './env.ts';
  * assembly, regenerate one chunk — and read the job logs as JSON lines, as
  * Railway receives them: they are the only record of a live run outside the
  * dashboard. First with the MOCK voice and storage, then with the
- * ElevenLabs provider on a fake endpoint (no key, no network, no credits).
+ * ElevenLabs provider on a fake endpoint (no key, no network, no credits);
+ * last, on that endpoint, the step after the acceptance experiment (§41)
+ * on a run shaped as production's are (no stored configuration, the earlier
+ * ledger rows): the chosen variant saved as the project's voice profile and
+ * used, one chunk regenerated with it and one with a temporary override.
  */
 
 const db = useTestDatabase();
@@ -59,13 +64,19 @@ function mp3For(ms: number): Uint8Array {
   return out;
 }
 
+/** The fake's character-cost header for a request of this many characters. */
+const characterCost = (sent: number) => Math.round(sent * 0.11);
+/** "1,577", as the cost text writes a count. */
+const count = (n: number) => n.toLocaleString('en-US');
+
 const json = (body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json', ...headers } });
 
 /**
  * ElevenLabs as the provider code meets it: the voice and model lookups,
  * pronunciation dictionaries, and text to speech with timestamps that speaks
  * every character in 55 ms, leaves the audio tags out of its alignment (v4
- * may), and reports the characters it billed. Every request is kept.
+ * may), and reports a character cost of about 0.11 of the characters sent
+ * (as v4 did live; its unit is unverified). Every request is kept.
  */
 function fakeElevenLabs() {
   const requests: { path: string; body: any }[] = [];
@@ -85,7 +96,7 @@ function fakeElevenLabs() {
           audio_base64: Buffer.from(mp3For(chars.length * 55)).toString('base64'),
           alignment: { characters: chars, character_start_times_seconds: chars.map((_, i) => i * 0.055), character_end_times_seconds: chars.map((_, i) => (i + 1) * 0.055) },
         },
-        { 'request-id': `req-${++n}`, 'character-cost': String(body.text.length) },
+        { 'request-id': `req-${++n}`, 'character-cost': String(characterCost(body.text.length)) },
       );
     }
     return new Response(JSON.stringify({ detail: 'not found' }), { status: 404 });
@@ -186,7 +197,8 @@ describe('the voice acceptance path through the API (production wiring, nothing 
         strategy: r.strategy,
         chunking: r.settings.chunking,
         context: r.settings.context,
-        profile: { id: profileId, version: 1 },
+        profile: { versionId: profileId, version: 1, name: 'House narrator', family: 'House narrator' },
+        configuration: { reconstructed: false, selection: { mode: 'DEFAULT', revision: 0 }, projectOverrides: {}, runOptions: { strategy: r.strategy, chunking: r.settings.chunking, context: r.settings.context }, overrides: expect.any(String) },
         provider: 'mock',
         model: expect.any(String),
         voiceId: expect.any(String),
@@ -267,7 +279,7 @@ describe('the voice acceptance path through the API (production wiring, nothing 
     expect(await db.job.findUniqueOrThrow({ where: { id: again.job.id } })).toMatchObject({ status: 'SUCCEEDED', result: { kind: 'REGENERATION', generated: 1, failed: 0 } });
   });
 
-  it('ElevenLabs on a fake endpoint: MP3 takes and assemblies, words timed without the audio tags, characters reported and costed as an estimate, approved phonemes in one dictionary, no key in any log', async () => {
+  it("ElevenLabs on a fake endpoint: MP3 takes and assemblies, words timed without the audio tags, the estimate from the characters sent with the provider's character cost kept raw beside it, approved phonemes in one dictionary, no key in any log", async () => {
     const eleven = fakeElevenLabs();
     const voice = new ElevenLabsVoiceProvider({ apiKey: 'fake-key-for-tests', voiceId: 'fake-voice', model: 'eleven_v4', outputFormat: 'mp3_44100_128', usdPer1kChars: 0.022, fetch: eleven.fetch });
     const { app, c, of, lines } = await start({ voice, storage: new DurableStorage() });
@@ -307,14 +319,165 @@ describe('the voice acceptance path through the API (production wiring, nothing 
     expect(tts.filter((r) => r.body.pronunciation_dictionary_locators)).toEqual(withTerm);
     expect(withTerm.every((r) => JSON.stringify(r.body.pronunciation_dictionary_locators) === JSON.stringify([{ pronunciation_dictionary_id: 'dict-1', version_id: 'ver-1' }]))).toBe(true);
 
-    // The log: characters the provider reported, costed as an estimate at the configured rate, request ids, provider timings, the term used.
+    // The log: the characters sent, costed as an estimate at the configured rate (an upper bound); the provider's
+    // character cost (about 0.11 of them, unit unverified) kept raw beside it and never priced; request ids, timings, the term used.
+    // Pinned on purpose: this was usageSource REPORTED with the header's figure priced; the brief makes the characters sent the basis.
     const chunkLines = of('voice chunk', job.id);
     expect(chunkLines).toHaveLength(tts.length);
-    expect(chunkLines.every((x) => x.take.cost.basis === 'ESTIMATED' && x.take.cost.usageSource === 'REPORTED' && x.take.cost.attempts === 1 && x.take.cost.characters === x.characters && /^req-\d+$/.test(x.take.requestId) && x.take.alignment.source === 'PROVIDER')).toBe(true);
-    for (const l of of('voice run summary', job.id)) {
-      expect(l).toMatchObject({ provider: 'elevenlabs', model: 'eleven_v4', voiceId: 'fake-voice', outputFormat: 'mp3_44100_128', costBases: ['ESTIMATED'], reportedCharacters: l.characters, pronunciation: { unresolved: [], used: ['Pieter'] }, stopped: null });
-      expect(l.estimatedUsd).toBeCloseTo((l.characters * 0.022) / 1000, 5);
+    expect(chunkLines.every((x) => x.take.cost.basis === 'ESTIMATED' && x.take.cost.usageSource === 'COUNTED' && x.take.cost.attempts === 1 && x.take.cost.characters === x.characters && !x.take.cost.reestimated && /^req-\d+$/.test(x.take.requestId) && x.take.alignment.source === 'PROVIDER')).toBe(true);
+    for (const x of chunkLines) {
+      expect(x.take.cost.reported).toEqual([{ name: 'character-cost', quantity: characterCost(x.characters) }]);
+      expect(x.take.cost.estimatedUsd).toBeCloseTo((x.characters * 0.022) / 1000, 6);
+      expect(x.take.configuration).toEqual({ base: 'RUN', override: null, profile: 'House narrator v1', source: 'run configuration', differs: [], reconstructed: false });
     }
+    for (const l of of('voice run summary', job.id)) {
+      const mine = chunkLines.filter((x) => x.runId === l.runId);
+      const reported = mine.reduce((n, x) => n + characterCost(x.characters), 0);
+      expect(l).toMatchObject({ provider: 'elevenlabs', model: 'eleven_v4', voiceId: 'fake-voice', outputFormat: 'mp3_44100_128', costBases: ['ESTIMATED'], reestimated: false, pronunciation: { unresolved: [], used: ['Pieter'] }, stopped: null });
+      expect(l.providerReported).toEqual([{ name: 'character-cost', total: reported, requests: mine.length }]);
+      expect(l.costText).toBe(`sent ${count(l.characters)} characters; provider reported ${count(reported)} (character-cost header)`);
+      expect(l.estimatedUsd).toBeCloseTo((l.characters * 0.022) / 1000, 5);
+      expect(l).not.toHaveProperty('reportedCharacters');
+      // The Voice page says the same: the characters sent, the provider's figure beside them, the estimate from what was sent.
+      const r = (await get<VoiceView>(`/api/projects/${id}/voice?run=${l.run}`)).run!;
+      expect(r).toMatchObject({ characters: l.characters, cost: { basis: 'ESTIMATED', reported: [{ name: 'character-cost', quantity: reported }], reestimated: false } });
+      expect(r.cost.totalUsd).toBeCloseTo((l.characters * 0.022) / 1000, 5);
+      expect(r.chunks[0]!.current!.cost).toMatchObject({ basis: 'ESTIMATED', characters: r.chunks[0]!.current!.characters, reported: [{ name: 'character-cost', quantity: characterCost(r.chunks[0]!.current!.characters!) }], reestimated: false, note: expect.stringMatching(/sent \(the estimate's basis: an upper bound\); ElevenLabs reported \d+ \(character-cost header; its unit is unverified, so it is not priced\)$/) });
+    }
+
+    // A ledger row written before 2026-10-06 (the provider's figure priced, REPORTED: production's seven runs) reads re-estimated
+    // from the characters sent, the figure kept raw beside it and the row's own note kept; the row itself is not rewritten.
+    const first = (await get<VoiceView>(`/api/projects/${id}/voice?run=${runs[0]}`)).run!;
+    const take = first.chunks[0]!.current!;
+    const { providerCallId } = await db.voiceGeneration.findUniqueOrThrow({ where: { id: take.id }, select: { providerCallId: true } });
+    const figure = characterCost(take.characters!);
+    const earlier = { usage: [{ unit: 'CHARACTERS', quantity: figure }], response: { usageSource: 'REPORTED', attempts: 1 }, estimatedCostUsd: (figure * 0.022) / 1000, costNote: `${figure} characters reported by ElevenLabs` };
+    await db.providerCall.update({ where: { id: providerCallId! }, data: earlier });
+    const reread = (await get<VoiceView>(`/api/projects/${id}/voice?run=${runs[0]}`)).run!;
+    expect(reread.chunks[0]!.current!.cost).toMatchObject({
+      basis: 'ESTIMATED',
+      characters: take.characters,
+      reported: [{ name: 'character-cost', quantity: figure }],
+      reestimated: true,
+      note: `Re-estimated from the ${take.characters} characters sent: the ledger row (before 2026-10-06) priced the provider's own figure (${figure} characters reported by ElevenLabs)`,
+    });
+    expect(reread.chunks[0]!.current!.cost!.estimatedUsd).toBeCloseTo((take.characters! * 0.022) / 1000, 6);
+    expect(reread.cost).toMatchObject({ reestimated: true, reported: first.cost.reported });
+    expect(reread.cost.totalUsd).toBeCloseTo(first.cost.totalUsd, 5);
+    expect(await db.providerCall.findUniqueOrThrow({ where: { id: providerCallId! }, select: { usage: true, costNote: true } })).toEqual({ usage: earlier.usage, costNote: earlier.costNote });
+    expect(JSON.stringify(lines)).not.toContain('fake-key-for-tests');
+  });
+
+  it("§41 after the acceptance experiment (fake ElevenLabs): the chosen variant, read as production's run 3 is (made before saved profiles, costed by the earlier ledger), saved as the project's profile and used; one chunk regenerated with it exactly as the run made it and one with a temporary override, each logged with its profile, base, override and cost; a later edit of the profile leaves the run as it was", async () => {
+    const eleven = fakeElevenLabs();
+    const voice = new ElevenLabsVoiceProvider({ apiKey: 'fake-key-for-tests', voiceId: 'fake-voice', model: 'eleven_v4', outputFormat: 'mp3_44100_128', usdPer1kChars: 0.022, fetch: eleven.fetch });
+    const { app, c, of, lines } = await start({ voice, storage: new DurableStorage() });
+    const id = await approvedScript(c);
+    const project = await db.project.findUniqueOrThrow({ where: { id } });
+    const get = async <T>(url: string) => (await app.inject({ method: 'GET', url })).json<T>();
+    const post = (url: string, payload: unknown) => app.inject({ method: 'POST', url, payload: payload as object });
+
+    // The acceptance experiment as the dashboard runs it.
+    const { scope, variants, name } = VOICE_ACCEPTANCE_EXPERIMENT;
+    const audition = (await post(`/api/projects/${id}/voice/plan`, { scope })).json<VoicePlanView>();
+    const experiment = { name, scope, profileId: audition.profile.id, selectionRevision: audition.configuration.selectionRevision, variants: variants.map(({ label, strategy, chunking, context }) => ({ label, strategy, chunking, context })), confirm: true };
+    const { runs } = (await post(`/api/projects/${id}/voice/experiments`, experiment)).json<{ job: JobView; runs: number[] }>();
+    await c.runner.drain();
+    const n = runs[variants.findIndex((v) => v.label === 'C expressive')]!;
+    // Run C as production's run 3 is after the migration: made before saved profiles (no configuration on the run or its
+    // takes) and costed by the earlier ledger (the provider's figure priced, REPORTED).
+    const runId = (await db.voiceRun.findFirstOrThrow({ where: { projectId: id, number: n }, select: { id: true } })).id;
+    await db.voiceRun.update({ where: { id: runId }, data: { config: Prisma.DbNull } });
+    await db.voiceGeneration.updateMany({ where: { runId }, data: { config: Prisma.DbNull } });
+    let figures = 0;
+    for (const g of await db.voiceGeneration.findMany({ where: { runId }, select: { characters: true, providerCallId: true } })) {
+      const figure = characterCost(g.characters!);
+      figures += figure;
+      await db.providerCall.update({ where: { id: g.providerCallId! }, data: { usage: [{ unit: 'CHARACTERS', quantity: figure }], response: { usageSource: 'REPORTED', attempts: 1 }, estimatedCostUsd: (figure * 0.022) / 1000, costNote: `${figure} character(s) reported by ElevenLabs (character-cost)` } });
+    }
+    const before = (await get<VoiceView>(`/api/projects/${id}/voice?run=${n}`)).run!;
+    expect(before).toMatchObject({ variant: 'C expressive', configuration: { reconstructed: true, selection: null, profile: { name: 'House narrator', version: 1 }, runOptions: { strategy: 'EXPRESSIVE' } } });
+    expect(before.cost).toMatchObject({ basis: 'ESTIMATED', reported: [{ name: 'character-cost', quantity: figures }], reestimated: true });
+    expect(before.cost.totalUsd).toBeCloseTo((before.characters * 0.022) / 1000, 5);
+
+    // "Save this run's configuration as a voice profile", a name, "Use for this project": the project's profile, not the library default.
+    const saved = await post(`/api/voice/runs/${before.id}/save-profile`, { name: 'Tulip narrator', use: true });
+    expect(saved.statusCode).toBe(201);
+    const { profile, production, clearedOverrides } = saved.json<{ profile: VoiceProfileHistoryView; production: VoiceProductionView; clearedOverrides: object | null }>();
+    expect(clearedOverrides).toBeNull();
+    expect(profile).toMatchObject({ name: 'Tulip narrator', isDefault: false, provider: 'elevenlabs', language: 'en', versions: 1 });
+    expect(profile.current).toMatchObject({ version: 1, origin: { kind: 'RUN', run: n, project: project.slug, experiment: name, variant: 'C expressive', reconstructed: true }, notes: `Saved from voice run ${n} of ${project.slug} (${name} — C expressive)` });
+    expect(production).toMatchObject({ language: 'en', mode: 'FOLLOW', revision: 1, family: { id: profile.id, name: 'Tulip narrator', isDefault: false }, overrides: {}, problem: null });
+    expect(production.effective).toMatchObject({
+      provider: 'elevenlabs',
+      model: 'eleven_v4',
+      voiceId: 'fake-voice',
+      outputFormat: 'mp3_44100_128',
+      language: 'en',
+      strategy: 'EXPRESSIVE',
+      chunking: { minWords: 20, maxWords: 30 },
+      context: { previousChars: 200, nextChars: 120, stitch: false },
+      numberStyle: 'UK',
+    });
+    expect(production.effective).toEqual(before.configuration.effective);
+    // Eleven v4 is sent stability and similarity only; the rest are kept in the profile, not sent.
+    expect(production.sent).toEqual({ stability: 0.5, similarity: 0.75 });
+    expect(production.ignored.sort()).toEqual(['speakerBoost', 'speed', 'style']);
+    // The library default is still the house profile: another documentary is not touched.
+    const library = await get<{ families: { name: string; isDefault: boolean }[] }>('/api/voice/profiles');
+    expect(library.families.filter((f) => f.isDefault).map((f) => f.name)).toEqual(['House narrator']);
+
+    // Regenerate one chunk with the production profile, and another with a temporary override (stability 0.3).
+    const [one, two] = [before.chunks[1]!, before.chunks[2]!];
+    const asked = eleven.requests.length;
+    const withProduction = await post(`/api/voice/runs/${before.id}/regenerate`, { chunkIds: [one.id], configuration: 'PRODUCTION', selectionRevision: production.revision });
+    expect(withProduction.statusCode).toBe(202);
+    const job1 = withProduction.json<{ job: JobView }>().job;
+    await c.runner.drain();
+    const withOverride = await post(`/api/voice/runs/${before.id}/regenerate`, { chunkIds: [two.id], override: { providerSettings: { stability: 0.3 } } });
+    expect(withOverride.statusCode).toBe(202);
+    const job2 = withOverride.json<{ job: JobView }>().job;
+    await c.runner.drain();
+    const sent = eleven.requests.slice(asked).filter((r) => r.path.endsWith('/with-timestamps'));
+    expect(sent.map((r) => r.body.voice_settings)).toEqual([
+      { stability: 0.5, similarity_boost: 0.75 },
+      { stability: 0.3, similarity_boost: 0.75 },
+    ]);
+
+    const after = (await get<VoiceView>(`/api/projects/${id}/voice?run=${n}`)).run!;
+    expect(after.chunks[1]!.current).toMatchObject({ generation: 2, status: 'IN_REVIEW', profile: { familyId: profile.id, familyName: 'Tulip narrator', version: 1 }, configuration: { base: 'PRODUCTION', override: null, profile: { familyName: 'Tulip narrator', version: 1 }, differs: [], identityDiffers: false } });
+    expect(after.chunks[2]!.current).toMatchObject({ generation: 2, status: 'IN_REVIEW', profile: { name: 'House narrator', version: 1 }, configuration: { base: 'RUN', override: { providerSettings: { stability: 0.3 } }, differs: ['stability: 0.3 (run: 0.5)'], identityDiffers: true } });
+    expect(after.qa.filter((f) => f.kind === 'CONFIGURATION_DIFFERS')).toEqual([expect.objectContaining({ severity: 'WARNING', ref: '#3', detail: expect.stringContaining('a temporary override: stability: 0.3 (run: 0.5)') })]);
+    expect(after.configuration).toEqual(before.configuration);
+    // Saved from run C and used as it is, the production profile makes the chunk as run C made it.
+    expect(after.chunks[1]!.current!.performanceText).toBe(before.chunks[1]!.current!.performanceText);
+    expect(after.chunks[1]!.current!.prepared!.settings).toEqual(before.chunks[1]!.current!.prepared!.settings);
+    expect(after.chunks.filter((ch) => ch.current!.generation === 1).every((ch) => ch.current!.configuration.reconstructed && ch.current!.cost!.reestimated)).toBe(true);
+
+    // Each regeneration's log names the take's profile, base and override, and its cost from the characters sent.
+    for (const [job, base, override, source, take] of [
+      [job1, 'PRODUCTION', null, 'production profile', after.chunks[1]!.current!],
+      [job2, 'RUN', { providerSettings: { stability: 0.3 } }, 'temporary override', after.chunks[2]!.current!],
+    ] as const) {
+      const [regen] = of('voice regeneration summary', job.id);
+      const t = regen.chunks[0].takes[0];
+      expect(t).toMatchObject({ id: take.id, generation: 2, configuration: { base, override, source, profile: base === 'PRODUCTION' ? 'Tulip narrator v1' : 'House narrator v1' } });
+      expect(t.cost).toMatchObject({ basis: 'ESTIMATED', usageSource: 'COUNTED', characters: take.characters, reported: [{ name: 'character-cost', quantity: characterCost(take.characters!) }], reestimated: false });
+      expect(t.cost.estimatedUsd).toBeCloseTo((take.characters! * 0.022) / 1000, 6);
+      expect(regen).toMatchObject({ configurations: { run: base === 'RUN' ? 1 : 0, production: base === 'PRODUCTION' ? 1 : 0, overridden: override ? 1 : 0 }, profiles: [base === 'PRODUCTION' ? 'Tulip narrator v1' : 'House narrator v1'], othersIntact: true });
+      const [summary] = of('voice run summary', job.id);
+      expect(summary).toMatchObject({ runId: before.id, profile: { family: 'House narrator', version: 1 }, configuration: { reconstructed: true }, reestimated: true });
+      expect(summary.costText).toMatch(/^sent [\d,]+ characters; provider reported [\d,]+ \(character-cost header\)$/);
+    }
+
+    // A later edit of the profile is a new version: production follows it, run C and its takes keep what they were made with.
+    const takes = after.chunks.map((ch) => ch.generations.map((g) => g.configuration));
+    const edited = await post(`/api/voice/profiles/${profile.id}/versions`, { expectedCurrent: profile.current!.id, fields: { providerSettings: { stability: 0.6 } } });
+    expect(edited.json<VoiceProfileHistoryView>().current).toMatchObject({ version: 2, changes: ['stability: 0.5 → 0.6'] });
+    expect((await get<VoiceProductionView>(`/api/projects/${id}/voice/selection`)).profile).toMatchObject({ version: 2 });
+    const later = (await get<VoiceView>(`/api/projects/${id}/voice?run=${n}`)).run!;
+    expect(later.configuration).toEqual(before.configuration);
+    expect(later.chunks.map((ch) => ch.generations.map((g) => g.configuration))).toEqual(takes);
     expect(JSON.stringify(lines)).not.toContain('fake-key-for-tests');
   });
 });

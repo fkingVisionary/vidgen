@@ -22,6 +22,9 @@ const MP3 = (() => {
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 
+/** 184 characters: at eleven_v4's list price ($0.08 per 1,000) they cost $0.01472. */
+const LINE = 'In the winter of 1636, a single tulip bulb could change hands several times in one day, each buyer certain that the next would pay more. Nobody at the table had seen the flower itself.';
+
 function setup(responses: Response[]) {
   const rows: Record<string, unknown>[] = [];
   const db = {
@@ -43,42 +46,53 @@ function setup(responses: Response[]) {
     logger: silentLogger,
     signal: new AbortController().signal,
   });
-  const narrate = (summarize: (r: { durationMs: number }) => unknown = (r) => ({ durationMs: r.durationMs })) =>
-    ctx.callProvider('voice', 'generateNarration', () => voice.generateNarration({ text: 'Short line.', language: 'en', settings: { voiceId: 'voice-abc', model: 'eleven_v4', stability: 0.5, similarity: 0.75, style: 0, speed: 1 }, withTimestamps: true }), { summarize });
+  const narrate = (summarize: (r: { durationMs: number }) => unknown = (r) => ({ durationMs: r.durationMs }), text = 'Short line.') =>
+    ctx.callProvider('voice', 'generateNarration', () => voice.generateNarration({ text, language: 'en', settings: { voiceId: 'voice-abc', model: 'eleven_v4', provider: voice.normalizeSettings({}).settings }, withTimestamps: true }), { summarize });
   return { rows, narrate };
 }
 
 describe('the provider_calls ledger', () => {
-  it('records the attempts a call took and whether its usage was reported or counted', async () => {
+  // Pinned behaviour changed on purpose: the usage was the character-cost figure (REPORTED); it is now the characters sent (COUNTED), with that figure kept raw as `reported`.
+  it('records the attempts a call took, its usage counted as sent, and what the vendor reported raw beside it', async () => {
     const { rows, narrate } = setup([
       json(429, { detail: { code: 'concurrent_limit_exceeded', message: 'busy' } }),
-      json(200, { audio_base64: MP3, alignment: null }, { 'character-cost': '11', 'request-id': 'req-1', 'history-item-id': 'hist-1' }),
+      json(200, { audio_base64: MP3, alignment: null }, { 'character-cost': '20', 'request-id': 'req-1', 'history-item-id': 'hist-1' }),
     ]);
-    await narrate();
+    expect(LINE).toHaveLength(184);
+    await narrate(undefined, LINE);
     expect(rows[0]).toMatchObject({
       status: 'SUCCEEDED',
       providerRequestId: 'req-1',
       providerJobId: 'hist-1',
-      usage: [{ unit: 'CHARACTERS', quantity: 11 }],
-      response: { durationMs: 52, attempts: 2, usageSource: 'REPORTED' },
+      usage: [{ unit: 'CHARACTERS', quantity: 184 }],
+      response: { durationMs: 52, attempts: 2, usageSource: 'COUNTED', reported: [{ name: 'character-cost', quantity: 20 }] },
       costBasis: 'ESTIMATED',
-      costNote: '11 character(s) reported by ElevenLabs (character-cost)',
+      // Priced from the 184 characters sent, never from the 20 reported.
+      estimatedCostUsd: 0.01472,
+      costNote: "184 characters sent (the estimate's basis: an upper bound); ElevenLabs reported 20 (character-cost header; its unit is unverified, so it is not priced)",
     });
   });
 
-  it('costs a failure after a 2xx (the characters may have been billed) as an ESTIMATE, not as nothing', async () => {
-    const { rows, narrate } = setup([json(200, { alignment: null }, { 'request-id': 'req-2' })]);
-    await expect(narrate()).rejects.toThrow(/Response had no audio/);
+  it('costs a failure after a 2xx (the characters may have been billed) as an ESTIMATE, not as nothing, and records what was reported', async () => {
+    const { rows, narrate } = setup([json(200, { alignment: null }, { 'request-id': 'req-2', 'character-cost': '20' })]);
+    await expect(narrate(undefined, LINE)).rejects.toThrow(/Response had no audio/);
     expect(rows[0]).toMatchObject({
       status: 'FAILED',
       error: '[elevenlabs] Response had no audio',
       providerRequestId: 'req-2',
-      usage: [{ unit: 'CHARACTERS', quantity: 11 }],
-      response: { attempts: 1, usageSource: 'COUNTED' },
+      usage: [{ unit: 'CHARACTERS', quantity: 184 }],
+      response: { attempts: 1, usageSource: 'COUNTED', reported: [{ name: 'character-cost', quantity: 20 }] },
       costBasis: 'ESTIMATED',
-      estimatedCostUsd: 0.00088,
-      costNote: 'Response unusable; characters may have been billed. ElevenLabs reported no character cost: 11 character(s) counted as sent',
+      estimatedCostUsd: 0.01472,
+      costNote: "Response unusable; characters may have been billed. 184 characters sent (the estimate's basis: an upper bound); ElevenLabs reported 20 (character-cost header; its unit is unverified, so it is not priced)",
     });
+  });
+
+  it('records nothing reported when the vendor reports nothing', async () => {
+    const { rows, narrate } = setup([json(200, { alignment: null }, { 'request-id': 'req-3' })]);
+    await expect(narrate()).rejects.toThrow(/Response had no audio/);
+    expect(rows[0]).toMatchObject({ usage: [{ unit: 'CHARACTERS', quantity: 11 }], estimatedCostUsd: 0.00088, costNote: "Response unusable; characters may have been billed. 11 characters sent (the estimate's basis: an upper bound); ElevenLabs reported no character cost" });
+    expect(rows[0]!.response).toEqual({ attempts: 1, usageSource: 'COUNTED' });
   });
 
   it('records the attempts of a failure that was never served, and costs nothing for it', async () => {
@@ -96,7 +110,7 @@ describe('the provider_calls ledger', () => {
     expect(rows[0]!.response).toEqual({ summary: [52], attempts: 1, usageSource: 'COUNTED' });
   });
 
-  it('prices characters counted as sent as an ESTIMATE, like reported ones', () => {
+  it('prices characters counted as sent as an ESTIMATE', () => {
     expect(priceCall({ provider: 'elevenlabs', model: 'eleven_v4', mock: false, usage: [{ unit: 'CHARACTERS', quantity: 1000 }], usageSource: 'COUNTED', attempts: 1 }, [{ provider: 'elevenlabs', model: 'eleven_v4', unit: 'CHARACTERS', usdPerUnit: 0.00008 }])).toMatchObject({ costBasis: 'ESTIMATED', estimatedCostUsd: 0.08 });
   });
 });
