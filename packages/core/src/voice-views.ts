@@ -400,6 +400,16 @@ export interface NarrationTimelineView {
   run: number;
   scriptVersion: number;
   assembly: number;
+  /** The rows behind the numbers, so a reader links by id (absent where a reader does not fill them in). */
+  assemblyId?: string;
+  runId?: string;
+  scriptId?: string;
+  /** The voice profile version the run narrated with. */
+  profileId?: string;
+  runKind?: VoiceRunKind;
+  /** The block keys the run's scope resolved to. */
+  scopeBlockKeys?: string[];
+  languageVersionId?: string;
   status: ArtifactStatus;
   complete: boolean;
   totalDurationMs: number;

@@ -1,8 +1,8 @@
-import { NotFoundError } from '@docengine/pipeline';
+import { ConflictError, NotFoundError } from '@docengine/pipeline';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { actorOf } from '../auth.ts';
-import type { AppContainer } from '../container.ts';
+import { VISUAL_GENERATION_HELD, visualGenerationHeld, type AppContainer } from '../container.ts';
 import { JOB_VIEW_OMIT, toJobView } from '../views.ts';
 
 const Params = z.object({ id: z.uuid() });
@@ -15,9 +15,12 @@ export async function jobRoutes(app: FastifyInstance, c: AppContainer): Promise<
     return toJobView(job);
   });
 
-  /** Retry a FAILED/CANCELLED job (recovers a FAILED project when it is the job that failed it). */
+  /** Retry a FAILED/CANCELLED job (recovers a FAILED project when it is the job that failed it). Visual generation stays held (the hard stop). */
   app.post('/api/jobs/:id/retry', async (req, reply) => {
     const { id } = Params.parse(req.params);
+    const earlier = await c.db.job.findUnique({ where: { id }, select: { type: true } });
+    if (!earlier) throw new NotFoundError('Job', id);
+    if (visualGenerationHeld(c.realStages, earlier.type)) throw new ConflictError(VISUAL_GENERATION_HELD);
     const job = await c.projects.retryJob(id, actorOf(req));
     return reply.code(202).send(toJobView(job));
   });

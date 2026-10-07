@@ -23,6 +23,7 @@ const NOT_DONE: Record<JobType, string> = {
   SCRIPT: 'No script was written.',
   VOICE: 'No speech was synthesised (mock audio is a beep followed by silence).',
   VISUAL_PLAN: 'No storyboard was created.',
+  STORYBOARD_PREVIEW: 'No storyboard preview was created.',
   VISUAL_GENERATION: 'No imagery was generated (mock output is a labelled placeholder).',
   INFOGRAPHIC: 'No infographic was rendered.',
   EDIT: 'No timeline was assembled.',
@@ -97,6 +98,8 @@ const handlers: StageHandler[] = [
     },
   },
   textStage('VISUAL_PLAN', 'visual.storyboard'),
+  // Runnable while the narration is reviewed: it calls no provider, so it never spends on a placeholder.
+  { type: 'STORYBOARD_PREVIEW', mock: true, run: async () => mockResult('STORYBOARD_PREVIEW') },
   {
     type: 'VISUAL_GENERATION',
     mock: true,

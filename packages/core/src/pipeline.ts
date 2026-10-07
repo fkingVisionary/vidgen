@@ -125,8 +125,10 @@ export const STATUS_DEFINITIONS: Record<ProjectStatus, StatusDefinition> = {
     stage: 'STORYBOARD',
     stageState: 'AWAITING_APPROVAL',
     jobs: [],
-    gate: { gate: 'STORYBOARD', onApprove: 'VISUAL_GENERATING', onReject: 'VISUAL_PLANNING' },
+    gate: { gate: 'STORYBOARD', onApprove: 'STORYBOARD_APPROVED', onReject: 'VISUAL_PLANNING' },
   },
+  // An approved storyboard starts nothing: paid visual generation is a separate, human-initiated start.
+  STORYBOARD_APPROVED: { stage: 'STORYBOARD', stageState: 'COMPLETE', jobs: [], next: 'VISUAL_GENERATING' },
 
   VISUAL_GENERATING: {
     stage: 'ASSETS',
@@ -172,6 +174,8 @@ export const STATUS_DEFINITIONS: Record<ProjectStatus, StatusDefinition> = {
 export const SIDE_JOBS: Readonly<Partial<Record<JobType, readonly ProjectStatus[]>>> = {
   // Alternative narrative angles from the curated story pack, before committing to one.
   STORY_ANGLES: ['STORY_SELECTION', 'STORY_REVIEW', 'STORY_APPROVED'],
+  // A storyboard of the narrated part of the script (an audition, a section), before or after the VOICE gate.
+  STORYBOARD_PREVIEW: ['VOICE_REVIEW', 'VOICE_COMPLETE'],
 };
 
 export function isSideJob(type: JobType): boolean {

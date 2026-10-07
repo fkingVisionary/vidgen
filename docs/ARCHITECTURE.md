@@ -1,8 +1,9 @@
 # Architecture — Documentary Engine V1
 
-> Status: **milestone 2 (research engine)** on top of milestone 1
-> (architecture & scaffold). What is real, mocked and
-> planned is tracked in [STATUS.md](STATUS.md). Deployment is in
+> Status: V1 through **Storyboard Engine V1** (§18): research, story,
+> script, writing, voice and the storyboard are real; visual generation,
+> edit, render, QA and publishing are MOCK. What is real, mocked and planned
+> is tracked in [STATUS.md](STATUS.md). Deployment is in
 > [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## 1. Principles
@@ -77,9 +78,9 @@ packages/
   database/   Prisma 7 schema, migrations, client factory, test helpers
   providers/  Provider interfaces, MOCK implementations, registry, reusable contract test suites
   pipeline/   ProjectService (state changes), JobQueue, JobRunner, StageContext, stage handler contract, MOCK stage handlers
-modules/      Real stage implementations: research (M2), story (M3: mining + architecture, revisions, angles), script (Script Engine 1.0), voice (Voice Engine V1), writing (Writing Engine 2, a library); later visual-director, infographics, editor, qa
+modules/      Real stage implementations: research (M2), story (M3: mining + architecture, revisions, angles), script (Script Engine 1.0), voice (Voice Engine V1), writing (Writing Engine 2, a library), storyboard (Storyboard Engine V1); later visual generation, infographics, editor, qa
 docs/         Architecture, deployment, status
-scripts/      release.sh (migrations + seed), test DB init, ui/ (browser QA of the Voice page, MOCK voice)
+scripts/      release.sh (migrations + seed), test DB init, ui/ (browser QA of the Voice and Storyboard pages, every provider MOCK)
 test/         Shared integration-test setup
 ```
 
@@ -104,7 +105,7 @@ Creating eight empty packages today would be ceremony without content.
 ## 4. Pipeline and state machine
 
 The project `status` is the master pipeline phase (linear, as in the brief,
-plus three added review statuses — see §18, D5–D6, D77). Dashboard stages are derived.
+plus three added review statuses and one milestone — see §19, D5–D6, D77, D112). Dashboard stages are derived.
 
 | Status | Dashboard stage | Jobs that run here | Leaves by |
 |---|---|---|---|
@@ -124,7 +125,8 @@ plus three added review statuses — see §18, D5–D6, D77). Dashboard stages a
 | VOICE_REVIEW | Voice (review takes; awaiting approval) | — | **gate VOICE** (a full run of the approved script, every current take approved, nothing blocking): approve → VOICE_COMPLETE, reject → VOICE_GENERATING. New takes re-enter VOICE_GENERATING by the reject path (no decision recorded). |
 | VOICE_COMPLETE | Voice ✓ | — | START → VISUAL_PLANNING |
 | VISUAL_PLANNING | Storyboard | VISUAL_PLAN | → STORYBOARD_REVIEW |
-| STORYBOARD_REVIEW | Storyboard (awaiting approval) | — | **gate STORYBOARD**: approve → VISUAL_GENERATING, reject → VISUAL_PLANNING |
+| STORYBOARD_REVIEW | Storyboard (awaiting approval) | — | **gate STORYBOARD** (a whole-script version on the narration the VOICE gate approved, nothing blocking, §18): approve → STORYBOARD_APPROVED, reject → VISUAL_PLANNING (a paid re-plan) |
+| STORYBOARD_APPROVED | Storyboard ✓ | — | START → VISUAL_GENERATING — **held**: while the storyboard stage is real the server refuses VISUAL_GENERATION and INFOGRAPHIC (§18, *The hard stop*) |
 | VISUAL_GENERATING | Assets | VISUAL_GENERATION, INFOGRAPHIC (parallel) | both done → VISUAL_REVIEW |
 | VISUAL_REVIEW | Assets (awaiting approval) | — | **gate VISUAL_ASSETS**: approve → EDITING, reject → VISUAL_GENERATING |
 | EDITING | Timeline | EDIT | → RENDERING |
@@ -140,9 +142,11 @@ returns `null` for is illegal (e.g. `SCRIPT_REVIEW → VOICE_GENERATING`).
 
 **Side jobs (`SIDE_JOBS`).** A side job belongs to no phase: it runs while the
 project is in one of its listed statuses and never starts, completes or fails
-a phase. Today there is one: STORY_ANGLES (alternative narrative angles) runs
-in STORY_SELECTION, STORY_REVIEW and STORY_APPROVED (§14). Its failure shows on
-the job only; a retry runs where it may run.
+a phase. There are two: STORY_ANGLES (alternative narrative angles) runs
+in STORY_SELECTION, STORY_REVIEW and STORY_APPROVED (§14), and
+STORYBOARD_PREVIEW (a storyboard of narrated audition blocks) in VOICE_REVIEW
+and VOICE_COMPLETE (§18). A failure shows on the job only; a retry runs where
+it may run.
 
 **Phase runs (`phase_seq`).** Each time a project enters a phase, its
 `phase_seq` increments and queued jobs from the previous run are cancelled.
@@ -155,7 +159,7 @@ failed) are not thrown away.
 
 ## 5. Data model
 
-37 tables. Fields that are filtered/joined/queried are typed columns; creative
+50 tables. Fields that are filtered/joined/queried are typed columns; creative
 payloads still evolving (story sequences, shot direction, infographic specs,
 timeline tracks, QA findings) are JSONB validated by zod contracts in
 `packages/core/src/contracts`. Primary keys are UUIDv7. Timestamps are
@@ -192,9 +196,19 @@ erDiagram
   research_claims ||--o{ script_block_claims : ""
   story_architectures ||--o{ scripts : "told by"
   projects ||--o{ storyboards : versions
-  storyboards ||--o{ shots : plans
+  storyboards ||--o{ visual_beats : "versioned plan"
+  visual_beats ||--o{ shots : plans
+  storyboards ||--o{ shots : ""
   scenes ||--o{ shots : ""
-  shots ||--o{ provider_calls : "generation attempts"
+  shots ||--o{ shot_blocks : "narration words"
+  script_blocks ||--o{ shot_blocks : ""
+  shots ||--o{ shot_claims : "evidence"
+  research_claims ||--o{ shot_claims : ""
+  storyboards ||--o{ continuity_subjects : "recurring subjects"
+  storyboards ||--o{ storyboard_decisions : "append-only"
+  voice_assemblies ||--o{ storyboards : "timed on"
+  visual_profiles ||--o{ storyboards : "planned with"
+  shots ||--o{ provider_calls : "generation attempts (later)"
   projects ||--o{ infographics : "deterministic specs"
   language_versions ||--o{ timelines : "per-language edit"
   language_versions ||--o{ renders : outputs
@@ -253,11 +267,22 @@ erDiagram
 |---|---|
 | `writing_examples` | House-style examples from the team's approved scripts, in the corpus's own shape (category, quality, traits, strengths, weaknesses, spoken rhythm, narrative function, why it works / fails, source, copyright-safe, approved for retrieval) with the script version and block they came from. CANDIDATE until a person approves (with a reason), rejects or retires it; one row per wording (`text_hash`). The seed corpus is files in the repository, not rows. A narration pass's record (corpus version, examples used, diagnostics before and after, money context, names, lineage) is part of `scripts.content` (`narration`, optional). |
 
+### Storyboard (Storyboard Engine V1, §18)
+
+| Table | Notes |
+|---|---|
+| `storyboards` | Versioned (`unique(project_id, version)`: one version line per project, previews and whole-script versions alike), status `StoryboardStatus` (DRAFT / IN_REVIEW / CHANGES_REQUESTED / APPROVED / REJECTED / SUPERSEDED), `scope` (FULL or PARTIAL), the pins — `script_id`, `story_id`, `language_version_id`, `voice_run_id`, `voice_assembly_id`, `assembly_version`, `narration_fingerprint`, `visual_profile_id` (RESTRICT) — `engine_version`, `content` (`StoryboardContent`: inputs with the profile and pricing snapshots, provenance, scope, approaches, cost rollup and alternatives, rhythm, evidence coverage, normalization notes, changes from the base), `qa` and `qa_passed` as saved, `runtime_ms`, beat and shot counts, `estimated_cost_usd` (null when nothing is priced), `cost_basis`, `unpriced_shot_count`, `revision_of_id`, `job_id`, `decided_by` / `decided_at`, `created_by`. Only the status columns ever change. Approvals link the exact version (`approvals.storyboard_id`). |
+| `visual_beats`, `visual_beat_blocks`, `visual_beat_claims` | A beat (`beat_key` VB01…): scene, sequence, architecture beat ids, start and end on the assembly's clock, treatment, class, `content` (`VisualBeatContent`: title, purpose, concept, information, evidence relationship, importance, complexity, options A/B/C, continuity) and `content_hash`; the script blocks and word ranges it covers; its claims. |
+| `shots` (extended) | `beat_id`, `shot_key` (SH001…, `unique(storyboard_id, shot_key)`), `start_ms` / `end_ms`, `timing_relation` and `timing` (`ShotTiming`: cut-point anchors, lead-in, tail-out, bridge), `treatment`, `production_method`, `info_class`, `direction` (now the `ShotSpec`), `asset_requirement`, `evidence` (the verdicts it was planned on), `cost_estimate`, `estimated_cost_usd`, `cost_basis`, `content_hash`. `visual_type` is now optional (deprecated); `generation_prompt` / `negative_prompt` stay null (prompts are written per provider in the generation milestone). Generation attempts will be `provider_calls` rows with `shot_id`. |
+| `shot_blocks`, `shot_claims`, `shot_subjects` | The words a shot supports (`script_block_id`, start, end, first and last word); its claims with a role (DEPICTS, SHOWS_SOURCE, DATA, CONTEXT, PERIOD_BASIS); its continuity subjects with their role, action, interactions, likeness and speech. The claim links (beats' too) are `NO ACTION DEFERRABLE INITIALLY DEFERRED`: a linked claim cannot be deleted, a whole project still cascades. |
+| `continuity_subjects` | A recurring character, place, object, document or map (`subject_key` CS01…): kind, cast id (characters are cast members or anonymous), name, class, `spec` (`ContinuitySpec`: description, era, location, age, clothing, appearance, identity, design details each with its basis, rules, appearances, the reference asset it requires). |
+| `storyboard_decisions` | Append-only decisions on a version (shot null) or a shot: APPROVED / REJECTED / CHANGES_REQUESTED / CLEARED, note, who, the gate approval it was recorded with, and `carried_from_id` for a decision copied to identical content in a later version. |
+| `visual_profile_families`, `visual_profiles`, `visual_selections` | The visual style profile library (a family with immutable versions of `VisualStyleProfileConfig`, origin, based-on) and a project's choice (follow a family, pin a version or the library default; its own `overrides`; a `revision`). |
+
 ### Creative artifacts (schema only — no code writes them yet)
 
 | Table | Notes |
 |---|---|
-| `storyboards`, `shots` | Shot type, camera motion, visual type, duration, `direction` JSON (lens, composition, period, characters, props, lighting, colour, action, continuity), provider-neutral `generation_prompt` / `negative_prompt`, selected asset. Generation attempts are `provider_calls` rows with `shot_id`, so a failed shot is retried on its own. |
 | `infographics` | Chart type + `spec` (the `InfographicSpec` contract: data, labels, annotations, mandatory source, animation, duration). Rendered deterministically. |
 | `timelines`, `renders`, `qa_reports` | Per language. Timeline track contract is defined in the editing milestone. |
 
@@ -374,6 +399,8 @@ stateDiagram-v2
   with details; §16). Only the database decides the HTTP status.
 - **Voice jobs** log a structured summary per chunk, per run, per
   regeneration and per experiment (§16, *Acceptance logging*).
+- **Storyboard jobs** log one summary line per saved version, read back
+  from the database (§18, *Acceptance logging*).
 
 ## 9. Security
 
@@ -416,6 +443,54 @@ could not be used still costs its characters). When the provider says, a
 row's `response` also records the HTTP attempts (retries included),
 whether the usage was REPORTED by the vendor or COUNTED, and any figure the
 vendor reported beside it (`reported`, raw, under its own name).
+
+### Visual forecasts (Storyboard Engine V1)
+
+The storyboard prices what its shots *would* cost to produce. A forecast is
+never spend: it is never written to `provider_calls`, never counted in the
+project's cost card and never checked against a job's ceiling. The only
+spend of a storyboard job is its own planning calls through the AI provider,
+which are ledger rows like any other model call (basis ESTIMATED) and are
+held under `STORYBOARD_MAX_COST_USD`.
+
+- **Where prices live.** Only in `packages/providers/src/visual/`: one card
+  per provider with its models (methods, aspect ratios, resolutions, clip
+  lengths, how a shot is billed) and rates. Core holds the provider-neutral
+  data (which methods make each treatment, reroll allowances, density
+  targets) and no price. The catalog has a version (`CATALOG_VERSION`,
+  `2026-10-06.2`); a test pins a digest of its content, so a price cannot
+  change without a new version.
+- **Confidence.** Every rate carries a source and a check date (YYYY-MM-DD)
+  and one of LIST_PRICE (verified on the vendor's own price page: the
+  generated video and still models, checked 2026-10-06, the standard rate
+  where the vendor also showed a temporary discount), PLAN_PRICE (the user's
+  own price, from `VISUAL_PRICE_OVERRIDES`) or ASSUMPTION (labelled with its
+  reason: the in-house renderers at $0, "no vendor charge; self-hosted render
+  compute not priced"; an archival item at `ARCHIVAL_USD_PER_ITEM`). A price
+  nobody verified is not there: the shot is **UNPRICED**, never $0 — archival
+  and document items, stock, and any model the catalog does not know.
+- **Per shot.** The router narrows the treatment's methods by class and
+  profile, orders candidates by the profile's provider preferences and the
+  frame it needs, and prices each: the usage a model bills for the shot's
+  real narration time (a clip model rounds up to the clip lengths it makes,
+  and a longer shot becomes several clips, chosen to bill the least) × the
+  rate × (1 + rerolls). Rerolls default to 1.5 for generated video, 1.3 for a
+  generated still and 0 for renderers and sourced items; a profile may
+  override them. A shot that reuses an earlier shot's asset costs $0 and
+  says which; generated footage is reused only by a shot no longer than it.
+  A person's recommendation (provider and model) is kept across re-costing.
+- **Rollups.** By treatment, method, provider, model, section, beat and
+  shot, plus a finished-minute figure. A rollup with anything unpriced is
+  MIXED; with nothing priced its total is null. The total and the unpriced
+  count are always shown together.
+- **Frozen.** Each version stores the rates it used (`content.inputs.pricing`,
+  with the catalog version). A later catalog shows STALE_PRICING on older
+  versions; their figures do not move.
+- **Cheaper alternatives** (animated stills, a generated still, the sourced
+  record a shot already shows, the environment the version already has) are
+  offered per section with what the picture loses and what applying them
+  costs; applying one is an edit that makes a new version. Nothing is
+  downgraded automatically.
 
 ## 11. Research engine (milestone 2)
 
@@ -2218,7 +2293,358 @@ The Voice Engine is unchanged: it reads the same script shapes (every new
 field is optional), speaks only `block.text`, and its tests are untouched.
 No model call is made by the writing module; no live voice is generated.
 
-## 18. Decisions
+## 18. Storyboard Engine V1
+
+The storyboard decides what is on screen, when, why and how it should be
+produced. It turns approved narration into a visual blueprint of beats and
+shots and generates nothing: no image, video, voice, render or edit, and no
+call to a visual vendor. Its only paid calls are its own planning calls
+through the AI provider, under a per-job ceiling.
+
+```
+approved script → approved narration (one pinned voice assembly) → word timings on the measured clock
+  → narration spine (words, sentences, silences, cut points by id)
+  → visual beats (model: ranges of cut points, approaches A/B/C, continuity subjects) → validated by code
+  → shots per section (model: structured spec, treatment, claims, subjects) → normalized, timed, classed, routed, costed by code
+  → one repair round for beats that still block → QA → an immutable version IN_REVIEW → a person decides
+```
+
+Module `modules/storyboard` (`@docengine/storyboard`): a pure core (spine,
+timing, inheritance, rules, rhythm, routing, cost, approaches, edits, hashes,
+staleness) and its I/O (inputs, prompts, stage, store, editing, decisions,
+gate, profiles, views, summary log). Price cards live in
+`packages/providers/src/visual/` (§10, *Visual forecasts*). Pages: the
+Storyboard page and the Visual profiles library.
+
+### Principles
+
+- **Audio first.** Timing comes only from one pinned voice assembly: the
+  takes' word timings on the assembled clock. There is no words-per-minute
+  path. Blocks without audio are out of scope (counted, never estimated).
+- **Treatment before provider.** A shot's primary field is its treatment
+  (20, provider-neutral: CINEMATIC_RECONSTRUCTION … MOTION_GRAPHIC). The
+  production method follows from it; a provider and model are only a
+  recommendation from the catalog. The shot spec is structured fields, never
+  a prompt: prompts are written per provider in the generation milestone.
+- **Deterministic first.** The model proposes beats, concepts, treatments and
+  shot content using cut-point ids and keys from its brief. Code computes
+  every time, class, evidence link, cost, rhythm figure and blocking check,
+  and records what it changed.
+- **Read-only upstream.** Research, story, script and voice rows are read,
+  never written (a boundary test). Inputs are read strictly: a stored JSON
+  that does not parse fails loudly.
+- **Nothing is approved automatically.** Versions are immutable, decisions
+  are append-only rows, staleness is derived on read.
+
+### Inputs and pins
+
+A storyboard is planned from one voice run of the approved script in the
+master language. The request names the run (and optionally an assembly);
+everything is pinned on the version: script, architecture, language version,
+run, assembly and its version, the narration fingerprint (sha256 of each
+clip's chunk, take, start, end and gap — equal whenever the clips are, even
+across a RESTORE), the take list, the visual profile version with the
+project's overrides and their provenance, the price snapshot and the story
+candidates' period and place (era context, never claims). The evidence is
+loaded fresh, never from the cached script scope.
+
+- A **preview** (STORYBOARD_PREVIEW, a side job) runs in VOICE_REVIEW or
+  VOICE_COMPLETE on any run, by default the run's latest assembly; it never
+  moves the project and is always scope PARTIAL.
+- The **phase job** (VISUAL_PLAN) runs from VOICE_COMPLETE on the assembly
+  the newest approving VOICE decision names, and nothing else. Its version is
+  FULL when that assembly is complete and narrates every block.
+- Refused at the request (409): a run not in the master language, a run of a
+  script other than the approved one, another assembly than the VOICE gate's
+  for the phase job, a profile choice changed since the page was read
+  (`selectionRevision`), another storyboard job queued or running.
+- **Narration approval**, snapshotted and recomputed live: GATE_APPROVED
+  (the assembly the VOICE gate approved), TAKES_APPROVED (every pinned take
+  approved) or UNREVIEWED ("provisional timing").
+
+### The spine, cut points and timing
+
+`buildSpine` reads the takes each assembly entry names (never a chunk's
+current take), maps every timed word to its block by character offset, and
+lists silences over 120 ms. Cut points have canonical ids — `"<block>:<word>"`
+(before that word), `"<block>:end"`, `⟨start⟩`, `⟨end⟩` — and a kind: SCOPE_EDGE,
+BLOCK, SECTION, SENTENCE, CLAUSE (a comma, semicolon, colon or dash with at
+least three words after it) or PAUSE (400 ms or more). Both sides of a cut
+point are timed words or a clip edge; a take without word timings offers only
+its clip edges (UNALIGNED_TAKE). The spine is cross-checked against the
+assembly's stored timeline; a mismatch refuses the job.
+
+The model names ranges of cut points. Code turns them into time: the cut
+between two shots falls in the middle of their shared silence, so **the
+shots tile the clock by construction** (0 to the assembly's length, no gap,
+no overlap), and every narrated word is in exactly one shot (and one beat).
+Many shots on one block and one shot across blocks are both just ranges. A
+lead-in or tail-out is requested by naming a cut point (at most one sentence
+or 2 s, leaving the neighbour its minimum); a silence-only shot names the
+silence it fills; a person's nudge of a cut is at most ±2 s. Each shot
+records its relation (TIMED_TO_NARRATION, LEAD_IN, TAIL_OUT or BRIDGE) with
+the numbers, its anchors, and the takes heard under it. Re-timing onto
+another assembly of the same run recomputes the times from the same anchors.
+
+### Classes, evidence and fiction
+
+Two classes are kept apart: the narrative class of the words (the blocks'
+classes and their beats' basis) and the shot's class (what the picture
+asserts). **Code derives the shot's class**; a model's proposal is kept only
+when it is less assertive. A generated picture that shows a person or
+depicts a claim is depicted as a reconstruction whatever its treatment; a detail, object
+or must-show resting on a claim that is not ESTABLISHED weighs like a
+depicted claim. The treatment × class matrix (`TREATMENT_CLASS_RULES`, data in
+core) refuses or conditions each cell. Blocking rules, all on structured
+data:
+
+- no generated records: archival, document, news and screen treatments need
+  a sourcing method (GENERATED_RECORD);
+- uncertain material is never shown as plain footage: a reconstruction of a
+  claim worded as probable, disputed, unconfirmed or a myth needs a visible
+  device that fits its presentation, and the device must be realized in the
+  spec (DEVICE_UNREALIZED); NARRATOR_LED never covers a picture that depicts
+  the uncertain claim (UNCERTAIN_AS_FACT);
+- fiction: a fictional cast member never appears over documented narration
+  (FICTION_IN_DOCUMENTED), only observes or stands near a real person
+  (FICTION_REAL_INTERACTION), never carries facts (FICTION_WITH_FACTS);
+  characters are cast members or anonymous figures (INVENTED_CHARACTER); a
+  promised fiction label is present (FICTION_LABEL_MISSING);
+- no generated likeness of a real person (REAL_LIKENESS): a documented,
+  sourced likeness, a silhouette or a non-identifying framing;
+- evidence: every factual visual's depicted claims are traceable to a source
+  (EVIDENCE_MISSING); claims, figures, dates and places in data, overlays and
+  details are found in their own claims (CLAIM_INVALID,
+  OVERLAY_UNSUPPORTED); an invented detail in a documented shot blocks
+  (INVENTED_DETAIL_DOCUMENTED).
+
+Continuity subjects (characters, environments, places, buildings, objects,
+documents, maps) are proposed by the beats call and checked by code; a
+recurring subject or a fictional character requires a reference asset
+("Requires ⟨name⟩ continuity asset"), which the generation milestone makes.
+
+### QA
+
+`checkStoryboard` runs at every save and, live, in every view, decision and
+gate. Blocking kinds cover structure and timing (NARRATION_UNMAPPED,
+TIMING_MISSING, SHOT_OVERLAP, TIMELINE_GAP, DURATION_IMPOSSIBLE,
+TREATMENT_MISSING, ASSET_REQUIREMENT_MISSING, INFO_CLASS_MISSING,
+SHOT_UNPLANNED), the rules above, MOCK_NARRATION, the stale rules
+(STALE_SCRIPT, STALE_ARCHITECTURE, STALE_NARRATION, STALE_VERDICT when a
+verdict now needs another presentation) and, at the gate only,
+SCOPE_INCOMPLETE. Warnings cover rhythm and variety (repetition, a dominant
+treatment, the generated-video share, density, shot counts, rapid cuts,
+static or unchanging stretches, generic b-roll, uniform durations,
+mid-sentence cuts, a repeated environment), cost (COST_HIGH against the
+profile's ceilings, COST_UNPRICED), items for a person to check
+(CONTINUITY_RISK, VISUAL_IMPLICATION, ANACHRONISM_RISK, MUST_SHOW_DROPPED,
+FRAMING_FACTUAL_VISUAL) and the narration's state (PROVISIONAL_TIMING,
+UNALIGNED_TAKE, SCOPE_PARTIAL, MODEL_REFERENCE_DROPPED, STALE_PROFILE,
+STALE_PRICING). Findings have the voice QA's shape, so the dashboard renders
+them with the same component. Rhythm statistics (durations, cuts per
+minute, treatment changes, the longest same-treatment run, static share) are
+stored with the version.
+
+### The job (S0–S7)
+
+One stage, `createStoryboardStage`, serves both job types. Steps are
+checkpointed (a retry reuses completed model calls), the planning ceiling
+is checked before every call, and progress is reported per step.
+
+| Step | Kind | What it does |
+|---|---|---|
+| S0 Resolve | code | Reads and pins the inputs; refuses what cannot be planned (`NonRetryableError` with the reason) |
+| S1 Briefs | code | Per block: class, beats, claims with verdict and presentation, the script's visual hint (a hint, never an output), delivery, times, the words with cut points marked; per section: setting with its basis, the architecture's visual thinking, continuity; the cast, data the evidence gives, era context, the treatments each class allows |
+| S2 `storyboard.beats` | model | Beats as cut-point ranges with options A/B/C, and the continuity subjects (once, or once per section above 60 blocks) |
+| S3 Validate beats | code | Resolves every reference, repairs the partition, checks options against the matrix, removes fictional subjects from documented beats, notes each drop |
+| S4 `storyboard.shots` | model | One call per section: shots with ranges, lead-in and tail-out requests as cut points, treatment, spec, subjects, claims with roles, overlays, device, data |
+| S5 Normalize | code | Partition repair, timing, class, depiction, automatic labels, routing and cost, asset requirements and reuse, continuity, evidence snapshot, hashes, rhythm, approaches, alternatives, QA |
+| S6 `storyboard.repair` | model, at most one call | Only for beats with repairable blocking findings; a replacement is kept beat by beat only when it removes blocking findings and adds none. A beat still invalid gets one SHOT_UNPLANNED placeholder (blocking), never invented content |
+| S7 Save | code, one transaction | Re-checks the pins (a changed narration or profile choice is saved as pinned and noted), saves an overtaken phase run as DRAFT, supersedes older unapproved versions, writes STORYBOARD_SAVED and the summary log line |
+
+Model output is bounded zod (no milliseconds, prices, row ids, depiction or
+final class); every reference is resolved by code and whatever does not
+resolve is dropped and listed (`content.normalization`,
+MODEL_REFERENCE_DROPPED). The job saves the version even with blocking
+findings: it goes to review and approval is refused. Re-plans: BEATS
+re-plans named beats with the editor's instructions; APPROACH re-plans only
+the beats whose treatment the other approach changes. Other shots keep their
+keys and content hashes, so their decisions carry. New shots never take a
+key an earlier version used. Steps' models: the AI provider's default unless
+`STORYBOARD_MODELS` names one (`beats`, `shots`, `repair`); prompts are
+versioned (`storyboard-1.0-2026-10-07.2`) and name no vendor, model or
+documentary.
+
+### Approaches A/B/C
+
+The beats call gives each beat three options: A cinematic reconstruction,
+B evidence-led (documents, maps, archival, graphics), C hybrid. The version
+plans one in full (the request's, else the profile's, else C) and costs and
+measures all three by the same rules (mix, generated-video share, shots at
+the profile's density, cost, evidence share). "Switch to approach X" is a
+confirmed, paid job that re-plans only the beats it changes.
+
+### Versions, edits and decisions
+
+Every change is a new immutable version on the project's one version line:
+an edit, a re-plan, a re-time, a restore or a re-costing with another
+profile. Edits make no model call: `updateShot`, `setTreatment`, `moveCut`
+(with a nudge), `splitShot`, `mergeShots`, `reorderShots`, `updateBeat`,
+`setRecommendation` / `clearRecommendation`, `applyAlternative`,
+`updateContinuity`, `setProfile`. Each runs the S5 normalization and QA
+again. A version race is a 409 naming the newest version, so the page can
+save over it on purpose; edits are refused while a storyboard job is queued
+or running.
+
+- **Hashes.** A shot's content hash covers its beat, treatment, method,
+  class, spec, asset requirement, claims, subjects and anchors — not times,
+  ids, costs, the recommended provider and model, or which earlier shot
+  makes an asset it shares.
+- **Carried decisions.** A shot with the same key and hash and a length
+  within 10 % or 300 ms of its base gets its latest decision copied ("carried
+  from vN"), never as a new approval; other shots start pending. Version
+  decisions never carry, and a new version is always in review.
+- **States.** DRAFT (an overtaken phase run), IN_REVIEW, CHANGES_REQUESTED,
+  APPROVED, REJECTED, SUPERSEDED (a newer version was saved, or — for an
+  approved one — a newer one was approved). Only status columns change.
+- **Approving a version** needs every pinned take approved, no live blocking
+  finding and no rejected shot. A preview's approval supersedes only earlier
+  approved previews; it never passes the gate, and the project's status is
+  unchanged. An approved version stays approved while newer ones are edited:
+  its page says the approval applies to it and how many shots the newer one
+  changes.
+- **The STORYBOARD gate** decides the newest version under review and also
+  needs scope FULL, a complete assembly and the narration the VOICE gate
+  approved; the request's `artifactId` must be that version. Approving moves
+  the project to STORYBOARD_APPROVED and queues nothing; Request changes keeps
+  the gate open for edits; Reject sends the project back to planning (a paid
+  re-plan). Editing an approved whole-script storyboard re-opens the gate.
+- **Stale** (derived on read): STALE_SCRIPT (another script approved),
+  STALE_ARCHITECTURE, STALE_NARRATION (a newer assembly, a superseded or
+  rejected pinned assembly or take; recovered by re-timing, no model call),
+  STALE_VERDICT, STALE_PROFILE, STALE_PRICING.
+
+### Visual style profiles
+
+A library like the voice profiles: families with immutable versions of a
+provider-neutral `VisualStyleProfileConfig` (realism, camera language,
+lenses, colour, lighting, grain, aspect ratio, resolution, motion intensity,
+density, archival and graphics preference, generation preferences and reroll
+allowances, approach, provider preferences, cost ceilings, notes). Five
+presets are made once, lazily, under an advisory lock — Cinematic History
+(the library default), Corporate Investigative, Dark True Crime, Clean
+Business Explainer and Retro Documentary — each with no provider
+preference. A project follows a family, pins a version or uses the library
+default, with its own overrides (strict deep-partial, never stored on the
+profile) and a revision that every planning request must match. A
+storyboard version freezes the effective configuration it was planned with
+and where each setting came from.
+
+### The hard stop
+
+While VISUAL_PLAN is real (the AI provider is real), the server refuses
+VISUAL_GENERATION and INFOGRAPHIC on `POST /api/projects/:id/jobs` and on
+`POST /api/jobs/:id/retry`, in every status ("Visual generation is the next
+milestone; it starts only after the storyboard is reviewed and accepted"),
+and the worker's handlers for both are replaced by held handlers that fail a
+job already queued, calling nothing and storing nothing. The generic job
+route also sends VISUAL_PLAN and STORYBOARD_PREVIEW to the Storyboard page's
+route. The dashboard hides the generation buttons and their Retry. With
+every provider mock, the placeholder pipeline still walks through generation.
+
+### API
+
+```
+GET   /api/projects/:id/storyboard[?v=N]               the Storyboard page's view (versions, the version, live QA, editorial actions, the active job)
+GET   /api/projects/:id/storyboard/inputs              what a plan would use: runs and assemblies, takes approved, the profile choice, the ceiling
+POST  /api/projects/:id/storyboard/generate            {narration: {runId, assemblyId?}, approach?, selectionRevision, confirm: true} → 202 {job, kind PREVIEW | PHASE}
+POST  /api/storyboards/:id/regenerate-beats            {beatKeys, instructions?, expectedVersion, confirm: true} → 202
+POST  /api/storyboards/:id/approach                    {approach, expectedVersion, confirm: true} → 202
+POST  /api/storyboards/:id/edits                       {expectedVersion, ops (1–50), note?} → 201, the new version
+POST  /api/storyboards/:id/retime · …/restore          → 201, the new version (no model call)
+POST  /api/storyboards/:id/decision                    APPROVED | CHANGES_REQUESTED | REJECTED (a whole-script version under review: the gate)
+POST  /api/shots/:id/decision                          APPROVED | REJECTED | CLEARED, with a note
+
+GET   /api/visual/catalog                              cards, models, rates with source, check date and confidence
+GET   /api/visual/profiles[?archived=true]             the library (makes the presets once)
+POST  /api/visual/profiles                             a new profile, v1 (201)
+GET   /api/visual/profiles/:id · PATCH …               a profile and its versions; rename, describe, archive, make library default
+POST  /api/visual/profiles/:id/versions · …/duplicate  an edit as a new version; a new profile from any version (201)
+GET   /api/projects/:id/visual/selection · PUT …       the project's choice, overrides and revision
+GET   /api/voice/assemblies/:id/timeline               the narration timeline of one assembly version
+```
+
+Invalid input is a 400, an unknown id a 404, a refusal or a stale revision
+or version a 409 (a version race adds `latestVersion`). `GET /api/projects/:id`
+carries the newest version's summary; `/api/health` lists VISUAL_PLAN and
+STORYBOARD_PREVIEW in `realStages` when they are real.
+
+### Dashboard
+
+The Storyboard page (`/projects/:id/storyboard?v=N&tab=…`): a header with the
+version picker, the inputs strip (script, architecture, voice run and
+assembly, takes approved, the profile — with a Change control — engine v1,
+"Nothing is generated in this milestone"), the actions panel (plan with a
+confirmation tied to the exact request, the running job, Retry, re-plan
+beats, switch approach, re-time, restore, the decision panel with what blocks
+approval) and seven tabs: Overview (figures, treatment bar, approaches,
+versions with what changed and their decisions), Timeline (narration, beat,
+shot, treatment and class lanes on the audio clock, a list on phones),
+Shots (cards by beat with every field, "Why is this visual here?" — shot →
+beat → narration → blocks → architecture → claims → sources — decisions and
+every edit), Costs (rollups, alternatives, the frozen prices), Evidence,
+Continuity and QA (live and saved findings, rhythm, normalization). The
+Visual profiles library mirrors the voice library. The project page shows a
+storyboard card and next step, links the stage, and hides the generation
+buttons.
+
+### Acceptance logging
+
+Every saved version logs one line, read back from the database after the
+save:
+
+```
+storyboard summary: v1 PARTIAL run 3 assembly v1 fp=… 0–109.8 s · beats B · shots S · avg x.x s · treatments {…}
+  · relations {…} · cost $… (MIXED, unpriced n) · QA blocking b {…} / warnings w {…} · normalizations m
+  · evidence traced t/f · continuity subjects c (requires reference: r) · narration takes a/n approved
+  · model calls k, $… planning spend · project status VOICE_REVIEW (unchanged)
+```
+
+with the same figures as JSON fields, and notes when the narration or the
+profile choice changed while it was planned.
+
+### Limits (stated)
+
+- Only narrated blocks are storyboarded; nothing is estimated from word
+  counts. A whole-script storyboard needs a full narration through the VOICE
+  gate.
+- A queued preview is cancelled when a new voice phase run starts (the VOICE
+  gate deciding, new takes): request it again.
+- A retried storyboard job re-uses its input without the request's checks;
+  S0 and S7 check again.
+- The summary line's spend is the job's own calls: a manual retry that
+  re-uses an earlier job's paid calls does not count them again there (the
+  ledger has them). A phase job's line shows the status at the save
+  (VISUAL_PLANNING), just before the runner moves the project to review.
+- Not enforced: twelve shots per beat (only per section and in repairs);
+  sequence must-shows without claim keys are not checked for MUST_SHOW_DROPPED;
+  stale verdicts are snapshotted for a shot's own claims, not for the claims
+  behind its details (live QA re-derives those).
+- The anachronism check is a short generic word list plus the scripts'
+  must-avoid items, and only warns.
+- The Shot form does not edit must-show, the data requirement or per-shot
+  style overrides; "vN differs in k shots" counts added plus removed keys.
+- The generic approvals route accepts a STORYBOARD decision without
+  `artifactId` (as for every gate); the Storyboard page always sends the
+  version.
+- A pre-engine `storyboards` row (content `{}`) would fail the project page:
+  production must hold none (the pre-flight check).
+- The catalog has no web-app subscription prices and not every endpoint of
+  the vendor (for example 4K image-to-video); a model the catalog does not
+  know is UNPRICED. A price override replaces the provider's whole price
+  list.
+
+## 19. Decisions
 
 | # | Decision | Why | Alternative |
 |---|---|---|---|
@@ -2327,3 +2753,17 @@ No model call is made by the writing module; no live voice is generated.
 | D103 | Every run and take stores its effective configuration as a snapshot, used verbatim; older rows are reconstructed with frozen earlier rules | What was heard must stay reproducible after a profile edit, an override change or a tuned default | Re-derive from the profile row at read time |
 | D104 | The acceptance winner becomes the project's profile through the product ("Save as a voice profile", "Use for this project"), never a code default or a migration | The brief: the result is this documentary's default, not the engine's; another film keeps the library default until it chooses | Change DEFAULT_VOICE_PROFILE_CONFIG to the winner |
 | D105 | Cost is estimated from the characters sent; the vendor's character-cost figure is recorded raw, never priced | Its unit under v4 is unverified (about 0.11 of the characters sent); an upper bound is honest, a discount guessed is not | Price the reported figure |
+| D106 | Treatment before provider: a shot's primary field is a provider-neutral treatment; the method follows from it; a provider and model are only a recommendation from a catalog that lives in `packages/providers` | Providers come and go and price by different units; the storyboard must say what the viewer needs, not which vendor makes it. Core and the schema name no vendor (a test) | A vendor's shot or prompt fields on the shot |
+| D107 | Timing from one pinned voice assembly only; the model names cut points by id and never a time; code tiles the clock | Audio first: a words-per-minute estimate is exactly what the brief forbids once audio exists, and a model's numbers cannot be trusted to tile; ids make every cut explainable and re-timable | A word-count plan; the model returning milliseconds |
+| D108 | Visual cost forecasts are frozen on each version with each rate's source, date and confidence, never written to the ledger; an unverified price is UNPRICED, never $0 | The ledger is spend and the job ceilings read it; a forecast is not spend. "$0" for an unknown price would understate every rollup | Forecast rows in `provider_calls`; default prices in code |
+| D109 | Immutable versions on one line per project; decisions append-only; staleness derived on read | Approval is version-specific: what was approved must stay exactly what it was (a read-only digest proves it), and a change elsewhere must show without rewriting history | Edit in place; a stored "stale" flag |
+| D110 | Shot decisions carry to a later version only for the same key, the same content hash and about the same length; the hash leaves out times, costs, the recommended provider and which shot makes a shared asset | A person's decision applies to what they saw; a re-plan of another beat must not withdraw decisions on shots it did not touch, and a changed length or content must | Carry by key only; carry nothing |
+| D111 | A preview side job (STORYBOARD_PREVIEW) storyboards an audition's narrated blocks; a preview is approved at version level, only on approved takes, and never passes the STORYBOARD gate | Tulip has only an audition and no full narration may be generated; the brief's chain is approved narration → storyboard, and a gate approval must mean the whole film | Generate a full narration first; approve on unreviewed takes |
+| D112 | A STORYBOARD_APPROVED milestone, and the hard stop enforced on the server (enqueue, retry and the worker) while the storyboard is real | Approving the gate used to drop the project into visual generation, and `resolveEnqueue` starts the next phase from a milestone: hiding buttons alone would not stop it | Hide the buttons only |
+| D113 | Code derives a shot's information class (a model may only lower it) and its depiction; an uncertainty device must be realized in the spec; NARRATOR_LED never covers a picture that depicts the uncertain claim | No model may make a picture look more certain than its evidence; a device the model declares but the picture does not show is a label, not a safeguard | Trust the model's class and device |
+| D114 | No generated likeness of a real person, no generated records, fictional characters never over documented narration and only observing or near real people | The brief's guardrails as structured, deterministic checks, mirroring the architecture's and the script's fiction rules | Warnings for a person to catch |
+| D115 | The model's output is bounded zod and every reference it returns is resolved by code; drops are listed; one repair round; a beat still invalid gets a SHOT_UNPLANNED placeholder | A model mistake may produce a blocking finding, never a silently wrong timeline or invented content | Retry the model until valid; drop silently |
+| D116 | A visual style profile library like the voice profiles (families, immutable versions, five presets made lazily with no provider preference, a project's choice with its own overrides and revision) | The brief's saveable looks; a project's choice must never change another project's; presets must not name a vendor | One profile per project; presets with vendor preferences |
+| D117 | One job proposes approaches A/B/C per beat, plans one and costs all three; switching re-plans only the beats it changes | Choosing needs the comparison before paying for three plans; an unchanged beat must not be paid for twice | Plan all three in full; explore first, plan after |
+| D118 | Storyboard claim links are `NO ACTION DEFERRABLE INITIALLY DEFERRED`, not RESTRICT | A linked claim must never disappear, but deleting a whole project must still cascade (its dossier branch runs before its storyboards) | RESTRICT (breaks project deletion); CASCADE (evidence links could vanish) |
+| D119 | A price override replaces a provider's whole price list; overrides in units its models are never billed in are refused | An estimate line takes its date and confidence from the card; mixing list and plan prices on one card would misstate both. A price that could never apply must not pass silently | Rewrite one rate at a time |

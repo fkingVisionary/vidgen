@@ -22,7 +22,10 @@ export const VoiceSettings = z.object({
 });
 export type VoiceSettings = z.infer<typeof VoiceSettings>;
 
-/** Shot.direction — cinematography fields of a storyboard shot that are not queried directly. */
+/**
+ * Deprecated: the first plan for Shot.direction, which nothing ever wrote. A
+ * storyboard shot's direction is a ShotSpec (contracts/storyboard.ts).
+ */
 export const ShotDirection = z.object({
   lens: z.string().optional(),
   composition: z.string().optional(),

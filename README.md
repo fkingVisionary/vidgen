@@ -5,9 +5,9 @@ AI-assisted production system for premium historical & economic documentaries
 visuals & infographics → edit → QA → render → publish, with a human approving
 every important step.
 
-**Current state: V1, milestone 3 + Story Engine 2.0 + the editorial revision
-loop and alternative angles (deployed) + Script Engine 1.0 (built and tested;
-acceptance run pending).** The
+**Current state: V1 — research, story, script, Writing Engine 2 and the
+Voice Engine (deployed), and Storyboard Engine V1 (built and tested; its
+acceptance on the narrated opening is pending).** The
 pipeline, database, job system, provider abstractions and dashboard are real
 and tested (milestone 1). The **Research** stage is real when Anthropic
 (Claude) and Tavily are configured: it builds a versioned dossier of claims
@@ -42,9 +42,15 @@ audition first, every take kept and reviewed on its own, numbers and names
 given a checked spoken form, performance directions translated from the
 script (restrained by default), timestamps mapped back to the script's words,
 the takes assembled on the clock of the audio itself, and a human approval of
-the whole narration. Every later stage (visuals, edit, publish) is still a
-clearly labelled **MOCK**. First test episode: *Tulip Mania — The Bubble That
-Became a Legend*.
+the whole narration. The **Storyboard Engine** then plans what the viewer
+sees — visual beats and shots timed to the narration's real audio, each with
+a provider-neutral treatment, the words, claims and sources it rests on, its
+information class, continuity requirements and a cost forecast with its
+sources — as immutable versions a person edits shot by shot and approves; it
+generates no picture, video or audio. Visual generation, edit and publish
+are still clearly labelled **MOCK**, and visual generation is held until a
+storyboard has been reviewed and accepted. First test episode: *Tulip Mania —
+The Bubble That Became a Legend*.
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design, data model, providers, jobs, decisions
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Railway, environment variables, operations
@@ -71,6 +77,9 @@ modules/research   The RESEARCH stage: plan → search → retrieve → read →
 modules/story      STORY_MINING (mine → evidence rules → critic → rank → proposed selection → gate)
                    and STORY_ARCHITECTURE (architect → evidence rules → reviewer → gate)
 modules/script     SCRIPT (planner → writer → rules → script editor → fact checker → performance → gate)
+modules/writing    Writing Engine 2: house-style corpus, diagnostics, the Human Narration Pass (a library)
+modules/voice      VOICE: chunks → takes → assembly on the measured clock → VOICE gate; saved voice profiles
+modules/storyboard VISUAL_PLAN / STORYBOARD_PREVIEW: narration spine → beats → shots → QA → versions; visual profiles
 docs/  scripts/  test/
 ```
 
@@ -293,6 +302,43 @@ verdicts (ESTABLISHED / PROBABLE / DISPUTED / UNVERIFIED / MYTH), supporting
 and contradicting citations with verified quotes, sources by type, open
 questions, the quality gate and the run's cost. Approve, reject or flag it
 there; nothing proceeds without a human decision.
+
+## Storyboard
+
+Once narration exists (an audition is enough for a preview), the project's
+**Storyboard** page:
+
+1. **Visual profile**: the inputs strip names the look the plan will use —
+   the library default (Cinematic History until you choose another) or the
+   project's choice, with its own overrides (*Change*). The *Visual profiles*
+   page (top right) holds the library: five presets and your own, each a
+   family of versions.
+2. **Plan the storyboard**: choose the voice run and its assembly, tick the
+   confirmation (model calls only, under `STORYBOARD_MAX_COST_USD`, default
+   $5) and plan. On an audition this is a preview: the project's status does
+   not move. A few model calls propose beats and shots; code times every cut
+   on the audio, derives each shot's information class, checks evidence,
+   fiction and likeness rules, routes each treatment to a production method
+   and prices it, and saves v1 for review.
+3. **Read it**: Overview (figures, treatment mix, approaches A/B/C with
+   their cost, versions), Timeline (lanes on the narration's clock), Shots
+   (every field, and *Why is this visual here?* down to the claim and its
+   source), Costs (by treatment, method, provider, model, section and shot;
+   cheaper alternatives; the prices used with their sources), Evidence,
+   Continuity ("Requires … continuity asset") and QA.
+4. **Change it**: approve or reject shots; edit, split, merge, move a cut,
+   reorder, change a treatment or a recommendation, apply an alternative —
+   each a new version with no model call, the old one kept exactly as it
+   was; re-plan chosen beats or switch approach (paid, confirmed); re-time
+   onto a newer assembly; restore an earlier version.
+5. **Approve**: a version is approved by a person only when the takes it is
+   timed on are approved and nothing blocks. A preview's approval is
+   version-level; the project's STORYBOARD gate needs a whole-script
+   storyboard on the narration the VOICE gate approved. Approving the gate
+   starts nothing: visual generation is the next milestone.
+
+`sh scripts/ui/storyboard-ui.sh` checks the page in a browser (every provider
+MOCK; DEPLOYMENT.md, *Browser QA of the Storyboard page*).
 
 ## Deploying
 

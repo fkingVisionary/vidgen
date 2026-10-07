@@ -49,6 +49,14 @@ const PAIRS: Record<string, readonly string[]> = {
   PronunciationStatus: core.PRONUNCIATION_STATUSES,
   PronunciationMethod: core.PRONUNCIATION_METHODS,
   WritingExampleStatus: core.WRITING_EXAMPLE_STATUSES,
+  StoryboardStatus: core.STORYBOARD_STATUSES,
+  VisualTreatment: core.VISUAL_TREATMENTS,
+  ProductionMethod: core.PRODUCTION_METHODS,
+  TimingRelation: core.TIMING_RELATIONS,
+  ContinuityKind: core.CONTINUITY_KINDS,
+  StoryboardScope: core.STORYBOARD_SCOPES,
+  StoryboardDecisionKind: core.STORYBOARD_DECISIONS,
+  ShotClaimRole: core.SHOT_CLAIM_ROLES,
 };
 
 describe('Prisma enums ↔ core enums', () => {

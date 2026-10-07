@@ -50,6 +50,7 @@ enum ProjectStatus {
   VOICE_COMPLETE
   VISUAL_PLANNING
   STORYBOARD_REVIEW
+  STORYBOARD_APPROVED
   VISUAL_GENERATING
   VISUAL_REVIEW
   EDITING
@@ -69,6 +70,8 @@ enum JobType {
   SCRIPT
   VOICE
   VISUAL_PLAN
+  /// Side job: a storyboard of the narrated part of the script, before or after the VOICE gate.
+  STORYBOARD_PREVIEW
   VISUAL_GENERATION
   INFOGRAPHIC
   EDIT
@@ -422,6 +425,100 @@ enum PronunciationMethod {
   CMU
 }
 
+/// Lifecycle of one storyboard version (SUPERSEDED is set by a newer save or approval, never by a decision).
+enum StoryboardStatus {
+  DRAFT
+  IN_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+  REJECTED
+  SUPERSEDED
+}
+
+/// How a shot is shown, chosen by what the story needs (provider-neutral).
+enum VisualTreatment {
+  CINEMATIC_RECONSTRUCTION
+  GENERATED_STILL
+  ARCHIVAL_IMAGE
+  ARCHIVAL_VIDEO
+  DOCUMENT_ANIMATION
+  MAP_ANIMATION
+  DATA_VISUALIZATION
+  TIMELINE
+  DIAGRAM
+  INFOGRAPHIC
+  PORTRAIT
+  CHARACTER_VISUAL
+  ENVIRONMENT
+  PRODUCT_OBJECT
+  SCREEN_CAPTURE
+  NEWS_FOOTAGE
+  ABSTRACT_METAPHOR
+  TEXT_ON_SCREEN
+  TRANSITION
+  MOTION_GRAPHIC
+}
+
+/// How a treatment's asset comes to exist: generated, sourced, rendered in-house, or made in the edit.
+enum ProductionMethod {
+  GENERATIVE_VIDEO
+  IMAGE_TO_VIDEO
+  GENERATIVE_IMAGE
+  STILL_MOTION
+  DETERMINISTIC_GRAPHIC
+  MAP_RENDER
+  DOCUMENT_MOTION
+  ARCHIVAL_SOURCING
+  STOCK_SOURCING
+  SCREEN_RECORDING
+  MOTION_DESIGN
+  EDIT_TIME
+}
+
+/// How a shot's picture relates to the narration under it.
+enum TimingRelation {
+  TIMED_TO_NARRATION
+  LEAD_IN
+  TAIL_OUT
+  BRIDGE
+}
+
+enum ContinuityKind {
+  CHARACTER
+  ENVIRONMENT
+  LOCATION
+  BUILDING
+  VEHICLE
+  OBJECT
+  PRODUCT
+  DOCUMENT
+  MAP
+  OTHER
+}
+
+/// FULL: the whole approved script; PARTIAL: a preview of part of it (never eligible for the STORYBOARD gate).
+enum StoryboardScope {
+  FULL
+  PARTIAL
+}
+
+/// A person's decision on a storyboard version or one shot (append-only; CLEARED withdraws a shot decision).
+enum StoryboardDecisionKind {
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+  CLEARED
+}
+
+/// What a claim does for a shot.
+enum ShotClaimRole {
+  DEPICTS
+  SHOWS_SOURCE
+  DATA
+  CONTEXT
+  PERIOD_BASIS
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Project spine
 // ─────────────────────────────────────────────────────────────────────────────
@@ -472,6 +569,8 @@ model Project {
   voicePronunciations  VoicePronunciation[]
   writingExamples      WritingExample[]
   storyboards          Storyboard[]
+  storyboardDecisions  StoryboardDecision[]
+  visualSelection      VisualSelection?
   infographics         Infographic[]
   timelines            Timeline[]
   renders              Render[]
@@ -504,6 +603,7 @@ model LanguageVersion {
   narrations     SceneNarration[]
   voiceRuns      VoiceRun[]
   voiceSelection VoiceSelection?
+  storyboards    Storyboard[]
   timelines      Timeline[]
   renders        Render[]
   assets         MediaAsset[]
@@ -554,6 +654,7 @@ model Job {
   storyExplorations StoryExploration[]
   scripts           Script[]
   voiceGenerations  VoiceGeneration[]
+  storyboards       Storyboard[]
 
   @@index([status, runAfter])
   @@index([projectId, type, status])
@@ -579,14 +680,15 @@ model Approval {
   renderId          String?          @map("render_id") @db.Uuid
   createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  project         Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  languageVersion LanguageVersion?   @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
-  dossier         ResearchDossier?   @relation(fields: [dossierId], references: [id], onDelete: SetNull)
-  story           StoryArchitecture? @relation(fields: [storyId], references: [id], onDelete: SetNull)
-  script          Script?            @relation(fields: [scriptId], references: [id], onDelete: SetNull)
-  voiceAssembly   VoiceAssembly?     @relation(fields: [voiceAssemblyId], references: [id], onDelete: SetNull)
-  storyboard      Storyboard?        @relation(fields: [storyboardId], references: [id], onDelete: SetNull)
-  render          Render?            @relation(fields: [renderId], references: [id], onDelete: SetNull)
+  project             Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageVersion     LanguageVersion?     @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
+  dossier             ResearchDossier?     @relation(fields: [dossierId], references: [id], onDelete: SetNull)
+  story               StoryArchitecture?   @relation(fields: [storyId], references: [id], onDelete: SetNull)
+  script              Script?              @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  voiceAssembly       VoiceAssembly?       @relation(fields: [voiceAssemblyId], references: [id], onDelete: SetNull)
+  storyboard          Storyboard?          @relation(fields: [storyboardId], references: [id], onDelete: SetNull)
+  render              Render?              @relation(fields: [renderId], references: [id], onDelete: SetNull)
+  storyboardDecisions StoryboardDecision[]
 
   @@index([projectId, createdAt])
   @@map("approvals")
@@ -819,6 +921,8 @@ model ResearchClaim {
   storyCandidates      StoryCandidateClaim[]
   contentOpportunities ContentOpportunityClaim[]
   scriptBlocks         ScriptBlockClaim[]
+  visualBeats          VisualBeatClaim[]
+  shots                ShotClaim[]
 
   @@unique([dossierId, claimKey])
   @@index([dossierId])
@@ -1029,6 +1133,7 @@ model StoryArchitecture {
   scripts              Script[]
   approvals            Approval[]
   contentOpportunities ContentOpportunity[]
+  storyboards          Storyboard[]
 
   @@unique([projectId, version])
   @@index([revisionOfId])
@@ -1196,6 +1301,7 @@ model Scene {
   script       Script           @relation(fields: [scriptId], references: [id], onDelete: Cascade)
   narrations   SceneNarration[]
   shots        Shot[]
+  visualBeats  VisualBeat[]
   infographics Infographic[]
 
   @@unique([scriptId, sceneKey])
@@ -1265,9 +1371,11 @@ model ScriptBlock {
   createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  script    Script             @relation(fields: [scriptId], references: [id], onDelete: Cascade)
-  narration SceneNarration     @relation(fields: [narrationId], references: [id], onDelete: Cascade)
-  claims    ScriptBlockClaim[]
+  script      Script             @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  narration   SceneNarration     @relation(fields: [narrationId], references: [id], onDelete: Cascade)
+  claims      ScriptBlockClaim[]
+  visualBeats VisualBeatBlock[]
+  shots       ShotBlock[]
 
   @@unique([narrationId, blockKey])
   @@index([narrationId, sortOrder])
@@ -1424,6 +1532,7 @@ model VoiceRun {
   chunks          VoiceChunk[]
   generations     VoiceGeneration[]
   assemblies      VoiceAssembly[]
+  storyboards     Storyboard[]
 
   @@unique([projectId, number])
   @@index([scriptId])
@@ -1560,10 +1669,11 @@ model VoiceAssembly {
   createdBy       String?        @map("created_by")
   createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  run        VoiceRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
-  profile    VoiceProfile @relation(fields: [profileId], references: [id], onDelete: Restrict)
-  audioAsset MediaAsset?  @relation(fields: [audioAssetId], references: [id], onDelete: SetNull)
-  approvals  Approval[]
+  run         VoiceRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  profile     VoiceProfile @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  audioAsset  MediaAsset?  @relation(fields: [audioAssetId], references: [id], onDelete: SetNull)
+  approvals   Approval[]
+  storyboards Storyboard[]
 
   @@unique([runId, version])
   @@map("voice_assemblies")
@@ -1602,57 +1712,388 @@ model VoicePronunciation {
 // Visuals
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Versioned visual plan for one script version (human approval gate #4).
+/// One immutable version of a project's storyboard: what the viewer sees, when, why, and how it should be produced
+/// (nothing is generated). Timed against one pinned voice assembly; every generation, edit, re-plan, re-timing or
+/// restore is a new version (version numbers are per project, whatever the scope). Decisions are append-only rows
+/// (storyboard_decisions): status, decided_by and decided_at mirror the latest version-level one. Staleness is
+/// derived on read, never stored.
 model Storyboard {
-  id        String         @id @default(uuid(7)) @db.Uuid
-  projectId String         @map("project_id") @db.Uuid
-  scriptId  String         @map("script_id") @db.Uuid
-  version   Int
-  status    ArtifactStatus @default(DRAFT)
-  notes     String?
-  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                   String           @id @default(uuid(7)) @db.Uuid
+  projectId            String           @map("project_id") @db.Uuid
+  scriptId             String           @map("script_id") @db.Uuid
+  version              Int
+  status               StoryboardStatus @default(DRAFT)
+  notes                String?
+  /// The architecture version the script tells (scripts.story_id when it was planned).
+  storyId              String?          @map("story_id") @db.Uuid
+  /// The language whose narration timed it (the master language in V1).
+  languageVersionId    String?          @map("language_version_id") @db.Uuid
+  voiceRunId           String?          @map("voice_run_id") @db.Uuid
+  /// The pinned assembly, its version and its fingerprint (sha256 of its clips and their places).
+  voiceAssemblyId      String?          @map("voice_assembly_id") @db.Uuid
+  assemblyVersion      Int?             @map("assembly_version")
+  narrationFingerprint String?          @map("narration_fingerprint")
+  /// The exact visual profile version it was planned with.
+  visualProfileId      String?          @map("visual_profile_id") @db.Uuid
+  engineVersion        Int              @default(1) @map("engine_version")
+  /// PARTIAL: a preview of part of the script, never eligible for the STORYBOARD gate.
+  scope                StoryboardScope  @default(FULL)
+  /// The version it was made from (it is kept unchanged).
+  revisionOfId         String?          @map("revision_of_id") @db.Uuid
+  jobId                String?          @map("job_id") @db.Uuid
+  /// StoryboardContent: inputs frozen when planned, provenance, scope, approaches, alternatives, rhythm, costs,
+  /// evidence coverage, changes from the base and normalization notes.
+  content              Json             @default("{}")
+  /// StoryboardQaFinding[] as saved (recomputed live in views, decisions and the gate).
+  qa                   Json             @default("[]")
+  qaPassed             Boolean          @default(false) @map("qa_passed")
+  runtimeMs            Int?             @map("runtime_ms")
+  beatCount            Int              @default(0) @map("beat_count")
+  shotCount            Int              @default(0) @map("shot_count")
+  /// Forecast, never spend: the priced shots' total, always read with unpriced_shot_count (null when nothing is
+  /// priced: never $0).
+  estimatedCostUsd     Decimal?         @map("estimated_cost_usd") @db.Decimal(14, 6)
+  /// ESTIMATED, UNPRICED, MOCK or MIXED (the rollup's basis).
+  costBasis            String?          @map("cost_basis")
+  unpricedShotCount    Int              @default(0) @map("unpriced_shot_count")
+  decidedBy            String?          @map("decided_by")
+  decidedAt            DateTime?        @map("decided_at") @db.Timestamptz(3)
+  createdBy            String?          @map("created_by")
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  script    Script     @relation(fields: [scriptId], references: [id], onDelete: Cascade)
-  shots     Shot[]
-  approvals Approval[]
-  timelines Timeline[]
+  project         Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  script          Script               @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  story           StoryArchitecture?   @relation(fields: [storyId], references: [id], onDelete: SetNull)
+  languageVersion LanguageVersion?     @relation(fields: [languageVersionId], references: [id], onDelete: SetNull)
+  voiceRun        VoiceRun?            @relation(fields: [voiceRunId], references: [id], onDelete: SetNull)
+  voiceAssembly   VoiceAssembly?       @relation(fields: [voiceAssemblyId], references: [id], onDelete: SetNull)
+  visualProfile   VisualProfile?       @relation(fields: [visualProfileId], references: [id], onDelete: Restrict)
+  revisionOf      Storyboard?          @relation("StoryboardRevisions", fields: [revisionOfId], references: [id], onDelete: SetNull)
+  revisions       Storyboard[]         @relation("StoryboardRevisions")
+  job             Job?                 @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  beats           VisualBeat[]
+  shots           Shot[]
+  continuity      ContinuitySubject[]
+  decisions       StoryboardDecision[]
+  approvals       Approval[]
+  timelines       Timeline[]
 
   @@unique([projectId, version])
+  @@index([projectId, status])
   @@map("storyboards")
+}
+
+/// A visual beat: one visual idea over a span of the narration clock (beats tile it), between a script block and a
+/// shot. One block may need several beats, one beat may span several blocks. `beat_key` ("VB07") is kept across
+/// versions.
+model VisualBeat {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  storyboardId   String           @map("storyboard_id") @db.Uuid
+  beatKey        String           @map("beat_key")
+  sortOrder      Int              @map("sort_order")
+  /// The section where it starts.
+  sceneId        String           @map("scene_id") @db.Uuid
+  /// The architecture sequence.
+  sequenceNumber Int?             @map("sequence_number")
+  /// Architecture beats it shows ("3.2"), checked against the architecture's content.
+  archBeatIds    String[]         @map("arch_beat_ids")
+  startMs        Int              @map("start_ms")
+  endMs          Int              @map("end_ms")
+  /// The primary treatment of the approach the version plans.
+  treatment      VisualTreatment
+  /// Inherited from the narration it covers.
+  infoClass      ScriptBlockClass @map("info_class")
+  /// VisualBeatContent: title, purpose, concept, information, evidence relationship, importance, complexity,
+  /// continuity, narration range, and the A/B/C options.
+  content        Json
+  /// sha256 of its content without times or row ids.
+  contentHash    String           @map("content_hash")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  storyboard Storyboard        @relation(fields: [storyboardId], references: [id], onDelete: Cascade)
+  scene      Scene             @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  blocks     VisualBeatBlock[]
+  claims     VisualBeatClaim[]
+  shots      Shot[]
+
+  @@unique([storyboardId, beatKey])
+  @@index([storyboardId, sortOrder])
+  @@map("visual_beats")
 }
 
 /// One planned shot. Language-neutral, so generated visuals are reused by every language.
 /// Generation attempts are ProviderCall rows (shot_id); the chosen output is selected_asset_id.
+/// A storyboard shot keeps its narration links in shot_blocks, its evidence in shot_claims and its subjects in
+/// shot_subjects; `shot_key` ("SH023") is kept across versions.
 model Shot {
-  id               String        @id @default(uuid(7)) @db.Uuid
-  storyboardId     String        @map("storyboard_id") @db.Uuid
-  sceneId          String        @map("scene_id") @db.Uuid
-  sortOrder        Int           @map("sort_order")
-  durationSec      Float         @map("duration_sec")
-  /// The master-language narration this shot covers (anchor for timing).
-  narrationAnchor  String?       @map("narration_anchor")
-  visualType       VisualType    @map("visual_type")
-  shotType         ShotType?     @map("shot_type")
-  cameraMotion     CameraMotion? @map("camera_motion")
-  /// ShotDirection contract: lens, composition, environment, period, characters, props, lighting, colour, action, continuity notes.
-  direction        Json          @default("{}")
-  /// Provider-neutral generation prompt (not tied to one vendor's name).
-  generationPrompt String?       @map("generation_prompt")
-  negativePrompt   String?       @map("negative_prompt")
-  status           ShotStatus    @default(PLANNED)
-  selectedAssetId  String?       @map("selected_asset_id") @db.Uuid
-  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id               String            @id @default(uuid(7)) @db.Uuid
+  storyboardId     String            @map("storyboard_id") @db.Uuid
+  /// The section where the shot starts (one that bridges sections keeps its start).
+  sceneId          String            @map("scene_id") @db.Uuid
+  sortOrder        Int               @map("sort_order")
+  durationSec      Float             @map("duration_sec")
+  /// The master-language narration this shot covers, readable ("1.3:4–1.4:end"); display only.
+  narrationAnchor  String?           @map("narration_anchor")
+  /// Deprecated: the treatment replaces it (never written by the storyboard).
+  visualType       VisualType?       @map("visual_type")
+  shotType         ShotType?         @map("shot_type")
+  cameraMotion     CameraMotion?     @map("camera_motion")
+  /// ShotSpec contract: purpose, description, composition, camera, movement, environment, objects, lighting, mood,
+  /// transitions, continuity, must show / avoid, specifics, overlays, uncertainty device, data requirement, depiction.
+  direction        Json              @default("{}")
+  /// Provider-neutral generation prompt (not tied to one vendor's name). Written per provider by a later milestone
+  /// from the ShotSpec; null in a storyboard.
+  generationPrompt String?           @map("generation_prompt")
+  negativePrompt   String?           @map("negative_prompt")
+  /// The generation lifecycle (PLANNED until generation exists); the review state is in storyboard_decisions.
+  status           ShotStatus        @default(PLANNED)
+  selectedAssetId  String?           @map("selected_asset_id") @db.Uuid
+  beatId           String?           @map("beat_id") @db.Uuid
+  shotKey          String?           @map("shot_key")
+  /// The visual range on the assembled narration clock.
+  startMs          Int?              @map("start_ms")
+  endMs            Int?              @map("end_ms")
+  timingRelation   TimingRelation?   @map("timing_relation")
+  /// ShotTiming: the narration range and anchors, lead-in, tail-out, bridge, cut reasons and the takes heard.
+  timing           Json?
+  treatment        VisualTreatment?
+  productionMethod ProductionMethod? @map("production_method")
+  /// What the picture asserts, derived by code (never above what its narration allows).
+  infoClass        ScriptBlockClass? @map("info_class")
+  /// AssetRequirement: asset type, method, sourcing, billed duration, frame, continuity references, licensing, reuse.
+  assetRequirement Json?             @map("asset_requirement")
+  /// ShotEvidence snapshot: claims with verdicts, presentation and traceable sources when saved.
+  evidence         Json?
+  /// VisualCostEstimate: a forecast, never spend.
+  costEstimate     Json?             @map("cost_estimate")
+  estimatedCostUsd Decimal?          @map("estimated_cost_usd") @db.Decimal(14, 6)
+  costBasis        CostBasis?        @map("cost_basis")
+  /// sha256 of its content without times, row ids or costs (decisions carry on identical content).
+  contentHash      String?           @map("content_hash")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  storyboard    Storyboard     @relation(fields: [storyboardId], references: [id], onDelete: Cascade)
-  scene         Scene          @relation(fields: [sceneId], references: [id], onDelete: Cascade)
-  selectedAsset MediaAsset?    @relation(fields: [selectedAssetId], references: [id], onDelete: SetNull)
+  storyboard    Storyboard           @relation(fields: [storyboardId], references: [id], onDelete: Cascade)
+  scene         Scene                @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  selectedAsset MediaAsset?          @relation(fields: [selectedAssetId], references: [id], onDelete: SetNull)
+  beat          VisualBeat?          @relation(fields: [beatId], references: [id], onDelete: Cascade)
   generations   ProviderCall[]
+  blocks        ShotBlock[]
+  claims        ShotClaim[]
+  subjects      ShotSubject[]
+  decisions     StoryboardDecision[]
 
+  @@unique([storyboardId, shotKey])
   @@index([storyboardId, sortOrder])
+  @@index([beatId])
   @@map("shots")
+}
+
+/// The part of a script block a visual beat covers: times on the assembled clock and the block's word range.
+model VisualBeatBlock {
+  beatId        String @map("beat_id") @db.Uuid
+  scriptBlockId String @map("script_block_id") @db.Uuid
+  startMs       Int    @map("start_ms")
+  endMs         Int    @map("end_ms")
+  /// Word indexes in the block's words, inclusive.
+  firstWord     Int    @map("first_word")
+  lastWord      Int    @map("last_word")
+
+  beat        VisualBeat  @relation(fields: [beatId], references: [id], onDelete: Cascade)
+  scriptBlock ScriptBlock @relation(fields: [scriptBlockId], references: [id], onDelete: Cascade)
+
+  @@id([beatId, scriptBlockId])
+  @@index([scriptBlockId])
+  @@map("visual_beat_blocks")
+}
+
+/// The narration words a shot supports, per block (each timed word belongs to exactly one shot).
+model ShotBlock {
+  shotId        String @map("shot_id") @db.Uuid
+  scriptBlockId String @map("script_block_id") @db.Uuid
+  startMs       Int    @map("start_ms")
+  endMs         Int    @map("end_ms")
+  firstWord     Int    @map("first_word")
+  lastWord      Int    @map("last_word")
+
+  shot        Shot        @relation(fields: [shotId], references: [id], onDelete: Cascade)
+  scriptBlock ScriptBlock @relation(fields: [scriptBlockId], references: [id], onDelete: Cascade)
+
+  @@id([shotId, scriptBlockId])
+  @@index([scriptBlockId])
+  @@map("shot_blocks")
+}
+
+/// The claims a visual beat rests on. A claim cannot be deleted while a storyboard links it (the migration defers the
+/// check to commit, so deleting a whole project still cascades).
+model VisualBeatClaim {
+  beatId  String @map("beat_id") @db.Uuid
+  claimId String @map("claim_id") @db.Uuid
+
+  beat  VisualBeat    @relation(fields: [beatId], references: [id], onDelete: Cascade)
+  claim ResearchClaim @relation(fields: [claimId], references: [id], onDelete: NoAction)
+
+  @@id([beatId, claimId])
+  @@index([claimId])
+  @@map("visual_beat_claims")
+}
+
+/// A claim behind a shot, and what it does for it. A claim cannot be deleted while a storyboard links it (checked at
+/// commit, as for visual_beat_claims).
+model ShotClaim {
+  shotId  String        @map("shot_id") @db.Uuid
+  claimId String        @map("claim_id") @db.Uuid
+  role    ShotClaimRole
+
+  shot  Shot          @relation(fields: [shotId], references: [id], onDelete: Cascade)
+  claim ResearchClaim @relation(fields: [claimId], references: [id], onDelete: NoAction)
+
+  @@id([shotId, claimId, role])
+  @@index([claimId])
+  @@map("shot_claims")
+}
+
+/// A recurring character, environment, place, building, vehicle, object, product, document or map of one storyboard
+/// version, with what must stay the same wherever it appears. Characters are the architecture's cast (cast_id) or
+/// anonymous figures. `subject_key` ("CS03") is kept across versions.
+model ContinuitySubject {
+  id           String           @id @default(uuid(7)) @db.Uuid
+  storyboardId String           @map("storyboard_id") @db.Uuid
+  subjectKey   String           @map("subject_key")
+  kind         ContinuityKind
+  /// Architecture cast id ("pov", "F1", "R2").
+  castId       String?          @map("cast_id")
+  name         String
+  infoClass    ScriptBlockClass @map("info_class")
+  /// ContinuitySpec: description, era, location, appearance, visual identity, design details (each with a basis),
+  /// rules, claims, and the reference asset it requires.
+  spec         Json
+  contentHash  String           @map("content_hash")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  storyboard Storyboard    @relation(fields: [storyboardId], references: [id], onDelete: Cascade)
+  shots      ShotSubject[]
+
+  @@unique([storyboardId, subjectKey])
+  @@map("continuity_subjects")
+}
+
+/// A continuity subject in a shot: role, action, interactions with other subjects, likeness and speech
+/// (ShotSubjectDetail), structured so the fiction and likeness rules are checked on data, not prose.
+model ShotSubject {
+  shotId    String @map("shot_id") @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  detail    Json
+
+  shot    Shot              @relation(fields: [shotId], references: [id], onDelete: Cascade)
+  subject ContinuitySubject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@id([shotId, subjectId])
+  @@index([subjectId])
+  @@map("shot_subjects")
+}
+
+/// A person's decision on a storyboard version (shot_id null) or one shot. Append-only, never automatic. A decision
+/// copied to identical content in a newer version names the one it was carried from.
+model StoryboardDecision {
+  id            String                 @id @default(uuid(7)) @db.Uuid
+  projectId     String                 @map("project_id") @db.Uuid
+  storyboardId  String                 @map("storyboard_id") @db.Uuid
+  shotId        String?                @map("shot_id") @db.Uuid
+  decision      StoryboardDecisionKind
+  note          String?
+  decidedBy     String?                @map("decided_by")
+  /// The STORYBOARD gate approval it was recorded with.
+  approvalId    String?                @map("approval_id") @db.Uuid
+  carriedFromId String?                @map("carried_from_id") @db.Uuid
+  createdAt     DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project     Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  storyboard  Storyboard           @relation(fields: [storyboardId], references: [id], onDelete: Cascade)
+  shot        Shot?                @relation(fields: [shotId], references: [id], onDelete: Cascade)
+  approval    Approval?            @relation(fields: [approvalId], references: [id], onDelete: SetNull)
+  carriedFrom StoryboardDecision?  @relation("CarriedDecisions", fields: [carriedFromId], references: [id], onDelete: SetNull)
+  carriedTo   StoryboardDecision[] @relation("CarriedDecisions")
+
+  @@index([storyboardId, createdAt])
+  @@index([shotId, createdAt])
+  @@map("storyboard_decisions")
+}
+
+/// A saved visual style profile: a stable identity and name whose settings live in immutable versions
+/// (visual_profiles). Every edit is a new version; the current version is the newest.
+model VisualProfileFamily {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  /// Unique (the service also compares names case-insensitively).
+  name        String    @unique
+  description String?
+  /// The library default: what a project's storyboards are planned with before it chooses a profile (at most one).
+  isDefault   Boolean   @default(false) @map("is_default")
+  /// Kept with every version, offered for no new choice; projects already using it keep it.
+  archivedAt  DateTime? @map("archived_at") @db.Timestamptz(3)
+  createdBy   String?   @map("created_by")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  versions   VisualProfile[]
+  selections VisualSelection[]
+
+  @@map("visual_profile_families")
+}
+
+/// One version of a visual style profile (VisualStyleProfileConfig). Never edited once created: a change is a new
+/// version, so every storyboard keeps the exact version it was planned with.
+model VisualProfile {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  familyId  String   @map("family_id") @db.Uuid
+  /// Per family: 1, 2, 3…
+  version   Int
+  /// The family's name when this version was made.
+  name      String
+  config    Json
+  /// The version this one was made from (an edit, a duplicate), if any.
+  basedOnId String?  @map("based_on_id") @db.Uuid
+  /// VisualProfileOrigin: a preset, the defaults, the library, an edit or a duplicate.
+  origin    Json
+  notes     String?
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  family      VisualProfileFamily @relation(fields: [familyId], references: [id], onDelete: Restrict)
+  basedOn     VisualProfile?      @relation("VisualProfileBasedOn", fields: [basedOnId], references: [id], onDelete: SetNull)
+  derived     VisualProfile[]     @relation("VisualProfileBasedOn")
+  pinnedBy    VisualSelection[]
+  storyboards Storyboard[]
+
+  @@unique([familyId, version])
+  @@map("visual_profiles")
+}
+
+/// The visual profile a project's storyboards are planned with: a saved profile (following its current version or
+/// pinned to one) or the library default, and the project's own overrides (never stored on the profile). Visuals are
+/// language-neutral, so this is one choice per project.
+model VisualSelection {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  projectId       String   @unique @map("project_id") @db.Uuid
+  /// Null: the library default.
+  familyId        String?  @map("family_id") @db.Uuid
+  /// Null: follow the family's current version.
+  pinnedVersionId String?  @map("pinned_version_id") @db.Uuid
+  /// VisualConfigOverrides.
+  overrides       Json     @default("{}")
+  /// Incremented by every change; a request made at another revision is refused.
+  revision        Int      @default(1)
+  updatedBy       String?  @map("updated_by")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project       Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  family        VisualProfileFamily? @relation(fields: [familyId], references: [id], onDelete: Restrict)
+  pinnedVersion VisualProfile?       @relation(fields: [pinnedVersionId], references: [id], onDelete: Restrict)
+
+  @@index([familyId])
+  @@map("visual_selections")
 }
 
 /// A deterministic data graphic. The AI proposes `spec` (InfographicSpec contract);

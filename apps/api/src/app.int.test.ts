@@ -148,7 +148,7 @@ describe('HTTP API', () => {
 describe('research dossier API', () => {
   it('serves the dossier with claims, citations, sources, quality report and cost, and links the approval', async () => {
     const { app, c } = await start({}, { fakeResearch: true });
-    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH', 'STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES', 'SCRIPT', 'VOICE']);
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['RESEARCH', 'STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES', 'SCRIPT', 'VOICE', 'VISUAL_PLAN', 'STORYBOARD_PREVIEW']);
     const p = (await app.inject({ method: 'POST', url: '/api/projects', payload: tulipInput })).json<ProjectDetailView>();
     expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/research` })).json<ResearchView>()).toEqual({ versions: [], dossier: null });
 
@@ -198,7 +198,7 @@ describe('story API', () => {
 
   it('mines, lets the editor curate, checks the selection, builds and reviews the architecture', async () => {
     const { app, c } = await start({}, { fakeStory: true });
-    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES', 'SCRIPT', 'VOICE']);
+    expect((await app.inject({ method: 'GET', url: '/api/health' })).json<HealthView>().realStages).toEqual(['STORY_MINING', 'STORY_ARCHITECTURE', 'STORY_ANGLES', 'SCRIPT', 'VOICE', 'VISUAL_PLAN', 'STORYBOARD_PREVIEW']);
     const p = await researched(app);
     expect(await story(app, p.id)).toMatchObject({ packs: [], pack: null, architecture: null, editable: false, selection: { count: 0, problem: 'No story pack yet' } });
 

@@ -1,5 +1,6 @@
 import { PROJECT_STATUSES, type ProjectDetailView, type ProjectStatus } from '@docengine/core';
 import { NavLink } from 'react-router';
+import { hasStoryboardPage, storyboardNote } from '../storyboard-plan.ts';
 
 const PROJECT_ORDER: readonly ProjectStatus[] = PROJECT_STATUSES;
 
@@ -83,7 +84,7 @@ interface NavItem {
   end?: boolean;
 }
 
-/** Links between a project's pages (overview, research dossier, story, script), shown under each page's title. */
+/** Links between a project's pages (overview, research dossier, story, script, voice, storyboard), shown under each page's title. */
 export function ProjectNav({ project: p }: { project: ProjectDetailView }) {
   const base = `/projects/${p.slug}`;
   const items: NavItem[] = [{ to: base, label: 'Overview', note: null, attention: false, end: true }];
@@ -99,6 +100,9 @@ export function ProjectNav({ project: p }: { project: ProjectDetailView }) {
   }
   if (hasVoicePage(p)) {
     items.push({ to: `${base}/voice`, label: 'Voice', note: voiceNote(p), attention: p.status === 'SCRIPT_APPROVED' || p.status === 'VOICE_REVIEW' });
+  }
+  if (hasStoryboardPage(p)) {
+    items.push({ to: `${base}/storyboard`, label: 'Storyboard', note: storyboardNote(p), attention: p.status === 'STORYBOARD_REVIEW' || (p.status === 'VOICE_COMPLETE' && !p.storyboard) });
   }
   return (
     <nav aria-label="Project pages" className="mt-3 flex flex-wrap gap-2">

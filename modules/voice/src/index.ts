@@ -39,3 +39,5 @@ export { planChunks, performanceShift, CHUNK_COSTS, type PlannedChunk, type Chun
 export { toSpoken, numberToWords, yearToWords } from './spoken.ts';
 export { assemble, whatIsSaidAt, parseClock, formatClock } from './assembly.ts';
 export { approvedScript, loadScriptForVoice } from './script.ts';
+export { sentenceSpans, wordSpans, type TextSpan } from './text.ts';
+export { narrationFingerprint, narrationSpine, spineOf, SpineError, type SpineRows } from './spine.ts';

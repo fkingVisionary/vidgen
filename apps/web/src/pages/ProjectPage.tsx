@@ -15,9 +15,11 @@ import { useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { api } from '../api.ts';
 import { JobStatusBadge, MockBadge, StatusBadge } from '../components/badges.tsx';
-import { ProjectNav, hasScriptPage, hasStoryPage } from '../components/ProjectNav.tsx';
+import { ProjectNav, hasScriptPage, hasStoryPage, hasVoicePage } from '../components/ProjectNav.tsx';
 import { ProgressBar, StagePipeline } from '../components/StagePipeline.tsx';
+import { StoryboardStatusBadge } from '../components/storyboard.tsx';
 import { formatDate, formatDuration, formatRuntime, formatUsd } from '../format.ts';
+import { generationHeld, hasStoryboardPage, rollupText, summaryLine } from '../storyboard-plan.ts';
 
 export function ProjectPage() {
   const { id = '' } = useParams();
@@ -64,6 +66,8 @@ export function ProjectPage() {
           RESEARCH: p.research ? `/projects/${p.slug}/research` : undefined,
           STORY: hasStoryPage(p) ? `/projects/${p.slug}/story` : undefined,
           SCRIPT: hasScriptPage(p) ? `/projects/${p.slug}/script` : undefined,
+          VOICE: hasVoicePage(p) ? `/projects/${p.slug}/voice` : undefined,
+          STORYBOARD: hasStoryboardPage(p) ? `/projects/${p.slug}/storyboard` : undefined,
         }}
       />
 
@@ -74,6 +78,7 @@ export function ProjectPage() {
           <JobsTable project={p} />
         </div>
         <div className="min-w-0 space-y-6">
+          {hasStoryboardPage(p) && <StoryboardCard project={p} />}
           {p.script && <ScriptCard project={p} />}
           {(p.story.pack || p.story.architecture || p.status === 'RESEARCH_COMPLETE') && <StoryCard project={p} />}
           {p.research && (
@@ -219,6 +224,33 @@ function StoryCard({ project: p }: { project: ProjectDetailView }) {
   );
 }
 
+/** The newest storyboard version (a preview included): its forecast, QA and narration, or that one can be planned. */
+function StoryboardCard({ project: p }: { project: ProjectDetailView }) {
+  const s = p.storyboard;
+  return (
+    <Card title="Storyboard">
+      {s ? (
+        <div className="space-y-1" data-storyboard-card>
+          <p className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="break-words">{summaryLine(s)}</span>
+            <StoryboardStatusBadge status={s.status} />
+            {s.stale && <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">stale</span>}
+          </p>
+          <p className="text-xs text-stone-600">Visual cost forecast: {rollupText({ totalUsd: s.estimatedCostUsd, basis: s.costBasis, unpricedShots: s.unpricedShotCount })} (an estimate; nothing is generated)</p>
+          <p className={`text-xs ${s.blocking ? 'text-red-700' : 'text-emerald-700'}`}>
+            QA as saved: {s.blocking} blocking, {s.warnings} to check · narration run {s.narration.runNumber}, assembly v{s.narration.assemblyVersion}
+          </p>
+        </div>
+      ) : (
+        <p className="text-sm text-stone-500">No storyboard yet: it is planned on the narration's real audio.</p>
+      )}
+      <Link to={`/projects/${p.slug}/storyboard`} className="mt-2 inline-block rounded-md bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-700">
+        {s ? 'Open storyboard →' : 'Plan the storyboard →'}
+      </Link>
+    </Card>
+  );
+}
+
 function useProjectMutation<T>(project: ProjectDetailView, fn: (arg: T) => Promise<unknown>) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -248,10 +280,18 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
   const scriptOnItsPage = realStages.includes('SCRIPT');
   // Real narration is planned, confirmed and reviewed chunk by chunk on the Voice page.
   const voiceOnItsPage = realStages.includes('VOICE');
-  const runnableJobs = p.actions.runnableJobs.filter((t) => !(p.status === 'STORY_SELECTION' && t === 'STORY_ARCHITECTURE') && !(scriptOnItsPage && t === 'SCRIPT') && !(voiceOnItsPage && t === 'VOICE'));
+  // A real storyboard is planned, edited and decided on the Storyboard page; while it is real, visual generation is held (the server refuses it too).
+  const storyboardOnItsPage = realStages.includes('VISUAL_PLAN');
+  const held = (t: JobType) => generationHeld(realStages, t);
+  const runnableJobs = p.actions.runnableJobs.filter(
+    (t) => !(p.status === 'STORY_SELECTION' && t === 'STORY_ARCHITECTURE') && !(scriptOnItsPage && t === 'SCRIPT') && !(voiceOnItsPage && t === 'VOICE') && !(storyboardOnItsPage && (t === 'VISUAL_PLAN' || t === 'STORYBOARD_PREVIEW')) && !held(t),
+  );
+  const heldJobs = p.actions.runnableJobs.filter(held);
   const storyPage = `/projects/${p.slug}/story`;
   const scriptPage = `/projects/${p.slug}/script`;
   const voicePage = `/projects/${p.slug}/voice`;
+  const storyboardPage = `/projects/${p.slug}/storyboard`;
+  const storyboardGate = p.actions.gate?.gate === 'STORYBOARD' && storyboardOnItsPage;
 
   return (
     <Card title="Next actions">
@@ -302,6 +342,36 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
               Open the Voice page →
             </Link>
           </div>
+        )}
+
+        {storyboardOnItsPage && ['VOICE_REVIEW', 'VOICE_COMPLETE', 'VISUAL_PLANNING', 'STORYBOARD_REVIEW', 'STORYBOARD_APPROVED'].includes(p.status) && (
+          <div className="rounded-md border border-sky-200 bg-sky-50 p-3" data-storyboard-next>
+            <p className="text-sm font-medium text-sky-950">
+              {p.status === 'VISUAL_PLANNING'
+                ? active.some((j) => j.type === 'VISUAL_PLAN')
+                  ? 'The storyboard is being planned'
+                  : 'The storyboard is back with you: plan it again'
+                : p.status === 'STORYBOARD_REVIEW'
+                  ? 'Your turn: review the storyboard'
+                  : p.status === 'STORYBOARD_APPROVED'
+                    ? 'The storyboard is approved'
+                    : p.storyboard
+                      ? 'Your turn: review the storyboard'
+                      : 'Your turn: plan the storyboard'}
+            </p>
+            <p className="mt-1 text-sm text-sky-900">
+              The Storyboard page plans visual beats and shots on the narration's real audio{p.status === 'VOICE_REVIEW' ? ' (a preview while the narration is reviewed)' : ''}, with the evidence behind each picture and a forecast of its cost, and keeps every version for your review. Nothing is generated.
+            </p>
+            <Link to={storyboardPage} className={`${button} mt-2 inline-block bg-sky-700 text-white hover:bg-sky-600`}>
+              Open the Storyboard page →
+            </Link>
+          </div>
+        )}
+
+        {heldJobs.length > 0 && (
+          <p className="rounded-md bg-stone-100 p-3 text-sm text-stone-700" data-generation-held>
+            Visual generation is the next milestone: it starts only after the storyboard is reviewed and accepted.
+          </p>
         )}
 
         {runnableJobs.length > 0 && (
@@ -355,29 +425,41 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
                 </Link>
               </div>
             )}
-            {!p.actions.canApprove && <p className="text-xs text-violet-800">Approval unlocks once the automated jobs for this step have succeeded.</p>}
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Notes (optional) — what you checked, what to change"
-              className="mt-2 w-full rounded-md border border-violet-200 bg-white px-2 py-1.5 text-sm"
-              rows={2}
-            />
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button disabled={!p.actions.canApprove || decide.isPending} onClick={() => decide.mutate('APPROVED')} className={`${button} bg-emerald-700 text-white hover:bg-emerald-600`}>
-                Approve → {STATUS_LABELS[p.actions.gate.onApprove]}
-              </button>
-              <button disabled={decide.isPending} onClick={() => decide.mutate('REJECTED')} className={`${button} bg-white text-red-700 ring-1 ring-red-300 hover:bg-red-50`}>
-                Reject → {STATUS_LABELS[p.actions.gate.onReject]}
-              </button>
-              <button disabled={decide.isPending} onClick={() => decide.mutate('FLAGGED')} className={`${button} bg-white text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50`}>
-                Flag (no status change)
-              </button>
-            </div>
+            {storyboardGate && (
+              <div className="mt-1">
+                <p className="text-xs text-violet-800">Decide on the Storyboard page: the decision names the version you reviewed, and blocking findings, rejected shots and unapproved narration stop approval there.</p>
+                <Link to={storyboardPage} className={`${button} mt-1 inline-block bg-violet-700 text-white hover:bg-violet-600`}>
+                  Open the storyboard →
+                </Link>
+              </div>
+            )}
+            {!storyboardGate && !p.actions.canApprove && <p className="text-xs text-violet-800">Approval unlocks once the automated jobs for this step have succeeded.</p>}
+            {!storyboardGate && (
+              <>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="Notes (optional) — what you checked, what to change"
+                  className="mt-2 w-full rounded-md border border-violet-200 bg-white px-2 py-1.5 text-sm"
+                  rows={2}
+                />
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button disabled={!p.actions.canApprove || decide.isPending} onClick={() => decide.mutate('APPROVED')} className={`${button} bg-emerald-700 text-white hover:bg-emerald-600`}>
+                    Approve → {STATUS_LABELS[p.actions.gate.onApprove]}
+                  </button>
+                  <button disabled={decide.isPending} onClick={() => decide.mutate('REJECTED')} className={`${button} bg-white text-red-700 ring-1 ring-red-300 hover:bg-red-50`}>
+                    Reject → {STATUS_LABELS[p.actions.gate.onReject]}
+                  </button>
+                  <button disabled={decide.isPending} onClick={() => decide.mutate('FLAGGED')} className={`${button} bg-white text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50`}>
+                    Flag (no status change)
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
-        {runnableJobs.length === 0 && !p.actions.gate && p.status !== 'FAILED' && p.status !== 'STORY_SELECTION' && (
+        {runnableJobs.length === 0 && heldJobs.length === 0 && !p.actions.gate && p.status !== 'FAILED' && p.status !== 'STORY_SELECTION' && (
           <p className="text-sm text-stone-500">{p.status === 'PUBLISHED' ? 'Published. Nothing left to do.' : 'No actions available in this status.'}</p>
         )}
 
@@ -408,6 +490,8 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
 }
 
 function JobsTable({ project: p }: { project: ProjectDetailView }) {
+  const health = useQuery({ queryKey: ['health'], queryFn: api.health });
+  const realStages = health.data?.realStages ?? [];
   const retry = useProjectMutation(p, (jobId: string) => api.retryJob(jobId));
   return (
     <Card title="Jobs">
@@ -450,11 +534,16 @@ function JobsTable({ project: p }: { project: ProjectDetailView }) {
                   <td className="py-2 pr-3 tabular-nums text-stone-600">{formatDuration(j.startedAt, j.completedAt)}</td>
                   <td className="py-2 pr-3 text-stone-600">{formatDate(j.createdAt)}</td>
                   <td className="py-2 text-right">
-                    {(j.status === 'FAILED' || j.status === 'CANCELLED') && (
-                      <button disabled={retry.isPending} onClick={() => retry.mutate(j.id)} className={`${button} bg-white text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50`}>
-                        Retry
-                      </button>
-                    )}
+                    {(j.status === 'FAILED' || j.status === 'CANCELLED') &&
+                      (generationHeld(realStages, j.type) ? (
+                        <span className="text-xs text-stone-500" data-retry-held title="Visual generation is the next milestone: it starts only after the storyboard is reviewed and accepted.">
+                          held: the next milestone
+                        </span>
+                      ) : (
+                        <button disabled={retry.isPending} onClick={() => retry.mutate(j.id)} className={`${button} bg-white text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50`}>
+                          Retry
+                        </button>
+                      ))}
                   </td>
                 </tr>
               ))}

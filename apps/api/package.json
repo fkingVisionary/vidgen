@@ -21,6 +21,7 @@
     "@docengine/research": "workspace:*",
     "@docengine/script": "workspace:*",
     "@docengine/story": "workspace:*",
+    "@docengine/storyboard": "workspace:*",
     "@docengine/voice": "workspace:*",
     "@docengine/writing": "workspace:*",
     "@fastify/static": "10.1.5",

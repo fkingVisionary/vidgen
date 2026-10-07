@@ -253,4 +253,10 @@ export async function voiceRoutes(app: FastifyInstance, c: AppContainer): Promis
     const q = z.object({ run: z.coerce.number().int().min(1) }).parse(req.query ?? {});
     return c.voice.timeline(project.id, q.run);
   });
+
+  /** The narration timeline of one assembly version (an older one too), with the run, script, profile and language version by id. */
+  app.get('/api/voice/assemblies/:id/timeline', async (req): Promise<NarrationTimelineView> => {
+    const { id } = IdParams.parse(req.params);
+    return c.voice.timelineOf(id);
+  });
 }

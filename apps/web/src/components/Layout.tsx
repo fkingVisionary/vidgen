@@ -31,6 +31,9 @@ export function Layout({ children }: { children: ReactNode }) {
             <Link to="/voice-profiles" className="whitespace-nowrap text-sm text-stone-700 hover:underline">
               Voice profiles
             </Link>
+            <Link to="/visual-profiles" className="whitespace-nowrap text-sm text-stone-700 hover:underline">
+              Visual profiles
+            </Link>
             <span className={`inline-block h-2 w-2 rounded-full ${health.isError ? 'bg-red-500' : h?.status === 'ok' ? 'bg-emerald-500' : 'bg-amber-400'}`} />
             {health.isError ? 'API unreachable' : h ? `API ${h.status} · DB ${h.database} · worker ${h.worker} · v${h.version}` : 'connecting…'}
           </div>

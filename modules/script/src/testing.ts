@@ -1,4 +1,16 @@
-import { StoryArchitectureContentV2, type BeatFunction, type CastKind, type ClaimImportance, type ClaimVerdict, type InformationClass, type ResearchDossierContent } from '@docengine/core';
+import {
+  StoryArchitectureContentV2,
+  type BeatFunction,
+  type CastKind,
+  type ClaimImportance,
+  type ClaimType,
+  type ClaimVerdict,
+  type ConfidenceLevel,
+  type InformationClass,
+  type ResearchDossierContent,
+  type SceneSetting,
+  type SequenceVisual,
+} from '@docengine/core';
 import { ProviderError, type ObjectGenerationRequest, type ObjectGenerationResult } from '@docengine/providers';
 import { EvidenceBase } from '@docengine/story/shared';
 import { FakeStoryAI, fakeEvidenceInput } from '@docengine/story/testing';
@@ -542,11 +554,28 @@ export function fixtureDraft(scope: ScriptScope = fixtureScope()): ScriptDraft {
 
 // ── Synthetic scopes for any subject (the script quality rules' tests) ───────
 
+/** A source citing a synthetic claim (default: the one retrieved source, with a verified quote). */
+export interface SyntheticCitation {
+  id: string;
+  /** The source was retrieved (default true). */
+  retrieved?: boolean;
+  /** The quote was found in it (default true). */
+  quoteVerified?: boolean;
+}
+
 export interface SyntheticSpec {
   question: string;
-  claims: { key: string; statement: string; verdict?: ClaimVerdict; importance?: ClaimImportance; quote?: string }[];
+  claims: { key: string; statement: string; verdict?: ClaimVerdict; importance?: ClaimImportance; quote?: string; claimType?: ClaimType; confidence?: ConfidenceLevel; sources?: SyntheticCitation[] }[];
   cast?: { id: string; name: string; kind: CastKind; description: string; claimKeys?: string[] }[];
-  sequences: { title: string; seconds?: number; beats: { id: string; basis: InformationClass; function?: BeatFunction; claimKeys?: string[]; castIds?: string[]; description?: string }[] }[];
+  sequences: {
+    title: string;
+    seconds?: number;
+    /** Overrides the sequence's setting field by field (default: a reconstructed room in the evening). */
+    setting?: Partial<SceneSetting>;
+    /** Overrides the sequence's visual thinking field by field. */
+    visual?: Partial<SequenceVisual>;
+    beats: { id: string; basis: InformationClass; function?: BeatFunction; claimKeys?: string[]; castIds?: string[]; description?: string }[];
+  }[];
 }
 
 const EMPTY_CONTENT: ResearchDossierContent = {
@@ -562,25 +591,28 @@ const EMPTY_CONTENT: ResearchDossierContent = {
   missingEvidence: [],
 };
 
-/** An approved architecture and its evidence for any subject, from a compact spec (every claim has a verified quote: its statement). */
+/** An approved architecture and its evidence for any subject, from a compact spec (by default every claim has a verified quote — its statement — in one retrieved source). */
 export function syntheticScope(spec: SyntheticSpec): ScriptScope {
+  const DEFAULT_SOURCE: SyntheticCitation = { id: 'src-1' };
+  const sources = new Map<string, boolean>([['src-1', true]]);
+  for (const c of spec.claims) for (const x of c.sources ?? []) if (!sources.has(x.id)) sources.set(x.id, x.retrieved ?? true);
   const evidence = new EvidenceBase({
     dossierId: 'synthetic',
     dossierVersion: 1,
     summary: null,
     content: EMPTY_CONTENT,
-    sources: [{ id: 'src-1', title: 'A synthetic source', sourceType: 'PRIMARY', author: null, publishedDate: null, domain: 'example.org', retrieved: true, duplicateOfId: null }],
+    sources: [...sources].map(([id, retrieved], i) => ({ id, title: i === 0 ? 'A synthetic source' : `Synthetic source ${id}`, sourceType: 'PRIMARY' as const, author: null, publishedDate: null, domain: 'example.org', retrieved, duplicateOfId: null })),
     claims: spec.claims.map((c) => ({
       id: `claim-${c.key}`,
       key: c.key,
       statement: c.statement,
-      claimType: 'EVENT' as const,
+      claimType: c.claimType ?? ('EVENT' as const),
       importance: c.importance ?? 'SUPPORTING',
       verdict: c.verdict ?? 'ESTABLISHED',
-      confidence: 'HIGH' as const,
+      confidence: c.confidence ?? ('HIGH' as const),
       popularVersion: null,
       notes: null,
-      citations: [{ sourceId: 'src-1', stance: 'SUPPORTS' as const, quote: c.quote ?? c.statement, quoteVerified: true }],
+      citations: (c.sources ?? [DEFAULT_SOURCE]).map((x) => ({ sourceId: x.id, stance: 'SUPPORTS' as const, quote: c.quote ?? c.statement, quoteVerified: x.quoteVerified ?? true })),
     })),
   });
   const n = spec.sequences.length;
@@ -602,6 +634,8 @@ export function syntheticScope(spec: SyntheticSpec): ScriptScope {
       const s = seq(i + 1, q.title, beats);
       return {
         ...s,
+        setting: { ...s.setting, ...q.setting },
+        visual: { ...s.visual, ...q.visual },
         estimatedDurationSec: q.seconds ?? 60,
         continuity: { carriesIn: [], carriesOut: [], opens: i === 0 ? [{ id: 'Q0', question: spec.question }] : [], resolves: i === n - 1 ? ['Q0'] : [], timeJump: 'NONE' as const },
       };

@@ -57,6 +57,7 @@ import type { CorpusManifest, Diagnostics, NarrationRecord, ScriptChangeReport, 
 import type { AvailableActions } from './pipeline.ts';
 import type { ScriptTiming } from './script.ts';
 import type { StageView } from './stages.ts';
+import type { StoryboardSummaryView } from './storyboard-views.ts';
 
 /**
  * Response shapes of the HTTP API (JSON-serialised: dates are ISO strings,
@@ -155,6 +156,8 @@ export interface ProjectDetailView extends ProjectSummaryView {
   story: StorySummaryView;
   /** Latest script version, if any. */
   script: ScriptSummaryView | null;
+  /** Latest storyboard version, if any (a preview included). */
+  storyboard: StoryboardSummaryView | null;
 }
 
 export interface DossierSummaryView {

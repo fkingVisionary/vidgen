@@ -1,11 +1,25 @@
 # modules/
 
-Home of the **real** pipeline stages. Empty in milestone 1 on purpose: every
-stage currently runs a MOCK placeholder from
+Home of the **real** pipeline stages. A stage without a module here runs a
+MOCK placeholder from
 [`packages/pipeline/src/stages/mock-stages.ts`](../packages/pipeline/src/stages/mock-stages.ts).
 
-Planned modules: `research`, `story`, `script`, `voice`, `visual-director`,
-`infographics`, `editor`, `qa` (plus `localization` and `publishing` later).
+| Module | Package | What it is (docs/ARCHITECTURE.md) |
+|---|---|---|
+| `research` | `@docengine/research` | RESEARCH: the evidence dossier (§11) |
+| `story` | `@docengine/story` | STORY_MINING, STORY_ARCHITECTURE, revisions and STORY_ANGLES (§12–§14) |
+| `script` | `@docengine/script` | SCRIPT: the spoken script, its rules and versions (§15) |
+| `voice` | `@docengine/voice` | VOICE: narration in chunks, takes, assemblies, the VOICE gate, saved voice profiles; the narration spine read (§16) |
+| `writing` | `@docengine/writing` | A library for the script stage: the house-style corpus, diagnostics, the narration pass (§17) |
+| `storyboard` | `@docengine/storyboard` | VISUAL_PLAN and STORYBOARD_PREVIEW: the storyboard (beats and shots on the narration's clock, treatments, evidence, continuity, forecasts), its versions, decisions and STORYBOARD gate, and the visual profile library (§18). It generates no media |
+
+Planned: visual generation, `infographics`, `editor`, `qa` (plus
+`localization` and `publishing` later).
+
+A module may export a `./testing` entry (scripted fakes and synthetic
+fixtures, never used in production code): `@docengine/research/testing`, `@docengine/story/testing`,
+`@docengine/script/testing`, `@docengine/voice/testing`,
+`@docengine/storyboard/testing`.
 
 ## Convention
 

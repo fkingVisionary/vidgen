@@ -1,6 +1,8 @@
 import {
+  AssemblyEntry,
   CreateVoiceRunInput,
   DecideVoiceGenerationInput,
+  NarrationTimelineEntry,
   PlanVoiceRunInput,
   PronunciationConfig,
   RegenerateVoiceInput,
@@ -11,7 +13,6 @@ import {
   type CreateVoiceProfileFamilyInput,
   type DirectorMark,
   type DuplicateVoiceProfileInput,
-  type NarrationTimelineEntry,
   type NarrationTimelineView,
   type NewVoiceProfileVersionInput,
   type SaveRunAsProfileInput,
@@ -32,6 +33,7 @@ import type { Database, Job, Prisma, Project, Tx, VoiceChunk } from '@docengine/
 import { ConflictError, EVENT, NotFoundError, type ProjectService } from '@docengine/pipeline';
 import { joinClips, buildAssetKey, type ProviderSet, type VoiceProvider } from '@docengine/providers';
 import { createHash, randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { clipDrift, formatClock, whatIsSaidAt } from './assembly.ts';
 import { checkOverrides, describeOverrides, mergeOverrides, newRunConfig, newTakeConfig, profileLabel, runConfig, takeSource, type ProfileRow } from './config.ts';
 import { blockingCount, configurationFindings } from './qa.ts';
@@ -54,6 +56,7 @@ import {
 import { rulesFor } from './pronunciation.ts';
 import { assemblyMismatch, lexicon, readEntries, readPerformance, readQa, rebuildAssembly, runQa, syncLexicon, unresolvedIn } from './runs.ts';
 import { approvedScript, loadScriptForVoice, resolveScope, ScopeError, type VoiceScript } from './script.ts';
+import { SpineError, StoredRunScope, readStrict } from './spine.ts';
 import { chunkSentences } from './stage.ts';
 import { sha256 } from './text.ts';
 
@@ -107,6 +110,15 @@ function wrap<T>(fn: () => Promise<T>): Promise<T> {
     if (isUniqueViolation(err)) throw new ConflictError('Saved at the same time somewhere else (a profile version, a name or a project\'s choice): reload and try again');
     throw err;
   });
+}
+
+/** Stored narration that cannot be read is refused (409) with what it is, never shown empty. */
+function readable<T>(read: () => T): T {
+  try {
+    return read();
+  } catch (err) {
+    throw err instanceof SpineError ? new ConflictError(err.message) : err;
+  }
 }
 
 /** A selection revision a plan was made at that is no longer the project's. */
@@ -750,12 +762,27 @@ export class VoiceService {
    */
   async timeline(projectRef: string, runNumber: number): Promise<NarrationTimelineView> {
     const project = await this.project(projectRef);
-    const run = await this.db.voiceRun.findUnique({ where: { projectId_number: { projectId: project.id, number: runNumber } }, include: { script: { select: { version: true } } } });
+    const run = await this.db.voiceRun.findUnique({ where: { projectId_number: { projectId: project.id, number: runNumber } }, select: { id: true } });
     if (!run) throw new NotFoundError('Voice run', String(runNumber));
-    const assembly = await this.db.voiceAssembly.findFirst({ where: { runId: run.id }, orderBy: { version: 'desc' } });
+    const assembly = await this.db.voiceAssembly.findFirst({ where: { runId: run.id }, orderBy: { version: 'desc' }, select: { id: true } });
     if (!assembly) throw new ConflictError(`Voice run ${runNumber} has no assembled narration yet`);
-    const entries = readEntries(assembly.entries);
-    const timeline = (assembly.timeline ?? []) as unknown as NarrationTimelineEntry[];
+    return this.timelineOf(assembly.id);
+  }
+
+  /**
+   * The narration timeline of one assembly version, an older one too, with
+   * the rows behind it by id (run, script, voice profile version, language
+   * version), the run's kind and the block keys of its scope. Its stored
+   * JSON is read strictly: what does not parse is refused, never shown empty.
+   */
+  async timelineOf(assemblyId: string): Promise<NarrationTimelineView> {
+    const assembly = await this.db.voiceAssembly.findUnique({ where: { id: assemblyId }, include: { run: { include: { script: { select: { version: true } } } } } });
+    if (!assembly) throw new NotFoundError('Voice assembly', assemblyId);
+    const { run } = assembly;
+    const name = `Assembly v${assembly.version} of voice run ${run.number}`;
+    const entries = readable(() => readStrict(z.array(AssemblyEntry), assembly.entries, `${name}: its clips`));
+    const timeline = readable(() => readStrict(z.array(NarrationTimelineEntry), assembly.timeline, `${name}: its timeline`));
+    const scope = readable(() => readStrict(StoredRunScope, run.scope, `Voice run ${run.number}: its scope`));
     const ids = [...new Set([...entries.map((e) => e.generationId), ...timeline.map((t) => t.audioChunk.generationId)])];
     const takes = new Map((await this.db.voiceGeneration.findMany({ where: { id: { in: ids } }, select: { id: true, status: true, audioAssetId: true } })).map((t) => [t.id, t]));
     // Assemblies made before audio files were recorded in them get theirs from the take.
@@ -767,6 +794,13 @@ export class VoiceService {
       run: run.number,
       scriptVersion: run.script.version,
       assembly: assembly.version,
+      assemblyId: assembly.id,
+      runId: run.id,
+      scriptId: assembly.scriptId,
+      profileId: assembly.profileId,
+      runKind: run.kind,
+      scopeBlockKeys: scope.blockKeys,
+      languageVersionId: run.languageVersionId,
       status: assembly.status,
       complete: assembly.complete,
       totalDurationMs: assembly.totalDurationMs,

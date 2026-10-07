@@ -45,6 +45,24 @@ export const EVENT = {
   VOICE_PROFILE_SELECTED: 'VOICE_PROFILE_SELECTED',
   /** An earlier approved narration was superseded by approving a newer assembly. */
   VOICE_ASSEMBLY_SUPERSEDED: 'VOICE_ASSEMBLY_SUPERSEDED',
+  /** The editor asked for a storyboard of a voice run's narration (the phase job or a preview): a plan, another approach, or chosen beats re-planned. */
+  STORYBOARD_REQUESTED: 'STORYBOARD_REQUESTED',
+  /** A storyboard version was saved: planned by a job, or re-timed onto another assembly of the same script (earlier versions are kept). */
+  STORYBOARD_SAVED: 'STORYBOARD_SAVED',
+  /** The editor's changes to a storyboard version were saved as a new version (no model call; the base is kept). */
+  STORYBOARD_EDITED: 'STORYBOARD_EDITED',
+  /** A person approved, rejected or asked for changes to a storyboard version (at version level or at the STORYBOARD gate). */
+  STORYBOARD_DECIDED: 'STORYBOARD_DECIDED',
+  /** A person approved or rejected one shot of a storyboard version, or cleared their decision. */
+  STORYBOARD_SHOT_DECIDED: 'STORYBOARD_SHOT_DECIDED',
+  /** Earlier storyboard versions were superseded: unapproved ones by saving a newer version, an approved one by approving a newer version. */
+  STORYBOARD_SUPERSEDED: 'STORYBOARD_SUPERSEDED',
+  /** An earlier storyboard version was made current again, as a new version. */
+  STORYBOARD_RESTORED: 'STORYBOARD_RESTORED',
+  /** Reserved: a visual profile version made from the project's storyboard work (nothing makes one yet; the library's own changes belong to no project and are not logged here). */
+  VISUAL_PROFILE_CREATED: 'VISUAL_PROFILE_CREATED',
+  /** The editor chose the project's visual profile (follow its current version, pin one, or the library default), or changed the project's overrides of it. */
+  VISUAL_PROFILE_SELECTED: 'VISUAL_PROFILE_SELECTED',
   /** A mock job succeeded where the transition requires real providers (e.g. publishing). */
   PHASE_BLOCKED_MOCK: 'PHASE_BLOCKED_MOCK',
 } as const;

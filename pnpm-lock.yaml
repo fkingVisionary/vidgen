@@ -71,6 +71,9 @@ importers:
       '@docengine/story':
         specifier: workspace:*
         version: link:../../modules/story
+      '@docengine/storyboard':
+        specifier: workspace:*
+        version: link:../../modules/storyboard
       '@docengine/voice':
         specifier: workspace:*
         version: link:../../modules/voice
@@ -196,6 +199,33 @@ importers:
       '@docengine/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+
+  modules/storyboard:
+    dependencies:
+      '@docengine/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@docengine/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@docengine/pipeline':
+        specifier: workspace:*
+        version: link:../../packages/pipeline
+      '@docengine/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      '@docengine/script':
+        specifier: workspace:*
+        version: link:../script
+      '@docengine/story':
+        specifier: workspace:*
+        version: link:../story
+      '@docengine/voice':
+        specifier: workspace:*
+        version: link:../voice
       zod:
         specifier: 'catalog:'
         version: 4.6.5

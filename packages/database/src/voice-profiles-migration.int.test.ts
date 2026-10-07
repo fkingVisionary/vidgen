@@ -263,7 +263,12 @@ describe(`migration ${MIGRATION} on production-shaped rows`, () => {
     expect((await db.query(`SELECT 1 FROM pg_class WHERE "relname" = '_voice_profile_family_map'`)).rowCount).toBe(0);
   });
 
-  it('leaves the database exactly as schema.prisma describes it (Prisma 7 migrate diff: no drift)', () => {
+  it('leaves the database exactly as schema.prisma describes it, with any later migrations applied (Prisma 7 migrate diff: no drift)', () => {
+    const later = readdirSync(MIGRATIONS, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name > MIGRATION)
+      .map((d) => d.name)
+      .sort();
+    for (const dir of later) psql(['-f', migrationFile(dir)]);
     const r = spawnSync('pnpm', ['exec', 'prisma', 'migrate', 'diff', '--from-config-datasource', '--to-schema', 'prisma/schema.prisma', '--script', '--exit-code'], {
       cwd: PACKAGE,
       env: { ...process.env, DATABASE_URL: url },

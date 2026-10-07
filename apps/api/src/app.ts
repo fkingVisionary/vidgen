@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import { TransitionError } from '@docengine/core';
 import { DomainError } from '@docengine/pipeline';
+import { VersionConflictError } from '@docengine/storyboard';
 import Fastify, { LogController, type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import { registerBasicAuth } from './auth.ts';
@@ -13,6 +14,8 @@ import { jobRoutes } from './routes/jobs.ts';
 import { projectRoutes } from './routes/projects.ts';
 import { storyRoutes } from './routes/story.ts';
 import { scriptRoutes } from './routes/script.ts';
+import { storyboardRoutes } from './routes/storyboard.ts';
+import { visualRoutes } from './routes/visual.ts';
 import { voiceRoutes } from './routes/voice.ts';
 import { writingRoutes } from './routes/writing.ts';
 
@@ -58,6 +61,8 @@ export async function buildApp(c: AppContainer): Promise<FastifyInstance> {
         issues: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
       });
     }
+    // A storyboard saved since the editor opened it: the newest version number lets the page offer to save over it.
+    if (err instanceof VersionConflictError) return reply.code(409).send({ error: err.code, message: err.message, latestVersion: err.latestVersion });
     if (err instanceof DomainError) return reply.code(err.httpStatus).send({ error: err.code, message: err.message });
     if (err instanceof TransitionError) return reply.code(409).send({ error: 'CONFLICT', message: err.message });
     const status = (err as { statusCode?: number }).statusCode;
@@ -75,6 +80,8 @@ export async function buildApp(c: AppContainer): Promise<FastifyInstance> {
   await storyRoutes(app, c);
   await scriptRoutes(app, c);
   await voiceRoutes(app, c);
+  await storyboardRoutes(app, c);
+  await visualRoutes(app, c);
   await writingRoutes(app, c);
   await jobRoutes(app, c);
 

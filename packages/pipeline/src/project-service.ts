@@ -10,6 +10,7 @@ import {
   ReviseScriptInput,
   STATUS_DEFINITIONS,
   StoryExplorationContent,
+  StoryboardJobInput,
   UpdateContentOpportunityInput,
   UpdateStoryCandidateInput,
   assertTransition,
@@ -38,9 +39,34 @@ import { silentLogger, type Logger } from './logger.ts';
 /**
  * A stage's own checks at its approval gate, run inside the approval's
  * transaction: throw a ConflictError to refuse the decision; return the
- * artifact the decision is about so the approval records it.
+ * artifact the decision is about (and the language version it concerns) so
+ * the approval records it, and any writes that must name the approval.
+ * `input` is the reviewer's request, naming the version they looked at when
+ * they sent one.
  */
-export type GateHook = (tx: Tx, project: Project, decision: ApprovalDecision, actor: Actor) => Promise<{ voiceAssemblyId?: string | null }>;
+export type GateHook = (tx: Tx, project: Project, decision: ApprovalDecision, actor: Actor, input: ApprovalInput) => Promise<GateHookResult>;
+
+/** What a gate decision is about, as recorded on its approval. */
+export interface GateHookResult {
+  voiceAssemblyId?: string | null;
+  storyboardId?: string | null;
+  languageVersionId?: string | null;
+  /** The stage's writes that name the approval (a decision row linked to it): run once it is written, in the same transaction. */
+  onRecorded?: (tx: Tx, approval: Approval) => Promise<void>;
+}
+
+/** A storyboard job's input as its service builds it: the request's actor is recorded as its requester. */
+export type StoryboardJobRequest = Omit<StoryboardJobInput, 'requestedBy'>;
+
+/** A checked storyboard request: the job's input, the language version it runs in, and its narration as people name it. */
+interface StoryboardRequest {
+  input: StoryboardJobInput;
+  languageVersionId: string;
+  narration: string;
+}
+
+/** Storyboard jobs save versions numbered per project: one runs at a time, whatever its phase run or language. */
+const STORYBOARD_JOBS: readonly JobType[] = ['VISUAL_PLAN', 'STORYBOARD_PREVIEW'];
 
 export interface ProjectServiceOptions {
   db: Database;
@@ -125,6 +151,7 @@ export class ProjectService {
       let project = await this.lockProject(tx, projectId);
       const resolution = resolveEnqueue(project.status, input.type);
       if (!resolution.ok) throw new ConflictError(resolution.reason);
+      if (STORYBOARD_JOBS.includes(input.type)) await this.requireNoStoryboardJob(tx, project.id);
 
       const languageVersionId = await this.resolveLanguageVersionId(tx, project, input.languageVersionId);
       if (resolution.enterStatus) {
@@ -145,6 +172,7 @@ export class ProjectService {
         throw new ConflictError(`Only FAILED or CANCELLED jobs can be retried (job is ${old.status})`);
       }
       let project = await this.lockProject(tx, old.projectId);
+      if (STORYBOARD_JOBS.includes(old.type)) await this.requireNoStoryboardJob(tx, project.id);
       if (isSideJob(old.type)) {
         // A side job runs again only where it may run; it never moves the project.
         const resolution = resolveEnqueue(project.status, old.type);
@@ -231,11 +259,21 @@ export class ProjectService {
         }
       }
 
-      const hooked = (await this.gateHooks[input.gate]?.(tx, project, input.decision, actor)) ?? {};
+      const hooked: GateHookResult = (await this.gateHooks[input.gate]?.(tx, project, input.decision, actor, input)) ?? {};
+
+      // The version the reviewer looked at must be the one decided on: another put under review meanwhile is refused.
+      if (input.artifactId) {
+        const decidedOn: Partial<Record<ApprovalGate, string | null | undefined>> = { RESEARCH: dossierId, STORY: storyId, SCRIPT: scriptId, VOICE: hooked.voiceAssemblyId, STORYBOARD: hooked.storyboardId };
+        const artifact = decidedOn[input.gate] ?? null;
+        if (input.artifactId !== artifact) {
+          throw new ConflictError(`${input.gate}: the version you looked at (${input.artifactId}) is not the one under review${artifact ? ` (${artifact})` : ''}: reload and review it`);
+        }
+      }
 
       const approval = await tx.approval.create({
         data: {
           projectId,
+          languageVersionId: hooked.languageVersionId ?? null,
           gate: input.gate,
           decision: input.decision,
           notes: input.notes ?? null,
@@ -245,8 +283,10 @@ export class ProjectService {
           storyId,
           scriptId,
           voiceAssemblyId: hooked.voiceAssemblyId ?? null,
+          storyboardId: hooked.storyboardId ?? null,
         },
       });
+      await hooked.onRecorded?.(tx, approval);
       await this.event(tx, projectId, EVENT.APPROVAL_RECORDED, `${input.gate}: ${input.decision}`, {
         actor,
         approvalId: approval.id,
@@ -501,6 +541,138 @@ export class ProjectService {
       return this.insertJob(tx, project, 'VOICE', languageVersionId, input as Prisma.InputJsonValue, actor);
     });
     await this.onJobQueued?.(job);
+    return job;
+  }
+
+  /**
+   * Plan a storyboard as the phase job (VISUAL_PLAN), entering
+   * VISUAL_PLANNING first when needed: START from VOICE_COMPLETE, the
+   * STORYBOARD gate's send-back path from STORYBOARD_REVIEW (classified
+   * REJECT; no gate decision is recorded, the version under review stays
+   * IN_REVIEW until the new version supersedes it), REWIND from
+   * STORYBOARD_APPROVED (the approved version stays approved until another
+   * is), RECOVER from a failed planning run. `prepare` builds the job's input
+   * in the same transaction; the job runs in its voice run's language version
+   * (the master's: a storyboard is timed by the master narration). Its
+   * narration is the one the VOICE gate approved: the STORYBOARD gate passes
+   * no storyboard timed by another.
+   */
+  async storyboardJob(projectId: string, actor: Actor, reason: string, prepare: (tx: Tx, project: Project) => Promise<StoryboardJobRequest>): Promise<Job> {
+    const job = await this.db.$transaction(async (tx) => {
+      let project = await this.lockProject(tx, projectId);
+      const failedPlanning = project.status === 'FAILED' && project.failedFromStatus === 'VISUAL_PLANNING';
+      if (!['VOICE_COMPLETE', 'VISUAL_PLANNING', 'STORYBOARD_REVIEW', 'STORYBOARD_APPROVED'].includes(project.status) && !failedPlanning) {
+        throw new ConflictError(`The storyboard is planned once the VOICE gate has approved the narration and before visual generation starts (the project is ${project.status})`);
+      }
+      await this.requireNoStoryboardJob(tx, project.id);
+      const request = await this.storyboardRequest(tx, project, actor, await prepare(tx, project));
+      const gate = await tx.approval.findFirst({ where: { projectId, gate: 'VOICE', decision: 'APPROVED' }, orderBy: { createdAt: 'desc' }, select: { voiceAssemblyId: true } });
+      if (!gate?.voiceAssemblyId) throw new ConflictError('No narration is approved at the VOICE gate: the storyboard reviewed at the STORYBOARD gate is planned on the narration it approves');
+      if (gate.voiceAssemblyId !== request.input.narration.assemblyId) {
+        throw new ConflictError(`${request.narration} is not the narration the VOICE gate approved: the storyboard reviewed at the STORYBOARD gate is planned on that narration (a preview may use another)`);
+      }
+      if (project.status !== 'VISUAL_PLANNING') {
+        const kind = getTransitionKind(project.status, 'VISUAL_PLANNING', { failedFrom: project.failedFromStatus });
+        if (kind !== 'START' && kind !== 'REWIND' && kind !== 'RECOVER' && kind !== 'REJECT') throw new ConflictError(`Cannot plan the storyboard from ${project.status}`);
+        project = await this.transition(tx, project, 'VISUAL_PLANNING', actor, reason);
+      }
+      return this.insertStoryboardJob(tx, project, 'VISUAL_PLAN', request, actor, reason);
+    });
+    await this.onJobQueued?.(job);
+    return job;
+  }
+
+  /**
+   * Plan a storyboard preview (a STORYBOARD_PREVIEW side job) of a voice
+   * run's narration, such as an audition, while the narration is reviewed or
+   * after its approval: it never changes the project's status. Like any
+   * queued work, a queued preview is cancelled when the project starts
+   * another phase run (the VOICE gate approves or rejects, new takes are
+   * generated); request it again then.
+   */
+  async storyboardPreview(projectId: string, actor: Actor, reason: string, prepare: (tx: Tx, project: Project) => Promise<StoryboardJobRequest>): Promise<Job> {
+    const job = await this.db.$transaction(async (tx) => {
+      const project = await this.lockProject(tx, projectId);
+      const resolution = resolveEnqueue(project.status, 'STORYBOARD_PREVIEW');
+      if (!resolution.ok) throw new ConflictError(resolution.reason);
+      await this.requireNoStoryboardJob(tx, project.id);
+      const request = await this.storyboardRequest(tx, project, actor, await prepare(tx, project));
+      return this.insertStoryboardJob(tx, project, 'STORYBOARD_PREVIEW', request, actor, reason);
+    });
+    await this.onJobQueued?.(job);
+    return job;
+  }
+
+  /**
+   * Re-open the STORYBOARD gate inside the caller's transaction (REWIND
+   * STORYBOARD_APPROVED → STORYBOARD_REVIEW), so that a new version of an
+   * approved storyboard is reviewed at the gate; the approved version stays
+   * approved until another is. Nothing changes while the gate is open;
+   * refused from any other status. It commits or rolls back with the
+   * caller's writes.
+   */
+  async reopenStoryboardReview(tx: Tx, project: Project, actor: Actor, reason: string): Promise<Project> {
+    const current = await this.lockProject(tx, project.id);
+    if (current.status === 'STORYBOARD_REVIEW') return current;
+    if (current.status !== 'STORYBOARD_APPROVED') throw new ConflictError(`The STORYBOARD gate is re-opened from STORYBOARD_APPROVED (the project is ${current.status})`);
+    return this.transition(tx, current, 'STORYBOARD_REVIEW', actor, reason);
+  }
+
+  /** The project's queued or running storyboard job, if any (read it under the project's lock): one runs at a time, and versions are not edited meanwhile. */
+  async activeStoryboardJob(tx: Tx, projectId: string): Promise<Pick<Job, 'id' | 'type' | 'status'> | null> {
+    return tx.job.findFirst({
+      where: { projectId, type: { in: [...STORYBOARD_JOBS] }, status: { in: ['QUEUED', 'RUNNING'] } },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, type: true, status: true },
+    });
+  }
+
+  private async requireNoStoryboardJob(tx: Tx, projectId: string): Promise<void> {
+    const active = await this.activeStoryboardJob(tx, projectId);
+    if (active) throw new ConflictError(`A storyboard job (${active.type}) is already ${active.status.toLowerCase()} (${active.id}): wait for it to finish`);
+  }
+
+  /**
+   * A storyboard request checked against the project's rows: its voice run,
+   * assembly and base version are the project's, and the run narrates the
+   * approved script in the master language. The job would refuse any other
+   * narration, so it is refused here, before a phase job moves the project.
+   */
+  private async storyboardRequest(tx: Tx, project: Project, actor: Actor, request: StoryboardJobRequest): Promise<StoryboardRequest> {
+    const input = StoryboardJobInput.parse({ ...request, requestedBy: actor });
+    const run = await tx.voiceRun.findFirst({
+      where: { id: input.narration.runId, projectId: project.id },
+      select: { id: true, number: true, languageVersionId: true, scriptId: true, script: { select: { version: true } }, languageVersion: { select: { language: true } } },
+    });
+    if (!run) throw new NotFoundError('Voice run', input.narration.runId);
+    const assembly = await tx.voiceAssembly.findFirst({ where: { id: input.narration.assemblyId, runId: run.id }, select: { id: true, version: true } });
+    if (!assembly) throw new NotFoundError('Assembly', `${input.narration.assemblyId} of voice run ${run.number}`);
+    if (run.languageVersion.language !== project.masterLanguage) {
+      throw new ConflictError(`Voice run ${run.number} is not in the master language (${project.masterLanguage}): a storyboard is timed by the master narration`);
+    }
+    const approved = await tx.script.findFirst({ where: { projectId: project.id, status: 'APPROVED' }, orderBy: { version: 'desc' }, select: { id: true, version: true } });
+    if (approved?.id !== run.scriptId) {
+      throw new ConflictError(`Voice run ${run.number} narrates script v${run.script.version}, ${approved ? `but the approved script is v${approved.version}` : 'and no script is approved'}: a storyboard is planned on the approved script's narration`);
+    }
+    if (input.base) {
+      const base = await tx.storyboard.findFirst({ where: { id: input.base.storyboardId, projectId: project.id, version: input.base.version }, select: { id: true } });
+      if (!base) throw new NotFoundError('Storyboard', `v${input.base.version} (${input.base.storyboardId})`);
+    }
+    return { input, languageVersionId: run.languageVersionId, narration: `Voice run ${run.number}, assembly v${assembly.version}` };
+  }
+
+  /** Enqueue a storyboard job in its voice run's language version and record the request. */
+  private async insertStoryboardJob(tx: Tx, project: Project, type: JobType, request: StoryboardRequest, actor: Actor, reason: string): Promise<Job> {
+    const { input } = request;
+    const job = await this.insertJob(tx, project, type, request.languageVersionId, input as Prisma.InputJsonValue, actor);
+    await this.event(
+      tx,
+      project.id,
+      EVENT.STORYBOARD_REQUESTED,
+      reason,
+      { actor, type, mode: input.mode, narration: input.narration, approach: input.approach ?? null, base: input.base ?? null, beatKeys: input.beatKeys ?? null, instructions: input.instructions ?? null, selectionRevision: input.selectionRevision },
+      job.id,
+    );
     return job;
   }
 

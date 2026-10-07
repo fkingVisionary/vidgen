@@ -12,10 +12,13 @@ import {
   REVISION_ASPECTS,
   SCRIPT_BLOCK_CLASSES,
   SECTION_REVIEW_STATUSES,
+  VISUAL_APPROACHES,
   VISUAL_INTENTS,
   VISUAL_PRIORITIES,
 } from '../enums.ts';
 import { ScriptDelivery, ScriptVisual } from './script.ts';
+import { BeatKey, StoryboardEditOp, STORYBOARD_LIMITS } from './storyboard.ts';
+import { VisualConfigOverrides } from './visual-profile.ts';
 import { DEFAULT_MASTER_LANGUAGE, LANGUAGE_CODES } from '../languages.ts';
 import { STORY_LIMITS } from '../story.ts';
 
@@ -52,6 +55,8 @@ export const ApprovalInput = z.object({
   gate: z.enum(APPROVAL_GATES),
   decision: z.enum(APPROVAL_DECISIONS),
   notes: z.string().trim().max(5000).optional(),
+  /** The artifact version the reviewer looked at (a storyboard version at the STORYBOARD gate): refused when another is under review. */
+  artifactId: z.uuid().optional(),
 });
 export type ApprovalInput = z.infer<typeof ApprovalInput>;
 
@@ -269,3 +274,130 @@ export type ReviewScriptSectionInput = z.infer<typeof ReviewScriptSectionInput>;
 /** Make an earlier version current again, as a new version (no model calls). */
 export const RestoreScriptInput = z.object({ version: z.number().int().min(1) });
 export type RestoreScriptInput = z.infer<typeof RestoreScriptInput>;
+
+// ---------------------------------------------------------------------------
+// Storyboard Engine
+// ---------------------------------------------------------------------------
+
+/** Planning calls the model (paid, within the job's ceiling): the request must say so. */
+const Confirm = z.literal(true, { error: 'Planning a storyboard calls the model and is paid for: confirm it' });
+
+/** The newest version of the storyboard the request was made against (another is refused: changed elsewhere). */
+const ExpectedVersion = z.number().int().min(1);
+
+/**
+ * Plan a storyboard from a voice run's narration. A preview (side job) or the
+ * phase job is chosen by the narration and the project's status. Default
+ * assembly: the run's latest (a preview) or the one the VOICE gate approved.
+ */
+export const GenerateStoryboardInput = z.object({
+  narration: z.object({ runId: z.uuid(), assemblyId: z.uuid().optional() }),
+  /** Default: the visual profile's approach. */
+  approach: z.enum(VISUAL_APPROACHES).optional(),
+  /** The project's visual selection revision the request was made at (0: none chosen yet). */
+  selectionRevision: z.number().int().min(0),
+  confirm: Confirm,
+});
+export type GenerateStoryboardInput = z.infer<typeof GenerateStoryboardInput>;
+
+/** Re-plan chosen beats of a version (their ranges stay; the rest is copied). */
+export const RegenerateBeatsInput = z.object({
+  beatKeys: z.array(BeatKey).min(1).max(STORYBOARD_LIMITS.beatsPerSection),
+  instructions: z.string().trim().max(STORYBOARD_LIMITS.instructions).optional(),
+  expectedVersion: ExpectedVersion,
+  confirm: Confirm,
+});
+export type RegenerateBeatsInput = z.infer<typeof RegenerateBeatsInput>;
+
+/** Plan another approach: only the beats whose treatment changes are re-planned. */
+export const SwitchApproachInput = z.object({ approach: z.enum(VISUAL_APPROACHES), expectedVersion: ExpectedVersion, confirm: Confirm });
+export type SwitchApproachInput = z.infer<typeof SwitchApproachInput>;
+
+/** A person's edits of a version, in order: a new version, no model call. */
+export const StoryboardEditInput = z.object({
+  expectedVersion: ExpectedVersion,
+  ops: z.array(StoryboardEditOp).min(1).max(50),
+  note: z.string().trim().max(1000).optional(),
+});
+export type StoryboardEditInput = z.infer<typeof StoryboardEditInput>;
+
+/** The same plan on another assembly of the same script: times recomputed from the word anchors (no model call). */
+export const RetimeStoryboardInput = z.object({ assemblyId: z.uuid(), expectedVersion: ExpectedVersion });
+export type RetimeStoryboardInput = z.infer<typeof RetimeStoryboardInput>;
+
+/** A copy of an older version as the newest (the history is kept). */
+export const RestoreStoryboardInput = z.object({ expectedVersion: ExpectedVersion });
+export type RestoreStoryboardInput = z.infer<typeof RestoreStoryboardInput>;
+
+/** A person's decision on a whole version. A whole-script version under review goes through the STORYBOARD gate. */
+export const StoryboardDecisionInput = z.object({
+  decision: z.enum(['APPROVED', 'REJECTED', 'CHANGES_REQUESTED']),
+  note: z.string().trim().max(2000).optional(),
+  expectedVersion: ExpectedVersion,
+});
+export type StoryboardDecisionInput = z.infer<typeof StoryboardDecisionInput>;
+
+/** A person's decision on one shot (CLEARED withdraws it). Never changes the version's content. */
+export const ShotDecisionInput = z.object({ decision: z.enum(['APPROVED', 'REJECTED', 'CLEARED']), note: z.string().trim().max(1000).optional() });
+export type ShotDecisionInput = z.infer<typeof ShotDecisionInput>;
+
+// ── Visual profiles ──────────────────────────────────────────────────────────
+
+/** A visual profile's name: unique among profiles, ignoring case. */
+const VisualProfileName = z.string().trim().min(1).max(80);
+const VisualProfileDescription = z.string().trim().max(1000);
+const VisualProfileNotes = z.string().trim().max(1000);
+
+/** A new visual profile (its v1): DEFAULT_VISUAL_PROFILE_CONFIG with `config` over it. */
+export const CreateVisualProfileFamilyInput = z.object({
+  name: VisualProfileName,
+  description: VisualProfileDescription.optional(),
+  config: VisualConfigOverrides.optional(),
+  notes: VisualProfileNotes.optional(),
+});
+export type CreateVisualProfileFamilyInput = z.infer<typeof CreateVisualProfileFamilyInput>;
+
+/** An edit: a new version of a visual profile (versions are never changed; storyboards keep the version they used). */
+export const NewVisualProfileVersionInput = z.object({
+  /** The version it is based on (default: the current one). */
+  basedOn: z.uuid().optional(),
+  /** Refused when the family's current version is no longer this one (an edit made in another tab). */
+  expectedCurrent: z.uuid().optional(),
+  config: VisualConfigOverrides,
+  notes: VisualProfileNotes.optional(),
+});
+export type NewVisualProfileVersionInput = z.infer<typeof NewVisualProfileVersionInput>;
+
+/** A new visual profile from any version of another. */
+export const DuplicateVisualProfileInput = z.object({
+  fromVersionId: z.uuid().optional(),
+  name: VisualProfileName,
+  description: VisualProfileDescription.optional(),
+  config: VisualConfigOverrides.optional(),
+});
+export type DuplicateVisualProfileInput = z.infer<typeof DuplicateVisualProfileInput>;
+
+/** Rename, describe, archive or unarchive a visual profile, or make it the library default (its versions are not touched). */
+export const UpdateVisualProfileFamilyInput = z
+  .object({
+    name: VisualProfileName.optional(),
+    description: VisualProfileDescription.nullable().optional(),
+    archived: z.boolean().optional(),
+    isDefault: z.literal(true).optional(),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined), { message: 'nothing to change' });
+export type UpdateVisualProfileFamilyInput = z.infer<typeof UpdateVisualProfileFamilyInput>;
+
+/** A project's choice of visual profile, and its overrides (never stored on the profile). Visuals are language-neutral: one choice per project. */
+export const VisualSelectionInput = z
+  .object({
+    /** Null: the library default. */
+    familyId: z.uuid().nullable(),
+    /** Pinned to this version of the family (null or absent: follow its current version). */
+    versionId: z.uuid().nullable().optional(),
+    overrides: VisualConfigOverrides.default({}),
+    /** The revision the editor saw (0: none yet); another revision is refused (changed in another tab). */
+    revision: z.number().int().min(0),
+  })
+  .refine((v) => !v.versionId || !!v.familyId, { message: 'a pinned version needs its profile', path: ['versionId'] });
+export type VisualSelectionInput = z.input<typeof VisualSelectionInput>;

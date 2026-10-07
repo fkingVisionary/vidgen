@@ -363,6 +363,184 @@ and the regeneration test are the operator's (below).
    profile, differs) and its cost ("sent … characters; provider reported …
    (character-cost header)").
 
+## Deploying Storyboard Engine V1
+
+No new services. Four optional variables (`STORYBOARD_MAX_COST_USD`,
+`STORYBOARD_MODELS`, `VISUAL_PRICE_OVERRIDES`, `ARCHIVAL_USD_PER_ITEM`;
+[Environment variables](#environment-variables)); unset, planning is held
+under $5 per job and the forecasts use the published list prices in the
+code, with archival items unpriced. The pre-deploy command applies one
+migration, hand-written and additive only:
+
+- `20261007090000_storyboard_engine`: the `STORYBOARD_APPROVED` status and
+  the `STORYBOARD_PREVIEW` job type (added after `STORYBOARD_REVIEW` and
+  `VISUAL_PLAN`, unused inside the migration); eight enums; the storyboard's
+  pins and figures as new nullable or defaulted columns on `storyboards`
+  and `shots` (`shots.visual_type` becomes optional); `storyboards.status`
+  cast in place from `ArtifactStatus` to `StoryboardStatus` (every old value
+  exists in the new type, so no row changes); eleven tables (`visual_beats`,
+  `visual_beat_blocks`, `visual_beat_claims`, `shot_blocks`, `shot_claims`,
+  `continuity_subjects`, `shot_subjects`, `storyboard_decisions`,
+  `visual_profile_families`, `visual_profiles`, `visual_selections`). No
+  column or row is dropped; nothing is backfilled; the five visual profile
+  presets are made by the code the first time the library is read.
+
+With `AI_PROVIDER=anthropic` the deploy registers the real VISUAL_PLAN and
+STORYBOARD_PREVIEW stages (the mock VISUAL_PLAN, which called the model and
+saved nothing, is gone), the STORYBOARD gate hook and the hard stop:
+VISUAL_GENERATION and INFOGRAPHIC are refused on enqueue and on retry in
+every status, and a job of either type already queued fails in the worker
+without calling anything. The deploy generates nothing and plans nothing.
+
+**Rollback.** Code from before never reads or writes storyboards, so it
+ignores the new tables and columns; but it does not know the
+STORYBOARD_APPROVED status or the STORYBOARD_PREVIEW job type (a project or
+job in them would not load), and it brings back the mock VISUAL_PLAN (a
+model call that saves nothing) and loses the hard stop. Roll back only while
+no project is in STORYBOARD_APPROVED and no STORYBOARD_PREVIEW job exists.
+Never revert the migration by hand (there is no down migration, and it
+changes no existing value).
+
+### Pre-flight (read-only, before the deploy)
+
+Run against production with `psql` (nothing here writes):
+
+```sql
+SELECT count(*) FROM storyboards; SELECT count(*) FROM shots;            -- expected 0 (no code wrote them before)
+SELECT status, count(*) FROM projects GROUP BY status;                   -- any project at or after VISUAL_PLANNING?
+SELECT slug, status, phase_seq FROM projects WHERE slug = 'tulip-mania';  -- expected VOICE_REVIEW
+SELECT type, status, count(*) FROM jobs WHERE type IN ('VISUAL_GENERATION','INFOGRAPHIC') GROUP BY 1, 2;  -- old jobs the retry guard holds
+-- run 3 of Tulip: its newest assembly, and every current take with provider timings, no blocking QA finding
+SELECT r.number, a.version, a.status, a.total_duration_ms, a.complete
+  FROM voice_runs r JOIN voice_assemblies a ON a.run_id = r.id
+ WHERE r.project_id = (SELECT id FROM projects WHERE slug = 'tulip-mania') AND r.number = 3 ORDER BY a.version DESC LIMIT 1;
+SELECT c.chunk_index, g.status, g.alignment->>'source' AS timings,
+       (SELECT count(*) FROM jsonb_array_elements(COALESCE(g.qa, '[]'::jsonb)) f WHERE f->>'severity' = 'BLOCKING') AS blocking
+  FROM voice_chunks c JOIN voice_generations g ON g.id = c.current_generation_id
+  JOIN voice_runs r ON r.id = c.run_id
+ WHERE r.project_id = (SELECT id FROM projects WHERE slug = 'tulip-mania') AND r.number = 3 ORDER BY c.chunk_index;
+-- the ceiling of "factual visuals traceable": claims of run 3's narrated blocks with a verified quote from a retrieved source
+WITH run AS (
+  SELECT r.script_id, r.language_version_id, ARRAY(SELECT jsonb_array_elements_text(r.scope->'blockKeys')) AS keys
+    FROM voice_runs r WHERE r.project_id = (SELECT id FROM projects WHERE slug = 'tulip-mania') AND r.number = 3
+)
+SELECT count(DISTINCT b.id) AS blocks, count(DISTINCT cl.id) AS claims,
+       count(DISTINCT cl.id) FILTER (WHERE cc.quote_verified AND s.retrieval_status = 'RETRIEVED') AS traceable
+  FROM run JOIN script_blocks b ON b.script_id = run.script_id AND b.block_key = ANY (run.keys)
+  JOIN scene_narrations n ON n.id = b.narration_id AND n.language_version_id = run.language_version_id
+  LEFT JOIN script_block_claims sbc ON sbc.block_id = b.id
+  LEFT JOIN research_claims cl ON cl.id = sbc.claim_id
+  LEFT JOIN claim_citations cc ON cc.claim_id = cl.id
+  LEFT JOIN sources s ON s.id = cc.source_id;
+```
+
+Expected: `storyboards` and `shots` empty (a pre-engine row
+would fail the project page; delete nothing, report it), Tulip in
+VOICE_REVIEW, run 3's newest assembly v1 IN_REVIEW of about 109.8 s, every
+take IN_REVIEW with `PROVIDER` timings and no blocking finding ("Approve
+all" skips a take that has one), 10 blocks, and `traceable` against `claims`
+as the most "factual visuals traceable" can reach (fewer means expected
+EVIDENCE_MISSING findings). Check the Anthropic credit balance.
+
+### Post-deploy verification (read-only, nothing paid)
+
+1. `GET /api/health` (public): `realStages` includes `VISUAL_PLAN` and
+   `STORYBOARD_PREVIEW`.
+2. `GET /api/visual/catalog`: `version` `2026-10-06.2` (with `+<8 hex>` when
+   price overrides are set); every rate has a source, a check date and a
+   confidence; archival and stock have no rate unless set.
+3. `GET /api/visual/profiles`: the five presets, Cinematic History the
+   library default, each with no provider preference. (This first read makes
+   the presets; it writes nothing else.)
+4. `GET /api/projects/tulip-mania/storyboard`: no versions, `realStage:
+   true`, planning allowed; `…/storyboard/inputs`: `kind: PREVIEW`, run 3
+   with its assembly and "takes 0/11 approved", the ceiling.
+5. `POST /api/projects/tulip-mania/jobs {"type":"VISUAL_GENERATION"}`: 409
+   "Visual generation is the next milestone; it starts only after the
+   storyboard is reviewed and accepted". Nothing is queued.
+
+### Operator runbook: the opening storyboard (preview), inspected, edited, approved
+
+Nothing below generates a picture, a video or audio. The only paid step is
+planning (step 3), a few model calls under the ceiling.
+
+1. **Visual profile.** *Visual profiles* (header): pick the library default
+   if you want another, then on the Storyboard page's inputs strip *Change* →
+   the profile for Tulip → save (or keep the library default, Cinematic
+   History). The project's events record the choice.
+2. **Approve run 3's takes** (recommended before planning; no spend).
+   Voice → run 3 → *Approve all*. Note how many were approved and whether
+   any was skipped (a take with a blocking QA finding is skipped; handle it
+   on the Voice page). Approving takes does not rebuild the assembly, so a
+   storyboard planned before or after stays valid.
+3. **Plan.** Storyboard → voice run 3 and its newest assembly → tick the
+   confirmation (the planning ceiling is shown) → *Plan the storyboard
+   (preview)*. A STORYBOARD_PREVIEW job runs; the project stays in
+   VOICE_REVIEW.
+4. **The summary line.** In Railway's logs, filter by the job id: one line
+   `storyboard summary: v1 PARTIAL run 3 assembly v1 fp=… 0–109.8 s · beats …
+   · shots … · avg … · treatments {…} · relations {…} · cost $… (MIXED,
+   unpriced n) · QA blocking b {…} / warnings w {…} · normalizations m ·
+   evidence traced t/f · continuity subjects c (requires reference: r) ·
+   narration takes a/11 approved · model calls k, $… planning spend · project
+   status VOICE_REVIEW (unchanged)`, with the same figures as JSON fields.
+5. **Inspect** v1 on the page and report each point as found:
+   - timing from the audio: the runtime equals the assembly's; the Timeline's
+     cuts sit at cut points; no UNALIGNED_TAKE, no gap or overlap;
+   - factual visuals traceable: the Evidence tab's coverage `t/f`; an
+     untraced factual shot is a blocking EVIDENCE_MISSING (fix it by an edit
+     or report it open);
+   - treatments varied: the Overview bar; TREATMENT_REPETITION /
+     TREATMENT_DOMINANT warnings;
+   - the forecast: MIXED or UNPRICED where nothing is verified, never $0 for
+     an unpriced shot;
+   - continuity: "Requires … continuity asset" on fictional and recurring
+     subjects;
+   - the model's output: the QA tab's normalization list, empty or explained.
+6. **Approve v1** (if the takes are approved and nothing blocks): the
+   decision panel → *Approve*. Refused otherwise, with the reason ("the
+   narration it is timed against is not approved (takes a/11 approved)", a
+   blocking finding, a rejected shot). The project's status does not change;
+   this is not the STORYBOARD gate.
+7. **v1's digest, before the edit** (read-only; repeat after step 8, the two
+   must be equal — only v1's status columns may change):
+
+   ```sql
+   \set v1 '<v1 storyboard id>'
+   SELECT md5(string_agg(row, E'\n' ORDER BY row)) AS v1_digest, count(*) AS rows FROM (
+     SELECT 'storyboard ' || (to_jsonb(s) - 'status' - 'decided_by' - 'decided_at' - 'updated_at')::text AS row FROM storyboards s WHERE s.id = :'v1'
+     UNION ALL SELECT 'shot ' || (to_jsonb(sh) - 'updated_at')::text FROM shots sh WHERE sh.storyboard_id = :'v1'
+     UNION ALL SELECT 'beat ' || to_jsonb(b)::text FROM visual_beats b WHERE b.storyboard_id = :'v1'
+     UNION ALL SELECT 'shot_block ' || to_jsonb(x)::text FROM shot_blocks x JOIN shots sh ON sh.id = x.shot_id WHERE sh.storyboard_id = :'v1'
+     UNION ALL SELECT 'shot_claim ' || to_jsonb(x)::text FROM shot_claims x JOIN shots sh ON sh.id = x.shot_id WHERE sh.storyboard_id = :'v1'
+     UNION ALL SELECT 'shot_subject ' || to_jsonb(x)::text FROM shot_subjects x JOIN shots sh ON sh.id = x.shot_id WHERE sh.storyboard_id = :'v1'
+     UNION ALL SELECT 'beat_block ' || to_jsonb(x)::text FROM visual_beat_blocks x JOIN visual_beats b ON b.id = x.beat_id WHERE b.storyboard_id = :'v1'
+     UNION ALL SELECT 'beat_claim ' || to_jsonb(x)::text FROM visual_beat_claims x JOIN visual_beats b ON b.id = x.beat_id WHERE b.storyboard_id = :'v1'
+     UNION ALL SELECT 'subject ' || to_jsonb(c)::text FROM continuity_subjects c WHERE c.storyboard_id = :'v1'
+   ) t;
+   ```
+
+   (`SELECT id, version, status FROM storyboards WHERE project_id = (SELECT id FROM projects WHERE slug = 'tulip-mania') ORDER BY version;`
+   gives the id.)
+8. **Edit one shot.** Shots → a shot → *Edit* (its treatment or description;
+   preferably one that fixes a finding) → save. v2 is saved IN_REVIEW with no
+   model call. If v1 was approved it stays APPROVED, and its page says "the
+   approval applies to v1: v2 differs in 1 shot(s)"; shots you decided on v1
+   and did not change carry their decision ("carried from v1"), the edited
+   one is pending. If v1 was not approved it is SUPERSEDED. Run step 7's
+   query again: the digest is unchanged.
+9. **Approve v2** if it is clean and the takes are approved: v1 becomes
+   SUPERSEDED, recorded as such.
+10. **Report** (the brief's list): the version(s), shot and beat counts,
+    treatment breakdown, runtime, the forecast (basis, unpriced), warnings,
+    continuity findings, evidence coverage as measured, normalizations;
+    state plainly that it is a preview of the opening (n of N blocks), the
+    takes' approval level, which path was taken (v1 approved, or not and
+    why), that the project gate was not passed and the status is unchanged,
+    and that nothing was generated.
+11. **HARD STOP.** No visual generation until the storyboard has been
+    reviewed and accepted.
+
 ## Environment variables
 
 `✓` = read by V1 code. Planned variables are documented now so the shape is
@@ -410,6 +588,10 @@ agreed, but they are not read yet.
 | `VOICE_CONFIRM_CHARACTERS` | `3000` | ✓ | Above this a run or regeneration must be confirmed; the whole script, every comparison, every A/B and a regeneration of every chunk always are |
 | `VOICE_MAX_CHARACTERS` | `40000` | ✓ | Ceiling on what one voice job may send: a plan above it is blocked, generating it is refused, a running job stops sending at it. Production: `12000` (the hard stop: the opening experiment fits, a full narration does not) |
 | `VOICE_CONCURRENCY` | `2` | ✓ | Takes generated at once (1 when stitching) |
+| `STORYBOARD_MAX_COST_USD` | `5` | ✓ | Per-job ceiling on a storyboard job's planning spend (its model calls only, never the visuals it forecasts); the job stops (FAILED, nothing saved) before a call that would pass it. 0.5–200 |
+| `STORYBOARD_MODELS` | — | ✓ | Optional per-step models for the storyboard, e.g. `shots=<model>` (steps: beats, shots, repair); unset steps use `AI_MODEL`. A malformed value stops the server at startup |
+| `VISUAL_PRICE_OVERRIDES` | — | ✓ | Optional: your plan's visual prices for the forecasts, JSON `[{"provider": "…", "checkedAt": "YYYY-MM-DD", "confidence": "PLAN_PRICE" \| "ASSUMPTION", "note": "…", "rates": [{"model": "…", "unit": "…", "usdPerUnit": …}]}]` (provider ids and units as `GET /api/visual/catalog` lists them; a rate without `model` applies to all the provider's models). An entry **replaces that provider's whole price list**: a model it leaves out becomes unpriced (never $0). An unknown provider or model, a unit its models are never billed in, a price set twice, a bad date or a negative price stops the server at startup |
+| `ARCHIVAL_USD_PER_ITEM` | — | ✓ | Optional assumed licence price per archival or document item and the day you set it, `"<usd>@<YYYY-MM-DD>"` (e.g. `25@2026-10-07`); unset, archival items are unpriced |
 | `HIGGSFIELD_API_KEY`, `HIGGSFIELD_API_SECRET` | — | planned | Exact credential format confirmed when integrated |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | —, `auto`, — | ✓ | Required when `STORAGE_PROVIDER=s3`; reference a Railway bucket's `ENDPOINT`, `REGION`, `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` |
 | `S3_FORCE_PATH_STYLE`, `S3_SIGNED_URL_TTL_SEC` | `false`, `3600` | ✓ | Path-style only for buckets whose Credentials tab says so (older Railway buckets, MinIO); production leaves path style unset (a virtual-hosted bucket). Narration streams through the API and uses no signed URLs |
@@ -603,6 +785,36 @@ and Playwright with Chromium. Options (environment variables):
 | `VOICE_UI_SKIP_BUILD` | — | `1` reuses `apps/web/dist` instead of building |
 | `PLAYWRIGHT_MODULE` | — | Where to load Playwright from, if it is neither installed in the repository nor globally |
 
+### Browser QA of the Storyboard page (MOCK, local)
+
+`sh scripts/ui/storyboard-ui.sh` builds the dashboard, seeds a throwaway
+database (`scripts/ui/storyboard-fixture.ts`: every provider MOCK and a
+scripted model; two projects with an approved script and a narrated
+audition, one with its takes approved and a preview storyboard v1 with no
+blocking finding, one still to plan with an old failed placeholder
+generation job), serves it with the job worker and clicks through
+(`scripts/ui/storyboard-ui.mjs`): every tab at 1280, 412 and 360 px (no page
+overflow — the timeline scrolls inside its own box, or is a list on
+phones — 24 px targets, no console errors); at 1280 shot decisions, v1
+approved, an edit saving v2 with v1 intact and still approved and the
+decisions carried, a version race kept in the form and saved on purpose,
+split, merge, move cut and reorder, request changes, restore, a cheaper
+alternative applied, the profile changed and the version re-costed, a
+switch of approach and a preview planned with its confirmation (which never
+carries to another version), the held generation job (no Retry; the server
+answers 409); edits on phones; the visual profile library at every width.
+It prints `ok` / `FAIL` per check, ends with "every check passed" and exits
+non-zero on any failure. Nothing is paid, no key is read, no picture is
+generated.
+
+| Variable | Default | What |
+|---|---|---|
+| `STORYBOARD_UI_DB` | `docengine_storyboard_ui` | Database created next to `DATABASE_URL`'s, dropped first: its name must contain `ui` |
+| `STORYBOARD_UI_PORT` | `3103` | Port the fixture serves on |
+| `STORYBOARD_UI_OUT` | `$TMPDIR/storyboard-ui` (else `/tmp/storyboard-ui`) | Screenshots and the build, migration and server logs |
+| `STORYBOARD_UI_SKIP_BUILD` | — | `1` reuses `apps/web/dist` instead of building |
+| `PLAYWRIGHT_MODULE` | — | As for the Voice page |
+
 ## Scaling the worker (later)
 
 1. Add a service from the same repository; *Settings* → *Deploy* → custom
@@ -643,6 +855,13 @@ and Playwright with Chromium. Options (environment variables):
 | A take fails with `Interrupted mid-request …` | A deploy or restart caught it during its request: it may have been billed (see its ledger row) and is never sent again; the chunk's next take was generated in its place. |
 | Planning or generating says the characters are `over the ceiling of …` (`VOICE_MAX_CHARACTERS`) | Intended: the per-job hard stop (production 12000 refuses a full narration). Plan a smaller scope, or raise the variable when a full narration is wanted. |
 | `POST /api/projects/:id/jobs` with `type: VOICE` answers `Use POST /api/projects/:id/voice/runs` | Real narration starts from a planned run (Voice page, or the voice routes), never from a bare VOICE job. |
+| `POST /api/projects/:id/jobs` (or a job's *Retry*) answers `Visual generation is the next milestone; it starts only after the storyboard is reviewed and accepted` | Intended: the hard stop. VISUAL_GENERATION and INFOGRAPHIC are held in every status while the storyboard stage is real. |
+| `POST /api/projects/:id/jobs` with `type: VISUAL_PLAN` or `STORYBOARD_PREVIEW` answers `Use POST /api/projects/:id/storyboard/generate` | Storyboards are planned from the Storyboard page (or that route), with a confirmation, never as a bare job. |
+| A storyboard job fails with `Storyboard planning stopped: estimated spend … exceeds the per-job ceiling` | Intended stop, before the call that would pass `STORYBOARD_MAX_COST_USD`; nothing is saved. Raise it if the spend is justified, then *Retry* (completed calls are reused). |
+| *Approve* on a storyboard version answers `cannot be approved yet: the narration it is timed against is not approved (takes a/n approved)` | Approve the takes on the Voice page first (or handle the skipped ones); the other reasons listed (a blocking finding, a rejected shot) are fixed by an edit or by clearing the shot's decision. |
+| Planning answers `The project's visual profile or its overrides changed since this was requested` | The profile choice changed in another tab: reload the page and plan again. |
+| The Storyboard page says the storyboard `is planned by the model, which is not configured here (MOCK)` | Planning needs `AI_PROVIDER=anthropic`. |
+| Startup fails naming `VISUAL_PRICE_OVERRIDES` or `ARCHIVAL_USD_PER_ITEM` | The setting is refused, never ignored: the message names the provider, model, unit or date at fault (provider ids and units as `GET /api/visual/catalog` lists them). |
 | Research job fails with `ANTHROPIC_API_KEY is not set` / `TAVILY_API_KEY is not set` | Set the key on the service (or `TAVILY_ACCESS_MODE=keyless`). |
 | Research job fails with `Research stopped: estimated spend … exceeds the per-run ceiling` | Intended stop. Raise `RESEARCH_MAX_COST_USD` if the spend is justified, then *Retry* (stored documents and readings are reused). |
 | Research job fails with `Research quality gate failed: …` | The dossier was saved as DRAFT; open it (Research dossier → Quality gate tab) to see which checks failed. Rewind and run again, possibly with a research brief. |

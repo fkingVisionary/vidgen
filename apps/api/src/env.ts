@@ -1,12 +1,20 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { ProviderSettings } from '@docengine/providers';
+import { VisualCatalogError, createVisualCatalog, parseArchivalUsdPerItem, parseVisualPriceOverrides, type ProviderSettings, type VisualPricingSettings } from '@docengine/providers';
+import { parseStoryboardModels } from '@docengine/storyboard';
 import { z } from 'zod';
 
 /** Treat empty strings (e.g. `KEY=` in .env) as unset. */
 const opt = <T extends z.ZodType>(schema: T) => z.preprocess((v) => (v === '' ? undefined : v), schema);
 
 const ProviderName = opt(z.string().trim().toLowerCase().default('mock'));
+
+/** The settings that hold the user's visual prices; each becomes the source of the rates it sets. */
+const PRICE_SETTINGS = ['VISUAL_PRICE_OVERRIDES', 'ARCHIVAL_USD_PER_ITEM'] as const;
+type PriceSetting = (typeof PRICE_SETTINGS)[number];
+
+/** A setting's error message without the setting's name in front (the issue's path already names it). */
+const unprefixed = (message: string, key: string) => (message.startsWith(`${key}: `) ? message.slice(key.length + 2) : message);
 
 export const EnvSchema = z
   .object({
@@ -90,6 +98,20 @@ export const EnvSchema = z
     /** Writing Engine 2: the modes the Human Narration Pass runs in — "all" (the default), "none" (only a narration pass on its own), or a list such as "DRAFT,REFINEMENT". */
     SCRIPT_NARRATION_MODES: opt(z.string().max(200).optional()),
 
+    // Storyboard stage (plans what is on screen; generates nothing)
+    /** Hard ceiling on one storyboard job's estimated planning spend (USD): its model calls only, never the visuals it forecasts. */
+    STORYBOARD_MAX_COST_USD: opt(z.coerce.number().min(0.5).max(200).default(5)),
+    /** Optional per-step model overrides, e.g. "shots=<model id>" (steps: beats, shots, repair). Unset steps use AI_MODEL. */
+    STORYBOARD_MODELS: opt(z.string().max(500).optional()),
+    /**
+     * Optional: your plan's visual prices for the storyboard's forecasts, as JSON
+     * [{provider, checkedAt: "YYYY-MM-DD", confidence?: "PLAN_PRICE" | "ASSUMPTION", note?, rates: [{model?, unit, usdPerUnit}]}].
+     * An entry replaces that provider's whole price list: a model it leaves out is unpriced (never $0).
+     */
+    VISUAL_PRICE_OVERRIDES: opt(z.string().max(20_000).optional()),
+    /** Optional: an assumed licence price per archival item and the day it was set, "<usd>@<YYYY-MM-DD>" (unset: archival items are unpriced). */
+    ARCHIVAL_USD_PER_ITEM: opt(z.string().max(50).optional()),
+
     /** Directory of the built dashboard. Defaults to apps/web/dist. */
     WEB_DIST_DIR: opt(z.string().optional()),
     /** Set by Railway on deploys; shown on /api/health. */
@@ -103,6 +125,24 @@ export const EnvSchema = z
         message: 'DASHBOARD_PASSWORD (at least 12 characters) is required in production: the dashboard can start paid generation jobs',
       });
     }
+    try {
+      parseStoryboardModels(env.STORYBOARD_MODELS);
+    } catch (err) {
+      ctx.addIssue({ code: 'custom', path: ['STORYBOARD_MODELS'], message: unprefixed(err instanceof Error ? err.message : String(err), 'STORYBOARD_MODELS') });
+    }
+    // The visual prices are checked against the catalog now, each setting on its own, then together (both may price one provider).
+    const pricing = PRICE_SETTINGS.filter((key) => env[key] !== undefined);
+    const priced = (keys: readonly PriceSetting[]) => {
+      try {
+        createVisualCatalog(visualPricingSettings(Object.fromEntries(keys.map((key) => [key, env[key]]))));
+        return true;
+      } catch (err) {
+        if (!(err instanceof VisualCatalogError)) throw err;
+        ctx.addIssue({ code: 'custom', path: [keys[0]!], message: unprefixed(err.message, keys[0]!) });
+        return false;
+      }
+    };
+    if (pricing.map((key) => priced([key])).every(Boolean) && pricing.length > 1) priced(pricing);
   });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -159,6 +199,21 @@ export function providerSettings(env: Env): ProviderSettings {
       ...(env.S3_ACCESS_KEY_ID ? { accessKeyId: env.S3_ACCESS_KEY_ID } : {}),
       ...(env.S3_SECRET_ACCESS_KEY ? { secretAccessKey: env.S3_SECRET_ACCESS_KEY } : {}),
     },
+  };
+}
+
+/**
+ * The user's visual prices for the storyboard's cost forecasts: plan prices
+ * per provider and the assumed archival licence price. Without them the
+ * catalog's own published prices apply, and what has none is unpriced
+ * (never $0). The catalog is never called and buys nothing.
+ */
+export function visualPricingSettings(env: Partial<Record<PriceSetting, string>>): VisualPricingSettings {
+  return {
+    overrides: [
+      ...(env.VISUAL_PRICE_OVERRIDES ? parseVisualPriceOverrides(env.VISUAL_PRICE_OVERRIDES, 'VISUAL_PRICE_OVERRIDES') : []),
+      ...(env.ARCHIVAL_USD_PER_ITEM ? [parseArchivalUsdPerItem(env.ARCHIVAL_USD_PER_ITEM, 'ARCHIVAL_USD_PER_ITEM')] : []),
+    ],
   };
 }
 

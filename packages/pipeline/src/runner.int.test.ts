@@ -55,6 +55,7 @@ describe('mocked pipeline, end to end', () => {
     await approve('VOICE');
     await run('VISUAL_PLAN');
     await approve('STORYBOARD');
+    expect(await db.job.count({ where: { projectId: p.id, status: { in: ['QUEUED', 'RUNNING'] } } })).toBe(0); // an approved storyboard starts nothing
     await run('VISUAL_GENERATION');
     expect(await statusOf(p.id)).toBe('VISUAL_GENERATING'); // waits for the parallel INFOGRAPHIC job
     await run('INFOGRAPHIC');
@@ -76,8 +77,8 @@ describe('mocked pipeline, end to end', () => {
       'VOICE_REVIEW', // narration generated; a human approves the assembled narration
       'VOICE_COMPLETE',
       'STORYBOARD_REVIEW',
-      'VISUAL_GENERATING',
-      'VISUAL_GENERATING',
+      'STORYBOARD_APPROVED', // a milestone: visual generation is started by a person
+      'VISUAL_GENERATING', // enqueueing VISUAL_GENERATION starts it
       'VISUAL_REVIEW',
       'EDITING',
       'RENDERING',

@@ -1,13 +1,15 @@
 import { createDatabase, type Database } from '@docengine/database';
-import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers, type JobQueue } from '@docengine/pipeline';
-import type { HealthView, JobType } from '@docengine/core';
-import { createProviders, describeProviders, probeStorage, type ProviderSet } from '@docengine/providers';
+import { JobRunner, NonRetryableError, PostgresJobQueue, ProjectService, createMockStageHandlers, type JobQueue, type StageHandler } from '@docengine/pipeline';
+import type { HealthView, JobType, VisualCatalog } from '@docengine/core';
+import { createProviders, createVisualCatalog, describeProviders, probeStorage, type ProviderSet } from '@docengine/providers';
 import { createResearchStage, type ResearchConfig } from '@docengine/research';
 import { ScriptEditing, createScriptStage, parseNarrationModes, parseScriptModels, type ScriptConfig } from '@docengine/script';
 import { createStoryAnglesStage, createStoryArchitectureStage, createStoryMiningStage, type StoryConfig } from '@docengine/story';
+import { StoryboardService, createStoryboardStage, parseStoryboardModels, storyboardGate, type StoryboardConfig } from '@docengine/storyboard';
 import { VoiceService, createVoiceStage, voiceGate, type VoiceStageConfig } from '@docengine/voice';
 import type { Logger } from 'pino';
-import { providerSelection, providerSettings, type Env } from './env.ts';
+import { providerSelection, providerSettings, visualPricingSettings, type Env } from './env.ts';
+import { toJobView } from './views.ts';
 
 /**
  * Composition root: the only place where concrete implementations are chosen
@@ -25,6 +27,10 @@ export interface AppContainer {
   scripts: ScriptEditing;
   /** Narration: voice runs, takes, decisions, pronunciations, profiles. */
   voice: VoiceService;
+  /** Storyboards: planning requests, versions, edits, decisions, the visual profile library. */
+  storyboards: StoryboardService;
+  /** The catalog the storyboard's cost forecasts are priced from (published prices, the user's over them); never called. */
+  visualCatalog: VisualCatalog;
   /** Stages backed by real implementations (all others are MOCK placeholders). */
   realStages: JobType[];
   /** Whether real storage and the real voice provider were reachable at startup (checked once, in the background). */
@@ -44,6 +50,28 @@ export interface ConnectivityCheck {
 
 /** A startup check that has not answered by then counts as failed. */
 export const CONNECTIVITY_TIMEOUT_MS = 15_000;
+
+/** Why visual generation does not run (the hard stop after the storyboard). */
+export const VISUAL_GENERATION_HELD = 'Visual generation is the next milestone; it starts only after the storyboard is reviewed and accepted';
+
+/**
+ * The hard stop while the storyboard is real: VISUAL_GENERATION and
+ * INFOGRAPHIC are refused on enqueue and retry, and a job of either type
+ * that reaches the worker anyway (queued before this release) fails here,
+ * calling no provider and writing nothing.
+ */
+export const visualGenerationHeld = (realStages: readonly JobType[], type: JobType): boolean => (type === 'VISUAL_GENERATION' || type === 'INFOGRAPHIC') && realStages.includes('VISUAL_PLAN');
+
+/** A held stage: its job fails at once, non-retryably, with the reason. */
+function heldStage(type: JobType): StageHandler {
+  return {
+    type,
+    mock: true,
+    run: async () => {
+      throw new NonRetryableError(VISUAL_GENERATION_HELD);
+    },
+  };
+}
 
 /**
  * Reaches real storage and the real voice provider once, spending nothing:
@@ -98,18 +126,28 @@ export function startConnectivityCheck(providers: ProviderSet, logger: Logger, s
 export function createContainer(
   env: Env,
   logger: Logger,
-  overrides: { db?: Database; providers?: ProviderSet; researchConfig?: Partial<ResearchConfig>; storyConfig?: Partial<StoryConfig>; scriptConfig?: Partial<ScriptConfig>; voiceConfig?: Partial<VoiceStageConfig> } = {},
+  overrides: {
+    db?: Database;
+    providers?: ProviderSet;
+    researchConfig?: Partial<ResearchConfig>;
+    storyConfig?: Partial<StoryConfig>;
+    scriptConfig?: Partial<ScriptConfig>;
+    voiceConfig?: Partial<VoiceStageConfig>;
+    storyboardConfig?: Partial<Omit<StoryboardConfig, 'catalog'>>;
+  } = {},
 ): AppContainer {
   const db = overrides.db ?? createDatabase({ connectionString: env.DATABASE_URL, maxConnections: env.DATABASE_POOL_SIZE });
   // Fails fast with a clear message if a provider is configured that is not implemented.
   const providers = overrides.providers ?? createProviders(providerSelection(env), { settings: providerSettings(env) });
   const queue: JobQueue = new PostgresJobQueue(db);
+  // Forecasts only: the catalog prices what a storyboard would cost to produce later; nothing in it is ever called.
+  const visualCatalog = createVisualCatalog(visualPricingSettings(env));
   const projects = new ProjectService({
     db,
     logger,
     jobMaxAttempts: env.JOB_MAX_ATTEMPTS,
     onJobQueued: (job) => queue.notify(job),
-    gateHooks: { VOICE: voiceGate() },
+    gateHooks: { VOICE: voiceGate(), STORYBOARD: storyboardGate({ catalog: visualCatalog }) },
   });
   // Real stages replace MOCK placeholders when the providers they need are real.
   const handlers = createMockStageHandlers();
@@ -124,8 +162,13 @@ export function createContainer(
     handlers.SCRIPT = createScriptStage({ maxCostUsd: env.SCRIPT_MAX_COST_USD, models: parseScriptModels(env.SCRIPT_MODELS), narration: parseNarrationModes(env.SCRIPT_NARRATION_MODES), ...overrides.scriptConfig });
     // Narration needs a real script; with a MOCK voice provider its takes are labelled MOCK (beep and silence).
     handlers.VOICE = createVoiceStage({ maxCharacters: env.VOICE_MAX_CHARACTERS, concurrency: env.VOICE_CONCURRENCY, ...overrides.voiceConfig });
+    // The storyboard is planned by the model alone, on the narration's real clock: it generates nothing, so it needs no other real provider.
+    const storyboard: Partial<StoryboardConfig> = { maxCostUsd: env.STORYBOARD_MAX_COST_USD, models: parseStoryboardModels(env.STORYBOARD_MODELS), ...overrides.storyboardConfig, catalog: visualCatalog };
+    handlers.VISUAL_PLAN = createStoryboardStage('VISUAL_PLAN', storyboard);
+    handlers.STORYBOARD_PREVIEW = createStoryboardStage('STORYBOARD_PREVIEW', storyboard);
   }
   const realStages = Object.values(handlers).filter((h) => !h.mock).map((h) => h.type);
+  for (const type of ['VISUAL_GENERATION', 'INFOGRAPHIC'] as const) if (visualGenerationHeld(realStages, type)) handlers[type] = heldStage(type);
   const runner = new JobRunner({
     db,
     queue,
@@ -154,6 +197,8 @@ export function createContainer(
     runner,
     scripts: new ScriptEditing(db),
     voice: new VoiceService({ db, projects, providers, config: { confirmCharacters: env.VOICE_CONFIRM_CHARACTERS, maxCharacters: env.VOICE_MAX_CHARACTERS } }),
+    storyboards: new StoryboardService({ db, projects, catalog: visualCatalog, realStage: realStages.includes('VISUAL_PLAN'), planningCeilingUsd: overrides.storyboardConfig?.maxCostUsd ?? env.STORYBOARD_MAX_COST_USD, toJobView: toJobView as never }),
+    visualCatalog,
     realStages,
     connectivity,
     async close() {

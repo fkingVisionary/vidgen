@@ -8,5 +8,6 @@ export { compareDrafts, diffBlocks, evidenceChanges, voicePlan, wordDiff } from 
 export { SCRIPT_INCLUDE, loadById, loadVersion, toDraft, type LoadedScript, type ScriptRow } from './store.ts';
 export { SCRIPT_BLOCKING, SCRIPT_FINDING_KINDS, SCRIPT_WARNINGS, checkScript, type ScriptFinding, type ScriptFindingKind } from './rules.ts';
 export { blockingDetails, computeScriptReport } from './quality.ts';
-export { buildScope, type ScriptScope } from './scope.ts';
+export { beatClasses, buildScope, type ScriptScope } from './scope.ts';
+export { fictionalMentions } from './draft.ts';
 export type { DraftBlock, DraftSection, ScriptDraft } from './draft.ts';

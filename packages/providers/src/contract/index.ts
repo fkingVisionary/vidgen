@@ -18,6 +18,8 @@ import type { CallMeta, ProviderInfo } from '../types.ts';
 import { waitForGeneration, type VideoProvider } from '../video.ts';
 import type { VoiceProvider } from '../voice.ts';
 
+export { runVisualCatalogContract } from './visual-catalog.ts';
+
 type Factory<T> = () => T | Promise<T>;
 
 function expectInfo(info: ProviderInfo, kind: ProviderInfo['kind']) {

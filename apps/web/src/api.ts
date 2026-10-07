@@ -48,6 +48,25 @@ import type {
   StoryView,
   UpdateContentOpportunityInput,
   UpdateStoryCandidateInput,
+  CreateVisualProfileFamilyInput,
+  DuplicateVisualProfileInput,
+  GenerateStoryboardInput,
+  NewVisualProfileVersionInput,
+  RegenerateBeatsInput,
+  RestoreStoryboardInput,
+  RetimeStoryboardInput,
+  ShotDecisionInput,
+  StoryboardDecisionInput,
+  StoryboardEditInput,
+  StoryboardInputsView,
+  StoryboardView,
+  SwitchApproachInput,
+  UpdateVisualProfileFamilyInput,
+  VisualCatalogView,
+  VisualProductionView,
+  VisualProfileHistoryView,
+  VisualProfileLibraryView,
+  VisualSelectionInput,
 } from '@docengine/core';
 
 /** Thin typed client for the same-origin API. Provider credentials never reach the browser. */
@@ -64,6 +83,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The answer's body (a storyboard version race carries `latestVersion`). */
+    readonly body: unknown = null,
   ) {
     super(message);
   }
@@ -78,7 +99,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const issues = data?.issues?.map((i: { path: string; message: string }) => `${i.path}: ${i.message}`).join('; ');
-    throw new ApiError(res.status, issues ? `${data.message} — ${issues}` : (data?.message ?? `HTTP ${res.status}`));
+    throw new ApiError(res.status, issues ? `${data.message} — ${issues}` : (data?.message ?? `HTTP ${res.status}`), data);
   }
   return data as T;
 }
@@ -162,6 +183,42 @@ export const api = {
   /** Choose the production profile and the project's overrides, at the revision shown (another revision is refused with 409). */
   setVoiceSelection: (id: string, input: VoiceSelectionInput) => request<VoiceProductionView>('PUT', `/api/projects/${id}/voice/selection`, input),
   voiceMoment: (id: string, run: number, at: string) => request<VoiceMomentView>('GET', `/api/projects/${encodeURIComponent(id)}/voice/moment?run=${run}&at=${encodeURIComponent(at)}`),
+  /** The Storyboard page's read model: every version, one in full (the newest, or ?v=N), what can be done, the running job. */
+  storyboard: (id: string, version?: number) => request<StoryboardView>('GET', `/api/projects/${encodeURIComponent(id)}/storyboard${version ? `?v=${version}` : ''}`),
+  /** What a new storyboard would be planned from: the approved script, the voice runs and assemblies, the visual profile, the ceiling. */
+  storyboardInputs: (id: string) => request<StoryboardInputsView>('GET', `/api/projects/${encodeURIComponent(id)}/storyboard/inputs`),
+  /** Plan a storyboard (a paid planning job, confirmed by the request): a preview, or the phase job. */
+  generateStoryboard: (id: string, input: GenerateStoryboardInput) => request<{ job: JobView; kind: 'PREVIEW' | 'PHASE'; assemblyId: string }>('POST', `/api/projects/${id}/storyboard/generate`, input),
+  /** Re-plan chosen beats of the newest version (a paid planning job); the rest is copied. */
+  regenerateBeats: (storyboardId: string, input: RegenerateBeatsInput) => request<{ job: JobView }>('POST', `/api/storyboards/${storyboardId}/regenerate-beats`, input),
+  /** Plan another approach (a paid planning job): only the beats whose treatment changes are re-planned. */
+  switchApproach: (storyboardId: string, input: SwitchApproachInput) => request<{ job: JobView }>('POST', `/api/storyboards/${storyboardId}/approach`, input),
+  /** A person's edits of a version: the page at the new version (409 with `latestVersion` when another was saved since). */
+  editStoryboard: (storyboardId: string, input: StoryboardEditInput) => request<StoryboardView>('POST', `/api/storyboards/${storyboardId}/edits`, input),
+  /** The same plan on another assembly of its voice run: the page at the new version (no model call). */
+  retimeStoryboard: (storyboardId: string, input: RetimeStoryboardInput) => request<StoryboardView>('POST', `/api/storyboards/${storyboardId}/retime`, input),
+  /** An older version copied as the newest: the page at the new version (the history is kept). */
+  restoreStoryboard: (storyboardId: string, input: RestoreStoryboardInput) => request<StoryboardView>('POST', `/api/storyboards/${storyboardId}/restore`, input),
+  /** A version-level decision (a whole-script version under review goes through the STORYBOARD gate). */
+  decideStoryboard: (storyboardId: string, input: StoryboardDecisionInput) => request<StoryboardView>('POST', `/api/storyboards/${storyboardId}/decision`, input),
+  /** A decision on one shot (CLEARED withdraws it); the version's content is unchanged. */
+  decideShot: (shotId: string, input: ShotDecisionInput) => request<StoryboardView>('POST', `/api/shots/${shotId}/decision`, input),
+  /** The visual catalog forecasts are priced from: cards, models and rates with their sources (nothing is called or bought). */
+  visualCatalog: () => request<VisualCatalogView>('GET', '/api/visual/catalog'),
+  /** The visual profile library (archived profiles too when asked); the presets are made at its first use. */
+  visualProfiles: (archived = false) => request<VisualProfileLibraryView>('GET', `/api/visual/profiles${archived ? '?archived=true' : ''}`),
+  /** A visual profile and every version, newest first. */
+  visualProfile: (familyId: string) => request<VisualProfileHistoryView>('GET', `/api/visual/profiles/${familyId}`),
+  createVisualProfileFamily: (input: CreateVisualProfileFamilyInput) => request<VisualProfileHistoryView>('POST', '/api/visual/profiles', input),
+  /** Rename, describe, archive or unarchive a visual profile, or make it the library default (its versions are not touched). */
+  updateVisualProfileFamily: (familyId: string, input: UpdateVisualProfileFamilyInput) => request<VisualProfileHistoryView>('PATCH', `/api/visual/profiles/${familyId}`, input),
+  /** An edit: always a new version (storyboards keep the version they used). */
+  newVisualProfileVersion: (familyId: string, input: NewVisualProfileVersionInput) => request<VisualProfileHistoryView>('POST', `/api/visual/profiles/${familyId}/versions`, input),
+  duplicateVisualProfile: (familyId: string, input: DuplicateVisualProfileInput) => request<VisualProfileHistoryView>('POST', `/api/visual/profiles/${familyId}/duplicate`, input),
+  /** What the project's storyboards are planned with now. */
+  visualSelection: (id: string) => request<VisualProductionView>('GET', `/api/projects/${encodeURIComponent(id)}/visual/selection`),
+  /** Choose the project's visual profile and overrides, at the revision shown (another revision is refused with 409). */
+  setVisualSelection: (id: string, input: VisualSelectionInput) => request<VisualProductionView>('PUT', `/api/projects/${id}/visual/selection`, input),
   /** What a content package request would contain (read only; nothing is generated). */
   contentPackage: (id: string, input: { documentary?: boolean; shorts?: number | 'all'; languages?: string[] }) => request<ContentPackageView>('POST', `/api/projects/${id}/content-package`, input),
 };

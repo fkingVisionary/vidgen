@@ -90,7 +90,41 @@ describe('pipeline definition', () => {
   it('requires storyboard approval before any visual generation (cost control)', () => {
     expect(jobPhase('VISUAL_GENERATION')).toBe('VISUAL_GENERATING');
     expect(getTransitionKind('VISUAL_PLANNING', 'VISUAL_GENERATING')).toBeNull();
-    expect(getTransitionKind('STORYBOARD_REVIEW', 'VISUAL_GENERATING')).toBe('APPROVE');
+    // Approving the storyboard reaches a milestone; generation is a separate START from it.
+    expect(getTransitionKind('STORYBOARD_REVIEW', 'STORYBOARD_APPROVED')).toBe('APPROVE');
+    expect(getTransitionKind('STORYBOARD_REVIEW', 'VISUAL_GENERATING')).toBeNull();
+    expect(getTransitionKind('STORYBOARD_APPROVED', 'VISUAL_GENERATING')).toBe('START');
+    expect(getTransitionKind('STORYBOARD_REVIEW', 'VISUAL_PLANNING')).toBe('REJECT');
+  });
+
+  it('makes an approved storyboard a milestone that runs nothing and starts nothing by itself', () => {
+    const def = STATUS_DEFINITIONS.STORYBOARD_APPROVED;
+    expect(def).toEqual({ stage: 'STORYBOARD', stageState: 'COMPLETE', jobs: [], next: 'VISUAL_GENERATING' });
+    expect(STATUS_DEFINITIONS.STORYBOARD_REVIEW.gate).toEqual({ gate: 'STORYBOARD', onApprove: 'STORYBOARD_APPROVED', onReject: 'VISUAL_PLANNING' });
+    expect(statusIndex('STORYBOARD_APPROVED')).toBe(statusIndex('STORYBOARD_REVIEW') + 1);
+    // Nothing runs in the milestone, so nothing can fail there.
+    expect(canTransition('STORYBOARD_APPROVED', 'FAILED')).toBe(false);
+    // An edit reopens the review; a re-plan goes further back.
+    expect(getTransitionKind('STORYBOARD_APPROVED', 'STORYBOARD_REVIEW')).toBe('REWIND');
+    expect(getTransitionKind('STORYBOARD_APPROVED', 'VISUAL_PLANNING')).toBe('REWIND');
+    expect(getAvailableActions('STORYBOARD_APPROVED')).toMatchObject({ gate: null, startsPhase: 'VISUAL_GENERATING', sideJobs: [] });
+  });
+
+  it('plans a storyboard preview as a side job while the narration is reviewed or complete, never moving the project', () => {
+    expect(isSideJob('STORYBOARD_PREVIEW')).toBe(true);
+    expect(SIDE_JOBS.STORYBOARD_PREVIEW).toEqual(['VOICE_REVIEW', 'VOICE_COMPLETE']);
+    expect(() => jobPhase('STORYBOARD_PREVIEW')).toThrow(/side job/);
+    for (const s of ['VOICE_REVIEW', 'VOICE_COMPLETE'] as const) {
+      expect(resolveEnqueue(s, 'STORYBOARD_PREVIEW')).toEqual({ ok: true, enterStatus: null });
+      expect(getAvailableActions(s).sideJobs).toEqual(['STORYBOARD_PREVIEW']);
+      expect(getAvailableActions(s).runnableJobs).not.toContain('STORYBOARD_PREVIEW');
+    }
+    for (const s of ['SCRIPT_APPROVED', 'VOICE_GENERATING', 'VISUAL_PLANNING', 'STORYBOARD_REVIEW', 'STORYBOARD_APPROVED', 'FAILED'] as const) {
+      expect(resolveEnqueue(s, 'STORYBOARD_PREVIEW').ok, s).toBe(false);
+    }
+    // The phase job still starts from the VOICE milestone.
+    expect(resolveEnqueue('VOICE_COMPLETE', 'VISUAL_PLAN')).toEqual({ ok: true, enterStatus: 'VISUAL_PLANNING' });
+    expect(getAvailableActions('VOICE_COMPLETE')).toMatchObject({ runnableJobs: ['VISUAL_PLAN'], startsPhase: 'VISUAL_PLANNING', sideJobs: ['STORYBOARD_PREVIEW'] });
   });
 });
 
@@ -183,6 +217,16 @@ describe('resolveEnqueue', () => {
     expect(resolveEnqueue('SCRIPT_REVIEW', 'VOICE').ok).toBe(false);
     expect(resolveEnqueue('STORYBOARD_REVIEW', 'VISUAL_GENERATION').ok).toBe(false);
     expect(resolveEnqueue('FAILED', 'RESEARCH').ok).toBe(false);
+  });
+
+  it('starts visual generation only from the approved-storyboard milestone (the API refuses it while the storyboard stage is real)', () => {
+    expect(resolveEnqueue('STORYBOARD_APPROVED', 'VISUAL_GENERATION')).toEqual({ ok: true, enterStatus: 'VISUAL_GENERATING' });
+    expect(resolveEnqueue('STORYBOARD_APPROVED', 'INFOGRAPHIC')).toEqual({ ok: true, enterStatus: 'VISUAL_GENERATING' });
+    expect(resolveEnqueue('STORYBOARD_APPROVED', 'VISUAL_PLAN').ok).toBe(false);
+    for (const s of ['VOICE_COMPLETE', 'VISUAL_PLANNING', 'STORYBOARD_REVIEW'] as const) {
+      expect(resolveEnqueue(s, 'VISUAL_GENERATION').ok, s).toBe(false);
+      expect(resolveEnqueue(s, 'INFOGRAPHIC').ok, s).toBe(false);
+    }
   });
 });
 

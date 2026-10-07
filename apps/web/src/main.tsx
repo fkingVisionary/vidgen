@@ -8,7 +8,9 @@ import { ProjectPage } from './pages/ProjectPage.tsx';
 import { ProjectsPage } from './pages/ProjectsPage.tsx';
 import { ResearchPage } from './pages/ResearchPage.tsx';
 import { ScriptPage } from './pages/ScriptPage.tsx';
+import { StoryboardPage } from './pages/StoryboardPage.tsx';
 import { StoryPage } from './pages/StoryPage.tsx';
+import { VisualProfilesPage } from './pages/VisualProfilesPage.tsx';
 import { VoicePage } from './pages/VoicePage.tsx';
 import { VoiceProfilesPage } from './pages/VoiceProfilesPage.tsx';
 import { WritingPage } from './pages/WritingPage.tsx';
@@ -27,9 +29,12 @@ createRoot(document.getElementById('root')!).render(
             <Route path="/projects/:id/story" element={<StoryPage />} />
             <Route path="/projects/:id/script" element={<ScriptPage />} />
             <Route path="/projects/:id/voice" element={<VoicePage />} />
+            <Route path="/projects/:id/storyboard" element={<StoryboardPage />} />
             <Route path="/writing" element={<WritingPage />} />
             <Route path="/voice-profiles" element={<VoiceProfilesPage />} />
             <Route path="/voice-profiles/:id" element={<VoiceProfilesPage />} />
+            <Route path="/visual-profiles" element={<VisualProfilesPage />} />
+            <Route path="/visual-profiles/:id" element={<VisualProfilesPage />} />
             <Route path="*" element={<p className="text-stone-500">Page not found.</p>} />
           </Routes>
         </Layout>

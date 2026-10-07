@@ -11,6 +11,7 @@ export * from './storage.ts';
 export * from './render.ts';
 export * from './publishing.ts';
 export * from './registry.ts';
+export * from './visual/index.ts';
 export { MOCK_LABEL, MOCK_FAIL_MARKER } from './mock/common.ts';
 export { MockAIProvider } from './mock/ai.ts';
 export { MockResearchProvider } from './mock/research.ts';

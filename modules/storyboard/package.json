@@ -1,0 +1,24 @@
+{
+  "name": "@docengine/storyboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Storyboard stage: turns approved narration into a visual blueprint — visual beats and shots timed on the real audio clock, each with a treatment, its evidence, continuity, an asset requirement, a cost forecast and QA — without generating any image, video, voice or render.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@docengine/core": "workspace:*",
+    "@docengine/database": "workspace:*",
+    "@docengine/pipeline": "workspace:*",
+    "@docengine/providers": "workspace:*",
+    "@docengine/script": "workspace:*",
+    "@docengine/story": "workspace:*",
+    "@docengine/voice": "workspace:*",
+    "zod": "catalog:"
+  }
+}

@@ -1,6 +1,7 @@
+import type { AspectRatio } from '@docengine/core';
 import type { CallMeta, GenerationState, ProviderInfo } from './types.ts';
 
-export type AspectRatio = '16:9' | '9:16' | '1:1' | '4:3' | '21:9';
+export type { AspectRatio };
 
 export interface ImageGenerationRequest {
   prompt: string;

@@ -13,6 +13,7 @@ import {
 } from '@docengine/core';
 import type { Approval, Database, Job, Project, ProjectEvent } from '@docengine/database';
 import type { ProjectService } from '@docengine/pipeline';
+import type { StoryboardService } from '@docengine/storyboard';
 import { loadScriptSummary } from './script-views.ts';
 import { loadStorySummary } from './story-views.ts';
 
@@ -140,12 +141,13 @@ async function costSummary(db: Database, project: Project): Promise<CostSummaryV
 export async function loadProjectDetail(
   db: Database,
   projects: ProjectService,
+  storyboards: Pick<StoryboardService, 'summary'>,
   idOrSlug: string,
 ): Promise<ProjectDetailView | null> {
   const project = await findProject(db, idOrSlug);
   if (!project) return null;
 
-  const [languageVersions, jobs, approvals, events, costs, phaseJobsComplete, rt, latestDossier, story, script] = await Promise.all([
+  const [languageVersions, jobs, approvals, events, costs, phaseJobsComplete, rt, latestDossier, story, script, storyboard] = await Promise.all([
     db.languageVersion.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'asc' } }),
     db.job.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50, omit: JOB_VIEW_OMIT }),
     db.approval.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
@@ -156,6 +158,7 @@ export async function loadProjectDetail(
     db.researchDossier.findFirst({ where: { projectId: project.id }, orderBy: { version: 'desc' }, include: { _count: { select: { claims: true } } } }),
     loadStorySummary(db, project.id),
     loadScriptSummary(db, project.id),
+    storyboards.summary(project.id),
   ]);
 
   const actions = getAvailableActions(project.status, { failedFrom: project.failedFromStatus });
@@ -189,5 +192,6 @@ export async function loadProjectDetail(
       : null,
     story,
     script,
+    storyboard,
   };
 }
