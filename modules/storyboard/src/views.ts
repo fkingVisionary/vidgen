@@ -570,6 +570,7 @@ export async function loadStoryboardInputs(deps: StoryboardViewDeps, project: Pr
       number: r.number,
       kind: r.kind,
       label: `${r.kind === 'FULL' ? 'Full narration' : r.kind === 'AUDITION' ? 'Audition' : r.kind.charAt(0) + r.kind.slice(1).toLowerCase()} — run ${r.number}${r.experiment ? ` (${r.experiment}${r.variant ? `: ${r.variant}` : ''})` : ''}`,
+      variant: r.variant,
       scopeBlockKeys: scope.success ? scope.data.blockKeys : [],
       current: !!approved && r.scriptId === approved.id,
       assemblies: r.assemblies.map((a): StoryboardAssemblyOptionView => {

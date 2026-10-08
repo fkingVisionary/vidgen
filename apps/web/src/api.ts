@@ -25,6 +25,7 @@ import type {
   ScriptView,
   UpdateScriptBlockInput,
   VoiceRenderPlan,
+  ApproveAllTakesView,
   CreateVoiceProfileFamilyInput,
   CreateVoiceRunInput,
   DecideVoiceGenerationInput,
@@ -159,7 +160,7 @@ export const api = {
   createVoiceRun: (id: string, input: CreateVoiceRunInput) => request<{ job: JobView; run: number }>('POST', `/api/projects/${id}/voice/runs`, input),
   createVoiceExperiment: (id: string, input: VoiceExperimentInput) => request<{ job: JobView; runs: number[] }>('POST', `/api/projects/${id}/voice/experiments`, input),
   regenerateVoice: (runId: string, input: RegenerateVoiceInput) => request<{ job: JobView; takes: number }>('POST', `/api/voice/runs/${runId}/regenerate`, input),
-  approveAllTakes: (runId: string) => request<{ approved: number; skipped: number }>('POST', `/api/voice/runs/${runId}/approve-all`),
+  approveAllTakes: (runId: string) => request<ApproveAllTakesView>('POST', `/api/voice/runs/${runId}/approve-all`),
   decideTake: (generationId: string, input: DecideVoiceGenerationInput) => request<{ runId: string }>('POST', `/api/voice/generations/${generationId}/decision`, input),
   updatePronunciation: (id: string, input: UpdatePronunciationInput) => request<{ ok: true }>('PATCH', `/api/voice/pronunciations/${id}`, input),
   /** The voices the configured provider offers (for a profile's voice). */

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { api } from '../api.ts';
 import { StatusBadge } from '../components/badges.tsx';
+import { NextStepCard, useAnchor } from '../components/NextStep.tsx';
 import { ProjectNav } from '../components/ProjectNav.tsx';
 import { StoryboardStatusBadge, type EditContext } from '../components/storyboard.tsx';
 import { InputsStrip, StoryboardActions } from '../components/storyboard-actions.tsx';
@@ -33,6 +34,8 @@ export function StoryboardPage() {
   const { id = '' } = useParams();
   const [params, setParams] = useSearchParams();
   const requested = params.get('v') ? Number(params.get('v')) : undefined;
+  // A voice run named by the link that opened the page ("Storyboard this run →"): the plan form offers it first.
+  const named = params.get('run') ? Number(params.get('run')) : null;
   const tab: Tab = isTab(params.get('tab')) ? (params.get('tab') as Tab) : 'overview';
   const [focus, setFocus] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -51,6 +54,7 @@ export function StoryboardPage() {
     if (stamp !== null && last.current !== null && last.current !== stamp) for (const key of ['storyboard', 'storyboard-inputs']) void queryClient.invalidateQueries({ queryKey: [key] });
     last.current = stamp;
   }, [stamp, queryClient]);
+  useAnchor(project.isSuccess && storyboard.isSuccess && inputs.isSuccess);
 
   if (project.isPending || storyboard.isPending || inputs.isPending) return <p className="text-sm text-stone-500">Loading…</p>;
   if (project.isError) return <p className="text-sm text-red-700">Could not load the project: {project.error.message}</p>;
@@ -78,6 +82,8 @@ export function StoryboardPage() {
       else next.set('v', String(change.v));
     }
     if (change.tab) next.set('tab', change.tab);
+    // Once a version is shown, the run that opened the page has done its part.
+    if (change.v !== undefined) next.delete('run');
     setParams(next);
   };
   const reload = () => {
@@ -126,13 +132,16 @@ export function StoryboardPage() {
           )}
         </div>
         <ProjectNav project={p} />
+        <NextStepCard project={p} />
         <p className="mt-2 text-xs text-stone-500">
           What the viewer sees, when, why, and how it would be produced: visual beats and shots on the narration's real audio, each traced to the words, script, architecture and evidence it serves, with the asset it needs and a forecast of its cost. Treatment comes before provider: a provider is only a recommendation for a later milestone.
         </p>
       </div>
 
+      {/* Nothing planned yet: planning comes first, what it is planned from after. */}
+      {!v && <StoryboardActions key={named ?? 'chosen'} project={p} view={view} inputs={inputs.data} named={named} onQueued={() => go({ v: null })} onSaved={saved} onReload={reload} />}
       <InputsStrip project={p} inputs={inputs.data} version={v} ctx={ctx} />
-      <StoryboardActions project={p} view={view} inputs={inputs.data} onQueued={() => go({ v: null })} onSaved={saved} onReload={reload} />
+      {v && <StoryboardActions project={p} view={view} inputs={inputs.data} named={named} onQueued={() => go({ v: null })} onSaved={saved} onReload={reload} />}
 
       {v && ctx ? (
         <>

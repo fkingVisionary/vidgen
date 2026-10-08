@@ -22,14 +22,28 @@
 // because another tab saved a version keeps its changes and is saved on
 // purpose. Nothing is generated: the fixture's model is scripted and every
 // provider is a mock.
+//
+// The guided flow, at 412 and 1280 px, on a project left as Tulip Mania was
+// (seven auditions, run 3 saved as the production profile, its takes to
+// review): the Overview's next step → the Voice page opens on the chosen run
+// (★) at its takes → "Approve all takes" says what it did → "Storyboard this
+// run →" → the Voice tab as Tulip Mania was left (every take approved, a
+// name to decide) → the Storyboard page with that run chosen and named in
+// words → planned (scripted model) → v1 → the next step says to review and
+// approve it. Screenshots of each step go to GUIDED_OUT (OUT/guided by
+// default).
+// STORYBOARD_UI_ONLY=guided runs that walk alone.
 import { execSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 const BASE = process.env.BASE ?? 'http://127.0.0.1:3103';
 const OUT = process.env.OUT ?? '/tmp/storyboard-ui';
+const GUIDED_OUT = process.env.GUIDED_OUT ?? join(OUT, 'guided');
+const ONLY = process.env.STORYBOARD_UI_ONLY ?? '';
 const fixture = JSON.parse(process.env.FIXTURE ?? '{}');
-if (!fixture.slug || !fixture.planSlug || !fixture.heldJob) throw new Error("FIXTURE (the fixture's READY line) is required");
+if (!fixture.slug || !fixture.planSlug || !fixture.heldJob || !fixture.guided) throw new Error("FIXTURE (the fixture's READY line) is required");
 
 function playwright() {
   const require = createRequire(import.meta.url);
@@ -97,6 +111,7 @@ const apiOf = (page) => (method, path, body) =>
     },
     [method, path, body],
   );
+const section = (page, heading) => page.locator('section', { has: page.getByRole('heading', { name: heading }) });
 const optionValue = (select, label) => select.locator('option').evaluateAll((os, l) => os.find((o) => o.textContent.trim().startsWith(l))?.value ?? null, label);
 
 const browser = await chromium.launch();
@@ -462,6 +477,8 @@ async function planning() {
     await gotoBoard(page, fixture.planSlug);
     const form = page.locator('[data-plan-form]');
     await form.waitFor();
+    check(/^Voice run \d+ · .+ · \d+\/\d+ takes approved · \d+:\d\d( · ★ your chosen run)?$/.test((await text(form.locator('[data-plan-run]'))).trim()), `${tag}: the plan form names its run in words (${await text(form.locator('[data-plan-run]'))})`);
+    await form.locator('[data-plan-choices] summary').click();
     check(/takes \d+\/\d+ approved/.test(await text(form)) && /the timing is real audio but provisional/.test(await text(form)), `${tag}: the plan form says the takes are not all approved (provisional timing)`);
     const confirm = form.getByRole('checkbox', { name: /I confirm a paid planning job \(a preview: the project status does not change\): model calls only, at most \$[\d.]+ \(the planning ceiling\)\. Nothing is generated/ });
     const go = form.getByRole('button', { name: 'Plan the storyboard (preview)' });
@@ -487,8 +504,8 @@ async function planning() {
     await card.waitFor();
     check(/^v1 · In review · preview · \d+:\d\d\.\d · \d+ beats, \d+ shots/.test(await text(card)) && /an estimate; nothing is generated/.test(await text(card)), `${tag}: the project page's storyboard card`);
     check(/preview v1/.test(await text(page.getByRole('navigation', { name: 'Project pages' }).getByRole('link', { name: /^Storyboard/ }))), `${tag}: the Storyboard pill says "preview v1"`);
-    const next = page.locator('[data-storyboard-next]');
-    check(/Your turn: review the storyboard/.test(await text(next)) && (await next.getByRole('link', { name: 'Open the Storyboard page →' }).count()) === 1, `${tag}: the next step points to the Storyboard page`);
+    const next = page.locator('[data-next-step]');
+    check(/Approve the takes of Voice run \d+ \(audition\): 0 of \d+ approved; then approve storyboard v1\./.test(await text(next)) && (await next.getByRole('link', { name: /^Approve run \d+'s takes →$/ }).count()) === 1, `${tag}: the next step says to approve the takes v1 is timed on, then v1 (${(await text(next)).replace(/\s+/g, ' ')})`);
     const stage = page.locator('ol li', { hasText: 'Storyboard' }).getByRole('link');
     check((await stage.count()) === 1 && /\/storyboard$/.test((await stage.getAttribute('href')) ?? ''), `${tag}: the pipeline's Storyboard stage links its page`);
     check((await page.getByRole('button', { name: /Visual generation|Infographic/ }).count()) === 0, `${tag}: no visual generation button`);
@@ -506,6 +523,184 @@ async function planning() {
   } catch (err) {
     check(false, `${tag}: ${err.message}`);
     await page.screenshot({ path: `${OUT}/1280-planning-failure.png`, fullPage: true }).catch(() => null);
+  }
+  await page.context().close();
+}
+
+// ── The guided flow: from "I chose run 3" to a planned storyboard ────────────
+
+/** The next step card: its sentence and its one button; on screen without scrolling (where the page opens at its top). */
+async function nextStepOf(page, where) {
+  const card = page.locator('[data-next-step]');
+  await card.waitFor();
+  const box = await card.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { top: r.top + window.scrollY, bottom: r.bottom + window.scrollY };
+  });
+  const height = page.viewportSize().height;
+  check(box.top >= 0 && box.bottom <= height, `${where}: the next step is on screen without scrolling (${Math.round(box.top)}–${Math.round(box.bottom)} of ${height} px from the top)`);
+  check((await card.getByRole('link').count()) === 1, `${where}: the next step has one button`);
+  return { card, text: (await text(card.locator('p').nth(1))).trim(), button: card.getByRole('link') };
+}
+/** No internal code reaches the person (INCOMPLETE_NARRATION, TAKE_UNREVIEWED…). */
+const noCodes = async (page, where) => {
+  const codes = (await page.locator('main').innerText()).match(/\b[A-Z]{3,}(?:_[A-Z]+)+\b/g) ?? [];
+  check(!codes.length, `${where}: no internal codes shown${codes.length ? ` (${[...new Set(codes)].join(', ')})` : ''}`);
+};
+
+async function guided(width) {
+  const tag = `${width} guided`;
+  const g = fixture.guided[width];
+  const page = await open(width);
+  const shot = (step) => page.screenshot({ path: join(GUIDED_OUT, `${width}-${step}.png`) });
+  try {
+    // 1. The Overview: one sentence, one button, to the chosen run's takes.
+    await page.goto(`${BASE}/projects/${g.slug}`);
+    let next = await nextStepOf(page, `${tag} overview`);
+    check(next.text === `Approve the takes of Voice run ${g.run} (C expressive): 0 of ${g.chunks} approved.`, `${tag}: the Overview's next step is to approve run ${g.run}'s takes ("${next.text}")`);
+    check((await text(next.button)).trim() === `Approve run ${g.run}'s takes →`, `${tag}: its button says "Approve run ${g.run}'s takes →"`);
+    await overflow(page, `${tag} overview`);
+    await shot('1-overview');
+
+    // 2. The Voice page opens on the chosen run (★), at its takes.
+    await next.button.click();
+    await page.waitForURL(new RegExp(`/voice\\?run=${g.run}#takes$`));
+    const takes = page.locator('#takes');
+    await takes.waitFor();
+    const picked = (await page.getByLabel('Voice run', { exact: true }).locator('option:checked').innerText()).trim();
+    check(new RegExp(`^Run ${g.run} · C expressive · 0/${g.chunks} approved · ★ your chosen run$`).test(picked), `${tag}: the run picker shows run ${g.run}, starred ("${picked}")`);
+    const options = await page.getByLabel('Voice run', { exact: true }).locator('option').allInnerTexts();
+    check(options.length === g.runs && options.every((o) => /· \d+\/\d+ approved/.test(o)) && options.filter((o) => o.includes('★')).length === 1, `${tag}: every run lists its approved takes; only one is starred`);
+    check((await page.locator('[data-chosen-run]').innerText()).trim() === '★ your chosen run', `${tag}: "★ your chosen run" beside the picker`);
+    await until(async () => {
+      const b = await takes.boundingBox();
+      return b && b.y >= -2 && b.y < page.viewportSize().height / 2;
+    }, 'the takes in view', 5_000);
+    check(true, `${tag}: the page opens at the run's takes`);
+    const storyboard = takes.locator('[data-storyboard-run]');
+    check(/Approve this run's takes first/.test(await text(storyboard)) && (await storyboard.getByRole('button', { name: 'Storyboard this run →' }).isDisabled()), `${tag}: "Storyboard this run →" waits: "Approve this run's takes first"`);
+    const approveAll = takes.getByRole('button', { name: 'Approve all takes without blocking findings' });
+    check(await approveAll.isEnabled(), `${tag}: the approve button is next to it`);
+    // What stops only the final narration is apart, in plain words, and says it does not stop storyboarding.
+    const final = section(page, 'Before this can be the final narration');
+    check(/Narrate the whole script/.test(await text(final)) && /None of this stops approving takes or storyboarding this audition/.test(await text(final)) && !/Blocks approval/.test(await text(final)), `${tag}: "Before this can be the final narration" holds the audition's whole-script finding, and does not stop storyboarding`);
+    check(/Decide how names are said/.test(await text(final)) && (await text(final)).includes(g.term) && !(await text(takes)).includes(g.term), `${tag}: the name to decide (${g.term}) is with the final narration's findings, not the takes'`);
+    await noCodes(page, `${tag} voice page`);
+    await overflow(page, `${tag} voice page`);
+    await tapTargetsIn(page, '#takes', `${tag} takes`);
+    await shot('2b-voice-takes');
+    await final.screenshot({ path: join(GUIDED_OUT, `${width}-2c-final-narration.png`) });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await shot('2a-voice-top');
+    next = await nextStepOf(page, `${tag} voice page`);
+    check(next.text.startsWith(`Approve the takes of Voice run ${g.run}`), `${tag}: the Voice page's next step is the same ("${next.text}")`);
+
+    // 3. Approve all: it says what it did; then the storyboard is one press away.
+    await approveAll.click();
+    const said = takes.locator('[data-approve-all-result]');
+    await said.waitFor();
+    check((await text(said)).trim() === `Approved ${g.chunks} takes`, `${tag}: "Approve all" says "Approved ${g.chunks} takes" ("${await text(said)}")`);
+    await until(async () => (await takes.getByRole('link', { name: 'Storyboard this run →' }).count()) === 1, '"Storyboard this run →" enabled');
+    check(new RegExp(`${g.chunks}/${g.chunks} takes approved`).test(await text(takes.locator('[data-takes-approved]'))), `${tag}: ${g.chunks}/${g.chunks} takes approved`);
+    const again = await apiOf(page)('POST', `/api/voice/runs/${await page.evaluate(async ([slug, run]) => (await (await fetch(`/api/projects/${slug}/voice?run=${run}`)).json()).run.id, [g.slug, g.run])}/approve-all`);
+    check(again.approved === 0 && again.alreadyApproved === g.chunks && again.total === g.chunks, `${tag}: pressed again, the API says all ${g.chunks} were already approved`);
+    await until(async () => (await text(page.locator('[data-next-step]'))).includes(`Plan the storyboard for Voice run ${g.run} (C expressive).`), 'the next step moves on');
+    check(true, `${tag}: the next step moves on to "Plan the storyboard for Voice run ${g.run} (C expressive)."`);
+    await shot('3-approved');
+
+    // 3b. As Tulip Mania was left: every take approved, a name to decide. The Voice tab (no run named) opens on the chosen run,
+    // says its takes are approved, and the way on is one press; the name is decided on the Pronunciation tab, a link away.
+    await page.getByRole('navigation', { name: 'Project pages' }).getByRole('link', { name: /^Voice/ }).click();
+    await page.waitForURL(new RegExp(`/projects/${g.slug}/voice$`));
+    await takes.waitFor();
+    check(new RegExp(`^Run ${g.run} · C expressive · ${g.chunks}/${g.chunks} approved · ★ your chosen run$`).test((await page.getByLabel('Voice run', { exact: true }).locator('option:checked').innerText()).trim()), `${tag}: the Voice tab opens on run ${g.run}, starred, every take approved`);
+    check(/every take of this run is approved/.test(await text(takes)) && (await takes.getByRole('link', { name: 'Storyboard this run →' }).count()) === 1 && (await takes.getByRole('button', { name: /Approve all takes/ }).count()) === 0, `${tag}: its takes say they are all approved, with "Storyboard this run →" (no approve button to press for nothing)`);
+    next = await nextStepOf(page, `${tag} voice tab`);
+    check(next.text === `Plan the storyboard for Voice run ${g.run} (C expressive).`, `${tag}: the Voice tab's next step is to plan the storyboard ("${next.text}")`);
+    const tabsNav = page.getByRole('navigation', { name: 'Project pages' });
+    check(/takes approved/.test(await text(tabsNav.getByRole('link', { name: /^Voice/ }))) && /bg-amber-100/.test((await tabsNav.getByRole('link', { name: /^Storyboard/ }).locator('span').getAttribute('class')) ?? ''), `${tag}: the project's tabs say the takes are approved and mark the Storyboard tab`);
+    await shot('3b-voice-tab');
+    await final.getByRole('button', { name: 'Decide them on the Pronunciation tab' }).click();
+    await until(async () => (await page.getByRole('tab', { name: /^Pronunciation/ }).getAttribute('aria-selected')) === 'true', 'the Pronunciation tab open');
+    check((await text(page.locator('#voice-panel'))).includes(g.term), `${tag}: "Decide them on the Pronunciation tab" opens it, ${g.term} listed`);
+    await page.getByRole('tab', { name: `Voice run ${g.run}` }).click();
+    await takes.waitFor();
+
+    // 4. "Storyboard this run →": the Storyboard page, the run chosen and named in words, the ceiling, the confirmation.
+    await takes.getByRole('link', { name: 'Storyboard this run →' }).click();
+    await page.waitForURL(new RegExp(`/storyboard\\?run=${g.run}#plan$`));
+    const form = page.locator('[data-plan-form]');
+    await form.waitFor();
+    const named = (await text(form.locator('[data-plan-run]'))).trim();
+    check(new RegExp(`^Voice run ${g.run} · C expressive · ${g.chunks}/${g.chunks} takes approved · \\d+:\\d\\d · ★ your chosen run$`).test(named), `${tag}: the plan names the run in words ("${named}")`);
+    const plan = page.locator('#plan');
+    const planBox = await plan.boundingBox();
+    check(!!planBox && planBox.y < page.viewportSize().height, `${tag}: the plan is the first thing below the title`);
+    const confirm = form.getByRole('checkbox', { name: /I confirm a paid planning job \(a preview: the project status does not change\): model calls only, at most \$[\d.]+ \(the planning ceiling\)/ });
+    const go = form.getByRole('button', { name: 'Plan the storyboard (preview)' });
+    check(!(await confirm.isChecked()) && (await go.isDisabled()), `${tag}: planning states its ceiling and waits for the confirmation`);
+    await form.locator('[data-plan-choices] summary').click();
+    check(/^Voice run \d+ · C expressive/.test((await form.getByLabel('Voice run', { exact: true }).locator('option:checked').innerText()).trim()), `${tag}: run ${g.run} is the one chosen in the form`);
+    await form.locator('[data-plan-choices] summary').click();
+    next = await nextStepOf(page, `${tag} storyboard page`);
+    check(next.text === `Plan the storyboard for Voice run ${g.run} (C expressive).`, `${tag}: the Storyboard page's next step is to plan it`);
+    await noCodes(page, `${tag} plan`);
+    await overflow(page, `${tag} plan`);
+    await shot('4-plan');
+
+    // 5. Planned: v1, in review.
+    await confirm.check();
+    await go.click();
+    await until(async () => (await page.getByLabel('Storyboard version').count()) === 1, 'v1 planned', 90_000);
+    check(/^v1 — In review — Planned from the narration · preview/.test((await page.getByLabel('Storyboard version').locator('option:checked').innerText()).trim()), `${tag}: v1 is planned, in review`);
+    check(new RegExp(`Voice run ${g.run} \\(audition`).test(await text(page.locator('[data-inputs-strip]'))) && !/provisional timing/.test(await text(page.locator('[data-inputs-strip]'))), `${tag}: v1 is timed on run ${g.run}, its takes approved`);
+    await shot('5-v1');
+
+    // 6. The next step says to review and approve it, and goes to the decision.
+    await until(async () => (await text(page.locator('[data-next-step]'))).includes('Review storyboard v1 and approve it.'), 'the next step: review v1');
+    next = await nextStepOf(page, `${tag} v1`);
+    check((await text(next.button)).trim() === 'Review storyboard v1 ↓', `${tag}: the next step is "Review storyboard v1 and approve it." with "Review storyboard v1 ↓" (further down this page)`);
+    await next.button.click();
+    await page.waitForURL(/[?&]v=1#decision$/);
+    const decision = page.locator('#decision');
+    await until(async () => {
+      const b = await decision.boundingBox();
+      return b && b.y >= -2 && b.y < page.viewportSize().height / 2;
+    }, 'the decision in view', 5_000);
+    check((await decision.getByRole('button', { name: 'Approve v1' }).count()) === 1, `${tag}: the decision on v1 is in view, with "Approve v1"`);
+    await overflow(page, `${tag} review`);
+    await shot('6-review');
+    await page.goto(`${BASE}/projects/${g.slug}`);
+    next = await nextStepOf(page, `${tag} overview after`);
+    check(next.text === 'Review storyboard v1 and approve it.', `${tag}: the Overview says the same ("${next.text}")`);
+    await shot('7-overview-after');
+    if (width === 1280) {
+      // Approved, the preview leads on to the whole narration.
+      await next.button.click();
+      await page.locator('#decision').getByRole('button', { name: 'Approve v1' }).click();
+      await until(async () => (await text(page.locator('[data-next-step]'))).includes('Storyboard v1 is approved. Narrate the whole script'), 'the next step after approval');
+      check((await text(page.locator('[data-next-step]').getByRole('link'))).trim() === 'Narrate the whole script →', `${tag}: approved, the next step is to narrate the whole script`);
+      await page.locator('[data-next-step]').getByRole('link').click();
+      await page.getByRole('tab', { name: 'Audition & generate' }).waitFor();
+      await until(async () => (await page.getByRole('tab', { name: 'Audition & generate' }).getAttribute('aria-selected')) === 'true', 'the generate tab open');
+      check((await page.getByLabel(/^Scope/).inputValue()) === 'FULL', `${tag}: "Narrate the whole script →" opens the Voice page's Audition & generate tab with the whole script chosen`);
+      await shot('8-whole-script');
+      // Another run saved and used as the production profile from this page: the ★ moves, the page stays where it is (its confirmation kept).
+      await page.goto(`${BASE}/projects/${g.slug}/voice`);
+      const e = page.locator('#voice-panel [data-variant="E no context"]');
+      await e.waitFor();
+      await e.getByRole('button', { name: "Save this run's configuration as a voice profile" }).click();
+      await e.getByLabel('Profile name').fill(`House Documentary — No context (${width})`);
+      await e.getByRole('button', { name: 'Save profile' }).click();
+      await e.getByRole('button', { name: 'Use for this project' }).click();
+      await until(async () => (await e.getByText('In use for this project').count()) === 1, 'the profile in use');
+      const other = Number((await e.innerText()).match(/run (\d+)/)?.[1]);
+      await until(async () => (await page.getByRole('button', { name: `★ Go to your chosen run (run ${other})` }).count()) === 1, 'the ★ on the other run');
+      check(new RegExp(`^Run ${g.run} · `).test((await page.getByLabel('Voice run', { exact: true }).locator('option:checked').innerText()).trim()) && (await e.getByText('In use for this project').count()) === 1, `${tag}: using run ${other}'s profile moves the ★ to it ("★ Go to your chosen run (run ${other})") while the page stays on run ${g.run}, the confirmation in view`);
+    }
+  } catch (err) {
+    check(false, `${tag}: ${err.message}`);
+    await page.screenshot({ path: join(GUIDED_OUT, `${width}-failure.png`), fullPage: true }).catch(() => null);
   }
   await page.context().close();
 }
@@ -652,11 +847,15 @@ async function library(width) {
   await page.context().close();
 }
 
-for (const width of [1280, 412, 360]) await tabs(width);
-await versions();
-await planning();
-for (const width of [412, 360]) await phoneEdit(width);
-for (const width of [1280, 412, 360]) await library(width);
+mkdirSync(GUIDED_OUT, { recursive: true });
+for (const width of [412, 1280]) await guided(width);
+if (ONLY !== 'guided') {
+  for (const width of [1280, 412, 360]) await tabs(width);
+  await versions();
+  await planning();
+  for (const width of [412, 360]) await phoneEdit(width);
+  for (const width of [1280, 412, 360]) await library(width);
+}
 await browser.close();
 check(expectedConflicts === 0, `every conflict provoked on purpose was answered (${expectedConflicts} outstanding)`);
 console.log(problems.length ? `console problems:\n${problems.join('\n')}` : 'no console errors or warnings');

@@ -58,6 +58,7 @@ import type { AvailableActions } from './pipeline.ts';
 import type { ScriptTiming } from './script.ts';
 import type { StageView } from './stages.ts';
 import type { StoryboardSummaryView } from './storyboard-views.ts';
+import type { NarrationSummaryView } from './voice-views.ts';
 
 /**
  * Response shapes of the HTTP API (JSON-serialised: dates are ISO strings,
@@ -158,6 +159,8 @@ export interface ProjectDetailView extends ProjectSummaryView {
   script: ScriptSummaryView | null;
   /** Latest storyboard version, if any (a preview included). */
   storyboard: StoryboardSummaryView | null;
+  /** The voice runs in brief: how many, the chosen one, the newest full run. */
+  narration: NarrationSummaryView;
 }
 
 export interface DossierSummaryView {

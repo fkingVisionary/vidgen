@@ -13,7 +13,7 @@ import { rebuildAssembly } from './runs.ts';
 import { loadScriptForVoice } from './script.ts';
 import { VoiceService } from './service.ts';
 import { createVoiceStage } from './stage.ts';
-import { loadVoiceView } from './views.ts';
+import { loadNarrationSummary, loadVoiceView } from './views.ts';
 
 /**
  * The Voice Engine against a real database, with the MOCK voice (real WAV
@@ -370,8 +370,14 @@ describe('voice engine (MOCK voice, real database)', () => {
     expect(s.voice.calls.at(-1)!.settings.provider).toMatchObject({ stability: 0.3 });
     r = (await view(s, projectId)).run!;
     expect(r.qa.filter((f) => f.kind === 'CONFIGURATION_DIFFERS')).toEqual([{ kind: 'CONFIGURATION_DIFFERS', severity: 'WARNING', ref: '#2', detail: "Chunk 2's take 2 was made with a temporary override: stability: 0.3 (run: 0.5)" }]);
-    const { approved } = await s.service.approveAll(r.id, 'editor');
-    expect(approved).toBe(r.chunks.length);
+    const n = r.chunks.length;
+    const project = await db.project.findUniqueOrThrow({ where: { id: projectId } });
+    expect((await loadNarrationSummary({ db, providers: s.providers }, project)).chosen).toMatchObject({ id: r.id, reason: 'NEWEST', kind: 'FULL', takes: { approved: 0, total: n } });
+    // Approve all says what it did: every take approved, then (again) every take already approved.
+    expect(await s.service.approveAll(r.id, 'editor')).toEqual({ approved: n, skipped: 0, alreadyApproved: 0, total: n, blocked: [], waiting: [] });
+    expect(await s.service.approveAll(r.id, 'editor')).toEqual({ approved: 0, skipped: 0, alreadyApproved: n, total: n, blocked: [], waiting: [] });
+    const narration = await loadNarrationSummary({ db, providers: s.providers }, project);
+    expect(narration).toMatchObject({ runs: 1, chosen: { id: r.id, number: r.number, reason: 'APPROVED', takes: { approved: n, total: n }, durationMs: r.assembly!.totalDurationMs, stale: false }, full: { id: r.id, takes: { approved: n, total: n } } });
     // The VOICE gate (no providers: it reads what the takes stored) approves it.
     const { approval } = await s.projects.recordApproval(projectId, { gate: 'VOICE', decision: 'APPROVED', notes: 'Narration approved (test).' }, 'editor');
     expect(approval.voiceAssemblyId).toBe(r.assembly!.id);

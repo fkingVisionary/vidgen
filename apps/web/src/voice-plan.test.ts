@@ -7,6 +7,7 @@ import {
   type VoiceChunkView,
   type VoiceConfigOverrides,
   type VoicePlanView,
+  type VoiceQaFinding,
   type VoiceSettingDescriptor,
   type VoiceTakeConfigView,
 } from '@docengine/core';
@@ -17,12 +18,14 @@ import { ELEVENLABS_SETTINGS } from '../../../packages/providers/src/elevenlabs/
 import { sentVoiceSettings } from '../../../packages/providers/src/voice-settings.ts';
 import {
   CHUNK_SIZES,
+  approveAllText,
   configDifferences,
   configRows,
   costText,
   costWords,
   describeOverrides,
   experimentRuns,
+  finalNote,
   isEmptyOverrides,
   notSentTo,
   originText,
@@ -34,10 +37,12 @@ import {
   productionRefusal,
   profileLabel,
   pruneOverrides,
+  runOption,
   sameOverrides,
   sentenceSpans,
   settingProblem,
   sizeLabel,
+  splitFindings,
   takeCostText,
   takeLabels,
   takesEstimate,
@@ -367,5 +372,59 @@ describe('profiles and takes', () => {
       override: 'temporary override · stability 0.3',
       differs: 'differs from the run: stability: 0.3 (run: 0.5)',
     });
+  });
+});
+
+describe('reviewing a run', () => {
+  const result = (r: Partial<Parameters<typeof approveAllText>[0]>) => ({ approved: 0, skipped: 0, alreadyApproved: 0, total: 11, blocked: [], waiting: [], ...r });
+
+  it('say what "Approve all takes" did in plain words', () => {
+    expect(approveAllText(result({ approved: 11 }))).toBe('Approved 11 takes');
+    expect(approveAllText(result({ approved: 1, total: 1 }))).toBe('Approved 1 take');
+    // The Tulip Mania press that showed "0 approved": every take was approved already.
+    expect(approveAllText(result({ alreadyApproved: 11 }))).toBe('All 11 takes were already approved');
+    expect(approveAllText(result({ alreadyApproved: 1, total: 1 }))).toBe('The take was already approved');
+    expect(approveAllText(result({ approved: 9, skipped: 2, blocked: ['#4', '#7'] }))).toBe('Approved 9; 2 need a look first (blocking findings on #4, #7)');
+    expect(approveAllText(result({ skipped: 1, alreadyApproved: 10, blocked: ['#4'] }))).toBe('None approved; 1 needs a look first (blocking findings on #4); 10 were already approved');
+    expect(approveAllText(result({ approved: 3, alreadyApproved: 8 }))).toBe('Approved 3 takes; 8 were already approved');
+    expect(approveAllText(result({ alreadyApproved: 10, waiting: ['#5'] }))).toBe('No take was approved; 10 were already approved; 1 has no take to approve yet (#5)');
+    expect(approveAllText(result({ total: 0 }))).toBe('This run has no takes yet');
+  });
+
+  // The Tulip Mania audition's QA: two red findings that stop only the final narration, the takes' own findings beside them.
+  const qa: VoiceQaFinding[] = [
+    { kind: 'TAKE_UNREVIEWED', severity: 'BLOCKING', ref: '#1', detail: 'Take 1 is not approved yet' },
+    { kind: 'TAKE_UNREVIEWED', severity: 'BLOCKING', ref: '#2', detail: 'Take 1 is not approved yet' },
+    { kind: 'MISSING_ALIGNMENT', severity: 'BLOCKING', ref: '#4', detail: 'No timestamps came back' },
+    { kind: 'TAKE_REJECTED', severity: 'BLOCKING', ref: '#7', detail: 'The current take (2) was rejected' },
+    { kind: 'MOCK_AUDIO', severity: 'WARNING', ref: '#1', detail: 'MOCK audio' },
+    { kind: 'SPOKEN_FORM_CHECK', severity: 'WARNING', ref: '#3', detail: '"1637" was read as "sixteen thirty-seven"' },
+    { kind: 'INCOMPLETE_NARRATION', severity: 'BLOCKING', ref: null, detail: 'An audition run narrates 10 of 80 blocks: only a full run can be approved as the narration' },
+    { kind: 'PRONUNCIATION_UNRESOLVED', severity: 'BLOCKING', ref: null, detail: 'Pronunciations to decide: Gaergoedt, Haarlem, Thijs' },
+    { kind: 'CONFIGURATION_DIFFERS', severity: 'WARNING', ref: '#2', detail: "Chunk 2's take 2 was made with a temporary override" },
+  ];
+
+  it('split the findings into what stops approving takes and what stops the final narration', () => {
+    const split = splitFindings(qa);
+    expect(split.toReview).toBe(2);
+    expect(split.takes.map((f) => f.kind)).toEqual(['MISSING_ALIGNMENT', 'TAKE_REJECTED']);
+    // A take made with another voice is a warning: worth a listen, it stops neither a take nor the final narration.
+    expect(split.checks.map((f) => f.kind)).toEqual(['MOCK_AUDIO', 'SPOKEN_FORM_CHECK', 'CONFIGURATION_DIFFERS']);
+    expect(split.final.map((f) => f.kind)).toEqual(['INCOMPLETE_NARRATION', 'PRONUNCIATION_UNRESOLVED']);
+    expect(split.final.every((f) => f.severity === 'BLOCKING')).toBe(true);
+    expect(splitFindings([])).toEqual({ toReview: 0, takes: [], checks: [], final: [] });
+  });
+
+  it('say what the final-narration findings do not stop', () => {
+    expect(finalNote({ kind: 'AUDITION', stale: false })).toMatch(/^None of this stops approving takes or storyboarding this audition/);
+    expect(finalNote({ kind: 'SECTION', stale: false })).toMatch(/storyboarding this run:/);
+    expect(finalNote({ kind: 'FULL', stale: false })).toMatch(/^These stop this run being approved as the film's final narration/);
+    expect(finalNote({ kind: 'AUDITION', stale: true })).toMatch(/older version of the script: it can no longer be storyboarded/);
+  });
+
+  it('list every run with its approved takes, the chosen one starred', () => {
+    const r = { number: 3, label: 'Acceptance experiment — C expressive', variant: 'C expressive', stale: false, chunkCount: 11, takes: { APPROVED: 4, IN_REVIEW: 7 } };
+    expect(runOption(r, true)).toBe('Run 3 · C expressive · 4/11 approved · ★ your chosen run');
+    expect(runOption({ ...r, number: 1, variant: null, label: 'Opening audition: blocks 1.1–1.4 (about 40 s planned)', takes: {}, stale: true }, false)).toBe('Run 1 · Opening audition: blocks 1.1–1.4 (about 40 s planned) · 0/11 approved · older script');
   });
 });

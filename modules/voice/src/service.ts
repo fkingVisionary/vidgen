@@ -10,6 +10,7 @@ import {
   VoiceExperimentInput,
   estimateCost,
   performanceRulesProblems,
+  type ApproveAllTakesView,
   type CreateVoiceProfileFamilyInput,
   type DirectorMark,
   type DuplicateVoiceProfileInput,
@@ -576,25 +577,40 @@ export class VoiceService {
     return { runId: take.runId };
   }
 
-  /** Approve every current take of a run that has no blocking finding (the rest stay for a closer listen). */
-  async approveAll(runId: string, actor: string): Promise<{ approved: number; skipped: number }> {
-    const run = await this.db.voiceRun.findUnique({ where: { id: runId }, include: { chunks: { include: { current: true } } } });
+  /**
+   * Approve every current take of a run that has no blocking finding (the
+   * rest stay for a closer listen), and say what was already approved and
+   * which chunks have no take to approve.
+   */
+  async approveAll(runId: string, actor: string): Promise<ApproveAllTakesView> {
+    const run = await this.db.voiceRun.findUnique({ where: { id: runId }, include: { chunks: { orderBy: { chunkIndex: 'asc' }, include: { current: true } } } });
     if (!run) throw new NotFoundError('Voice run', runId);
     const now = new Date();
     let approved = 0;
-    let skipped = 0;
+    let alreadyApproved = 0;
+    const blocked: string[] = [];
+    const waiting: string[] = [];
     for (const c of run.chunks) {
       const g = c.current;
-      if (!g || (g.status !== 'IN_REVIEW' && g.status !== 'GENERATED')) continue;
+      const ref = `#${c.chunkIndex + 1}`;
+      if (g?.status === 'APPROVED') {
+        alreadyApproved++;
+        continue;
+      }
+      if (!g || (g.status !== 'IN_REVIEW' && g.status !== 'GENERATED')) {
+        waiting.push(ref);
+        continue;
+      }
       if (readQa(g.qa).some((f) => f.severity === 'BLOCKING' && f.kind !== 'MOCK_AUDIO')) {
-        skipped++;
+        blocked.push(ref);
         continue;
       }
       await this.db.voiceGeneration.update({ where: { id: g.id }, data: { status: 'APPROVED', approvedAt: now, decidedBy: actor, decidedAt: now } });
       approved++;
     }
+    const skipped = blocked.length;
     await this.event(this.db, run.projectId, EVENT.VOICE_TAKE_DECIDED, `Voice run ${run.number}: ${approved} take(s) approved together${skipped ? `, ${skipped} left for review (blocking findings)` : ''}`, { actor, approved, skipped });
-    return { approved, skipped };
+    return { approved, skipped, alreadyApproved, total: run.chunks.length, blocked, waiting };
   }
 
   async updatePronunciation(id: string, raw: UpdatePronunciationInput, actor: string): Promise<void> {

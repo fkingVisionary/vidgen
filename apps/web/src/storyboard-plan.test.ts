@@ -29,6 +29,7 @@ import {
   overridesFrom,
   phaseOpen,
   planDefaults,
+  planRunText,
   planKind,
   perMinuteText,
   pricingRows,
@@ -386,7 +387,7 @@ describe('versions, inputs and the project page', () => {
 
   it('read decisions with where they came from, and count findings', () => {
     expect(decisionText({ decision: 'APPROVED', decidedBy: 'Ana', carriedFromVersion: 1, note: 'steady', approvalId: null })).toBe('Approved by Ana — carried from v1: “steady”');
-    expect(decisionText({ decision: 'CHANGES_REQUESTED', decidedBy: 'Ana', carriedFromVersion: null, note: null, approvalId: 'ap' })).toBe('Changes requested by Ana at the STORYBOARD gate');
+    expect(decisionText({ decision: 'CHANGES_REQUESTED', decidedBy: 'Ana', carriedFromVersion: null, note: null, approvalId: 'ap' })).toBe('Changes requested by Ana (the film’s storyboard approval)');
     expect(findingCounts([{ severity: 'BLOCKING' }, { severity: 'WARNING' }, { severity: 'WARNING' }])).toEqual({ blocking: 1, warnings: 2 });
   });
 });
@@ -573,7 +574,7 @@ describe('planning a storyboard', () => {
     gateApproved: false,
     ...over,
   });
-  const run = (over: Partial<StoryboardInputsView['runs'][number]> = {}) => ({ id: 'run-3', number: 3, kind: 'AUDITION' as const, label: 'Audition — run 3', scopeBlockKeys: ['1.1'], current: true, assemblies: [assembly(), assembly({ id: 'as-1', version: 1 })], ...over });
+  const run = (over: Partial<StoryboardInputsView['runs'][number]> = {}) => ({ id: 'run-3', number: 3, kind: 'AUDITION' as const, label: 'Audition — run 3', variant: null, scopeBlockKeys: ['1.1'], current: true, assemblies: [assembly(), assembly({ id: 'as-1', version: 1 })], ...over });
   const p = (status: ProjectDetailView['status'], failedFromStatus: ProjectDetailView['failedFromStatus'] = null) => ({ status, failedFromStatus });
 
   it('queue the phase job only on the narration the VOICE gate approved, a preview while the narration is reviewed, nothing after', () => {
@@ -581,7 +582,7 @@ describe('planning a storyboard', () => {
     expect(planKind(p('VOICE_COMPLETE'), { gateApproved: true })).toEqual({ kind: 'PHASE', reason: null });
     expect(planKind(p('VOICE_COMPLETE'), { gateApproved: false })).toEqual({ kind: 'PREVIEW', reason: null });
     expect(planKind(p('FAILED', 'VISUAL_PLANNING'), { gateApproved: true }).kind).toBe('PHASE');
-    expect(planKind(p('STORYBOARD_REVIEW'), { gateApproved: false })).toEqual({ kind: null, reason: 'In “Storyboard review” the storyboard is planned on the narration the VOICE gate approved' });
+    expect(planKind(p('STORYBOARD_REVIEW'), { gateApproved: false })).toEqual({ kind: null, reason: 'In “Storyboard review” the storyboard is planned on the film’s approved narration' });
     expect(planKind(p('SCRIPT_APPROVED'), { gateApproved: false }).reason).toMatch(/^A storyboard is planned while the narration is reviewed or after it is approved, and before visual generation \(the project is “/);
     expect(planKind(p('VISUAL_GENERATING'), { gateApproved: true }).kind).toBeNull();
     expect(phaseOpen(p('STORYBOARD_APPROVED'))).toBe(true);
@@ -595,8 +596,18 @@ describe('planning a storyboard', () => {
     expect(planDefaults(p('VOICE_REVIEW'), { runs: [stale, run(), older] })).toEqual({ runId: 'run-3', assemblyId: 'as-2' });
     expect(planDefaults(p('VOICE_COMPLETE'), { runs: [stale, run(), older] })).toEqual({ runId: 'run-2', assemblyId: 'gate' });
     expect(planDefaults(p('VOICE_REVIEW'), { runs: [stale, run({ assemblies: [] })] })).toBeNull();
+    // The run named on the page comes first, then the gate's narration while the phase is open, then the project's chosen run.
+    expect(planDefaults(p('VOICE_REVIEW'), { runs: [stale, run(), older] }, null, 2)).toEqual({ runId: 'run-2', assemblyId: 'gate' });
+    expect(planDefaults(p('VOICE_COMPLETE'), { runs: [stale, run(), older] }, 3)).toEqual({ runId: 'run-3', assemblyId: 'as-2' });
+    expect(planDefaults(p('VOICE_COMPLETE'), { runs: [stale, run(), older] }, null, 3)).toEqual({ runId: 'run-2', assemblyId: 'gate' });
+    expect(planDefaults(p('VOICE_COMPLETE'), { runs: [stale, run(), older] }, 2)).toEqual({ runId: 'run-2', assemblyId: 'gate' });
+    // A named or chosen run of another script, or not assembled, is passed over.
+    expect(planDefaults(p('VOICE_REVIEW'), { runs: [stale, run(), older] }, 4, 4)).toEqual({ runId: 'run-3', assemblyId: 'as-2' });
+    expect(planDefaults(p('VOICE_REVIEW'), { runs: [run({ id: 'run-5', number: 5, assemblies: [] }), older] }, 5)).toEqual({ runId: 'run-2', assemblyId: 'gate' });
+    expect(planRunText({ number: 3, variant: 'C expressive', label: 'Audition — run 3' }, assembly({ takes: { approved: 11, total: 11 } }), true)).toBe('Voice run 3 · C expressive · 11/11 takes approved · 1:50 · ★ your chosen run');
+    expect(planRunText({ number: 5, variant: null, label: 'Audition — run 5' }, null)).toBe('Voice run 5 · Audition — run 5 · not assembled');
     expect(assemblyText(assembly())).toBe('Assembly v2 · 1:49.8 · takes 4/11 approved');
-    expect(assemblyText(assembly({ gateApproved: true, complete: true, mock: true }))).toBe('Assembly v2 · 1:49.8 · takes 4/11 approved · approved at the VOICE gate · the whole script · mock audio');
+    expect(assemblyText(assembly({ gateApproved: true, complete: true, mock: true }))).toBe('Assembly v2 · 1:49.8 · takes 4/11 approved · the film’s approved narration · the whole script · mock audio');
   });
 });
 
@@ -614,7 +625,7 @@ describe('decisions and versions', () => {
   });
 
   it('pass a whole-script version at the gate only on the narration the VOICE gate approved, approved takes or not', () => {
-    const gateLine = 'plan it on the narration the VOICE gate approved: the STORYBOARD gate passes only that narration';
+    const gateLine = 'plan it on the film’s approved narration: the film’s storyboard is approved only on that narration';
     expect(approvalNeeds({ scope: 'FULL', qa: qa(), shots: [shot()], narration: narration('GATE_APPROVED'), narrationLane: lane(3) })).toEqual([]);
     expect(approvalNeeds({ scope: 'FULL', qa: qa(), shots: [shot()], narration: narration('TAKES_APPROVED'), narrationLane: lane(3) })).toEqual([gateLine]);
     expect(approvalNeeds({ scope: 'FULL', qa: qa(), shots: [shot()], narration: narration('UNREVIEWED'), narrationLane: lane(1) })).toEqual([gateLine]);

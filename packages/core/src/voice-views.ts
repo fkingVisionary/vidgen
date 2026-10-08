@@ -23,6 +23,7 @@ import type {
   VoiceSettingDescriptor,
   VoiceTakeOverride,
 } from './contracts/voice.ts';
+import type { ChosenRunReason } from './narration.ts';
 import type { JobView } from './views.ts';
 
 /** Read models of the Voice Engine, as the API returns them. */
@@ -389,6 +390,47 @@ export interface VoiceView {
   };
   confirmCharacters: number;
   activeJob: JobView | null;
+}
+
+/** What "Approve all takes" did: newly approved, left for a closer listen (blocking findings), already approved, and the chunks it could not approve. */
+export interface ApproveAllTakesView {
+  approved: number;
+  /** Current takes with a blocking finding, left for a closer listen. */
+  skipped: number;
+  /** Current takes that were approved before. */
+  alreadyApproved: number;
+  /** The run's chunks. */
+  total: number;
+  /** The skipped chunks ("#4"). */
+  blocked: string[];
+  /** Chunks with no take to approve: none yet, generating, failed or rejected ("#5"). */
+  waiting: string[];
+}
+
+/** A voice run in brief, as a project's next step names it. */
+export interface NarrationRunView {
+  id: string;
+  number: number;
+  kind: VoiceRunKind;
+  label: string;
+  /** The comparison variant it was made as ("C expressive"), or null. */
+  variant: string | null;
+  /** Its current takes approved, of its chunks. */
+  takes: { approved: number; total: number };
+  /** Its latest assembly's length (null: not assembled yet). */
+  durationMs: number | null;
+  /** Narrates another script version than the approved one. */
+  stale: boolean;
+}
+
+/** A project's narration in brief, for its next step. */
+export interface NarrationSummaryView {
+  /** Voice runs made (of any script version). */
+  runs: number;
+  /** The run a next step refers to unless another is named, and why (see chosenRun). */
+  chosen: (NarrationRunView & { reason: ChosenRunReason }) | null;
+  /** The newest full run of the approved script: the narration the VOICE gate approves. */
+  full: NarrationRunView | null;
 }
 
 /**

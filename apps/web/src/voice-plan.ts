@@ -19,8 +19,11 @@ import {
   type VoiceCostView,
   type VoicePlanView,
   type VoiceProductionView,
+  type ApproveAllTakesView,
   type VoiceProfileRef,
   type VoiceProfileView,
+  type VoiceQaFinding,
+  type VoiceQaKind,
   type VoiceRunSummaryView,
   type VoiceSettingDescriptor,
   type VoiceSettingValue,
@@ -464,4 +467,71 @@ export function takeLabels(c: VoiceTakeConfigView, variant: string | null): { pr
     override: isEmptyOverrides(override) ? null : `temporary override · ${describeOverrides(override)}`,
     differs: differs.length ? `differs from the run: ${differs.join('; ')}` : null,
   };
+}
+
+// ── Reviewing a run ──────────────────────────────────────────────────────────
+
+/**
+ * What "Approve all takes" did, in plain words: "Approved 11 takes", "All 11
+ * takes were already approved", "Approved 9; 2 need a look first (blocking
+ * findings on #4, #7)", then any already approved and the chunks with no
+ * take to approve.
+ */
+export function approveAllText(r: ApproveAllTakesView): string {
+  if (!r.approved && !r.skipped && !r.waiting.length) return !r.total ? 'This run has no takes yet' : r.total === 1 ? 'The take was already approved' : `All ${r.total} takes were already approved`;
+  const parts = [
+    r.skipped
+      ? `${r.approved ? `Approved ${r.approved}` : 'None approved'}; ${r.skipped} need${r.skipped === 1 ? 's' : ''} a look first (blocking findings on ${r.blocked.join(', ')})`
+      : r.approved
+        ? `Approved ${r.approved} take${r.approved === 1 ? '' : 's'}`
+        : 'No take was approved',
+  ];
+  if (r.alreadyApproved) parts.push(`${r.alreadyApproved} ${r.alreadyApproved === 1 ? 'was' : 'were'} already approved`);
+  if (r.waiting.length) parts.push(`${r.waiting.length} ${r.waiting.length === 1 ? 'has' : 'have'} no take to approve yet (${r.waiting.join(', ')})`);
+  return parts.join('; ');
+}
+
+/**
+ * Findings about a run's narration as a whole, with what to do about each:
+ * blocking, they stop it becoming the film's final narration (the VOICE
+ * gate), never approving a take or storyboarding the run. Every other
+ * finding is a take's (a take made with another voice is a warning: worth a
+ * listen, it stops nothing).
+ */
+export const FINAL_NARRATION: Partial<Record<VoiceQaKind, string>> = {
+  INCOMPLETE_NARRATION: 'Narrate the whole script',
+  PRONUNCIATION_UNRESOLVED: 'Decide how names are said',
+  STALE_SCRIPT: 'Narrate the current script',
+  STALE_TEXT: 'The script changed under a chunk',
+  ASSEMBLY_MISMATCH: 'Assemble the current takes',
+  DUPLICATE_CHUNK: 'A part of the script is narrated twice',
+  MISSING_CHUNK: 'A part of the script is not narrated',
+};
+
+/**
+ * A run's findings in two kinds: its takes' — those still to review (a
+ * count), what stops approving a take (blocking), what is worth a listen —
+ * and the narration's as a whole (FINAL_NARRATION).
+ */
+export function splitFindings(qa: readonly VoiceQaFinding[]): { toReview: number; takes: VoiceQaFinding[]; checks: VoiceQaFinding[]; final: VoiceQaFinding[] } {
+  const final = qa.filter((f) => f.kind in FINAL_NARRATION);
+  const own = qa.filter((f) => !(f.kind in FINAL_NARRATION));
+  return {
+    toReview: own.filter((f) => f.kind === 'TAKE_UNREVIEWED').length,
+    takes: own.filter((f) => f.severity === 'BLOCKING' && f.kind !== 'TAKE_UNREVIEWED'),
+    checks: own.filter((f) => f.severity === 'WARNING'),
+    final,
+  };
+}
+
+/** What the final-narration findings do not stop, for the run shown. */
+export function finalNote(r: Pick<VoiceRunSummaryView, 'kind' | 'stale'>): string {
+  if (r.stale) return 'This run narrates an older version of the script: it can no longer be storyboarded.';
+  if (r.kind === 'FULL') return "These stop this run being approved as the film's final narration; they do not stop approving takes or storyboarding it.";
+  return `None of this stops approving takes or storyboarding this ${r.kind === 'AUDITION' ? 'audition' : 'run'}: it matters only for the film's final narration, a run of the whole script.`;
+}
+
+/** "Run 3 · C expressive · 0/11 approved · ★ your chosen run", as the run picker lists it. */
+export function runOption(r: Pick<VoiceRunSummaryView, 'number' | 'label' | 'variant' | 'stale' | 'chunkCount' | 'takes'>, chosen: boolean): string {
+  return [`Run ${r.number}`, r.variant ?? r.label, `${r.takes.APPROVED ?? 0}/${r.chunkCount} approved`, r.stale ? 'older script' : null, chosen ? '★ your chosen run' : null].filter(Boolean).join(' · ');
 }

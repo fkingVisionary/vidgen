@@ -12,7 +12,13 @@
  *   every tab has something to show and the version can be approved;
  * - "plan": takes still to review and no storyboard yet (the page offers to
  *   plan one; the timing would be provisional), and an old failed placeholder
- *   visual generation job, whose retry is held (the hard stop).
+ *   visual generation job, whose retry is held (the hard stop);
+ * - "guided" (two of them, one per width the guided walk takes): the
+ *   acceptance experiment narrated (seven audition runs, A–G), run 3's
+ *   configuration (C expressive) saved as "House Documentary — Expressive",
+ *   the library default and the project's production profile, every take
+ *   still to review, a name's pronunciation to decide and no storyboard:
+ *   Tulip Mania as the producer left it.
  *
  * Then it serves the API and the built dashboard with the job worker
  * running and prints "READY <json>".
@@ -21,7 +27,7 @@
  *
  * WEB_DIST_DIR serves another dashboard build (apps/web/dist by default).
  */
-import type { VisualTreatment } from '../../packages/core/src/index.ts';
+import { VOICE_ACCEPTANCE_EXPERIMENT, type VisualTreatment } from '../../packages/core/src/index.ts';
 import { buildApp } from '../../apps/api/src/app.ts';
 import { createContainer } from '../../apps/api/src/container.ts';
 import { parseEnv } from '../../apps/api/src/env.ts';
@@ -119,7 +125,8 @@ ai.shots = (prompt) => {
 
 const SIX = ['The Semper Augustus price', 'The ruin that never happened', 'Proefman in court', 'The tavern colleges', 'Striped tulips', 'The courts step back'];
 
-async function narrated(title: string) {
+/** A project whose script is approved (the scripted model writes it). */
+async function scripted(title: string) {
   const p = await c.projects.createProject({ title, topic: 'SYNTHETIC TEST DATA', targetMinutesMin: 2, targetMinutesMax: 4 }, actor);
   await c.db.project.update({ where: { id: p.id }, data: { status: 'RESEARCH_COMPLETE', phaseSeq: 2 } });
   await seedFakeDossier(c.db, p.id);
@@ -135,15 +142,58 @@ async function narrated(title: string) {
   await c.projects.generateScript(p.id, {}, actor);
   await c.runner.drain();
   await c.projects.recordApproval(p.id, { gate: 'SCRIPT', decision: 'APPROVED' }, actor);
-  const { run: number } = await c.voice.createRun(p.id, { scope: { kind: 'AUDITION', seconds: 60 } }, actor);
-  await c.runner.drain();
-  const run = await c.db.voiceRun.findUniqueOrThrow({ where: { projectId_number: { projectId: p.id, number } } });
-  // The takes as a real provider would have made them (provider timings, stored audio that is not mock): the stand-in for paid audio.
-  for (const g of await c.db.voiceGeneration.findMany({ where: { runId: run.id } })) {
+  return p;
+}
+
+/** A run's takes as a real provider would have made them (provider timings, stored audio that is not mock): the stand-in for paid audio. */
+async function asIfPaid(runId: string) {
+  for (const g of await c.db.voiceGeneration.findMany({ where: { runId } })) {
     if (g.alignment) await c.db.voiceGeneration.update({ where: { id: g.id }, data: { alignment: { ...(g.alignment as object), source: 'PROVIDER' } } });
     if (g.audioAssetId) await c.db.mediaAsset.update({ where: { id: g.audioAssetId }, data: { isMock: false } });
   }
+}
+
+async function narrated(title: string) {
+  const p = await scripted(title);
+  const { run: number } = await c.voice.createRun(p.id, { scope: { kind: 'AUDITION', seconds: 60 } }, actor);
+  await c.runner.drain();
+  const run = await c.db.voiceRun.findUniqueOrThrow({ where: { projectId_number: { projectId: p.id, number } } });
+  await asIfPaid(run.id);
   return { project: p, run };
+}
+
+/**
+ * The acceptance experiment narrated (seven auditions, A–G), every take to
+ * review, and a name in the narration whose pronunciation is still to
+ * decide: Tulip Mania before the producer chose.
+ */
+async function auditioned(width: number) {
+  const p = await scripted(`UI check — guided ${width}`);
+  const preset = VOICE_ACCEPTANCE_EXPERIMENT;
+  const { runs } = await c.voice.createExperiment(p.id, { scope: preset.scope, name: preset.name, variants: preset.variants.map(({ label, strategy, chunking, context }) => ({ label, strategy, chunking, context })), confirm: true }, actor);
+  await c.runner.drain();
+  const rows = await c.db.voiceRun.findMany({ where: { projectId: p.id }, orderBy: { number: 'asc' } });
+  for (const r of rows) await asIfPaid(r.id);
+  const chosen = rows.find((r) => r.number === runs[2])!;
+  if (chosen.variant !== 'C expressive') throw new Error(`Run ${chosen.number} is ${chosen.variant}, not C expressive`);
+  // A word of the passage as a name to decide (the scripted model's script has no name of its own): a capitalised one, else a long one.
+  const text = (await c.db.voiceChunk.findMany({ where: { runId: chosen.id }, orderBy: { chunkIndex: 'asc' }, select: { sourceText: true } })).map((x) => x.sourceText).join('\n');
+  const term = text.match(/(?<=[a-z,] )[A-Z][a-z]{3,}\b/)?.[0] ?? text.match(/\b[a-z]{7,}\b/)?.[0];
+  if (!term) throw new Error(`No name-like word in run ${chosen.number}'s passage: ${text}`);
+  await c.db.voicePronunciation.upsert({
+    where: { projectId_language_term: { projectId: p.id, language: p.masterLanguage, term } },
+    create: { projectId: p.id, language: p.masterLanguage, term, kind: 'NAME', status: 'PENDING', source: 'EDITOR' },
+    update: { status: 'PENDING' },
+  });
+  return { width, slug: p.slug, chosen, term, runs: rows.length, chunks: await c.db.voiceChunk.count({ where: { runId: chosen.id } }) };
+}
+
+/** Run 3 (C expressive) chosen: its configuration saved as a profile, the project's production profile and the library default. */
+async function chooseC(g: Awaited<ReturnType<typeof auditioned>>) {
+  // A profile's name is the library's own: one per walk.
+  const saved = await c.voice.saveRunAsProfile(g.chosen.id, { name: `House Documentary — Expressive (${g.width})`, use: true }, actor);
+  await c.voice.updateProfileFamily(saved.familyId, { isDefault: true }, actor);
+  return { slug: g.slug, run: g.chosen.number, term: g.term, runs: g.runs, chunks: g.chunks };
 }
 
 const board = await narrated('UI check — storyboard');
@@ -160,6 +210,10 @@ const plan = await narrated('UI check — storyboard to plan');
 const { phaseSeq } = await c.db.project.findUniqueOrThrow({ where: { id: plan.project.id }, select: { phaseSeq: true } });
 const heldJob = await c.db.job.create({ data: { projectId: plan.project.id, type: 'VISUAL_GENERATION', status: 'FAILED', phaseSeq, attempts: 3, isMock: true, error: 'A placeholder run of the mock pipeline (UI check)', completedAt: new Date() } });
 
+// Both narrated before either chooses, so every audition is made with the house profile, as Tulip Mania's were.
+const walks = [await auditioned(412), await auditioned(1280)];
+const [guided412, guided1280] = [await chooseC(walks[0]!), await chooseC(walks[1]!)];
+
 const app = await buildApp(c);
 await app.listen({ port: env.PORT, host: env.HOST });
 c.runner.start();
@@ -175,6 +229,7 @@ console.log(
     slug: board.project.slug,
     planSlug: plan.project.slug,
     heldJob: heldJob.id,
+    guided: { 412: guided412, 1280: guided1280 },
     shots: live.storyboard!.shotCount,
     beats: live.storyboard!.beatCount,
     blocking: blocking.map((f) => `${f.ref ?? ''} ${f.kind}`),

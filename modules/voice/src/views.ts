@@ -2,9 +2,14 @@ import {
   DEFAULT_VOICE_PROFILE_CONFIG,
   DirectorMark,
   PreparedNarration,
+  VoiceProfileOrigin,
   VoiceScope,
+  chosenRun,
+  runTakes,
   type CostBasis,
   type JobView,
+  type NarrationRunView,
+  type NarrationSummaryView,
   type VoiceAssemblyVersionView,
   type VoiceAssemblyView,
   type VoiceChunkView,
@@ -335,6 +340,53 @@ export async function loadProduction(deps: ProfileViewDeps, project: Pick<Projec
   const lv = await db.languageVersion.findUnique({ where: { projectId_language: { projectId: project.id, language: language ?? project.masterLanguage } }, select: { id: true, language: true, projectId: true } });
   if (!lv) return null;
   return productionView(db, voice, await resolveProduction(db, voice, lv));
+}
+
+/**
+ * A project's voice runs in brief, for its next step: how many, the chosen
+ * one (chosenRun: the run its production profile was saved from, else the
+ * newest with every take approved, else the newest) and the newest full run
+ * of the approved script. A read: no profile is made or adopted.
+ */
+export async function loadNarrationSummary(deps: ProfileViewDeps, project: Pick<Project, 'id' | 'masterLanguage'>): Promise<NarrationSummaryView> {
+  const { db } = deps;
+  const approved = await approvedScript(db, project.id);
+  const rows = await db.voiceRun.findMany({
+    where: { projectId: project.id },
+    orderBy: { number: 'desc' },
+    select: {
+      id: true,
+      number: true,
+      kind: true,
+      experiment: true,
+      variant: true,
+      scope: true,
+      scriptId: true,
+      chunks: { select: { currentGenerationId: true, current: { select: { id: true, status: true } } } },
+      assemblies: { orderBy: { version: 'desc' }, take: 1, select: { totalDurationMs: true } },
+    },
+  });
+  const runs = rows.map((r) => {
+    const takes: Partial<Record<VoiceGenerationStatus, number>> = {};
+    for (const c of r.chunks) {
+      const status = c.current ? takeStatus(c.current, c.currentGenerationId) : 'PENDING';
+      takes[status] = (takes[status] ?? 0) + 1;
+    }
+    const stale = !!approved && approved.id !== r.scriptId;
+    const brief: NarrationRunView = { id: r.id, number: r.number, kind: r.kind, label: runLabel(r), variant: r.variant, takes: runTakes({ chunkCount: r.chunks.length, takes }), durationMs: r.assemblies[0]?.totalDurationMs ?? null, stale };
+    return { brief, input: { id: r.id, number: r.number, stale, chunkCount: r.chunks.length, takes } };
+  });
+  const lv = await db.languageVersion.findUnique({ where: { projectId_language: { projectId: project.id, language: project.masterLanguage } }, select: { id: true, language: true, projectId: true } });
+  const production = lv && runs.length ? await resolveProduction(db, deps.providers.voice, lv) : null;
+  const origin = VoiceProfileOrigin.nullable().catch(null).parse(production?.version?.origin ?? null);
+  const chosen = chosenRun(runs.map((r) => r.input), origin, project.id);
+  const full = approved ? rows.find((r) => r.kind === 'FULL' && r.scriptId === approved.id) : undefined;
+  const brief = (id: string) => runs.find((r) => r.brief.id === id)!.brief;
+  return {
+    runs: runs.length,
+    chosen: chosen ? { ...brief(chosen.run.id), reason: chosen.reason } : null,
+    full: full ? brief(full.id) : null,
+  };
 }
 
 // ── The Voice page ───────────────────────────────────────────────────────────

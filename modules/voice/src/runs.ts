@@ -151,7 +151,7 @@ export function runQa(input: RunQaInput): VoiceQaFinding[] {
   }
   const covered = new Set(input.chunks.flatMap((c) => c.blockKeys));
   const missing = input.allBlockKeys.filter((k) => !covered.has(k));
-  if (missing.length) add({ kind: 'INCOMPLETE_NARRATION', severity: 'BLOCKING', ref: null, detail: input.kind === 'FULL' ? `Blocks without narration: ${missing.slice(0, 12).join(', ')}${missing.length > 12 ? '…' : ''}` : `A ${input.kind.toLowerCase()} run narrates ${covered.size} of ${input.allBlockKeys.length} blocks: only a full run can be approved as the narration` });
+  if (missing.length) add({ kind: 'INCOMPLETE_NARRATION', severity: 'BLOCKING', ref: null, detail: input.kind === 'FULL' ? `Blocks without narration: ${missing.slice(0, 12).join(', ')}${missing.length > 12 ? '…' : ''}` : `${input.kind === 'AUDITION' ? 'An audition' : `A ${input.kind.toLowerCase()}`} run narrates ${covered.size} of ${input.allBlockKeys.length} blocks: only a full run can be approved as the narration` });
   if (input.unresolved.length) add({ kind: 'PRONUNCIATION_UNRESOLVED', severity: 'BLOCKING', ref: null, detail: `Pronunciations to decide: ${input.unresolved.join(', ')}` });
   return out;
 }

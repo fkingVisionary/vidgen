@@ -13,3 +13,9 @@ export const formatRuntime = (p: { runtimeSec: number | null; targetMinutesMin: 
     : `target ${p.targetMinutesMin}–${p.targetMinutesMax} min`;
 
 export const formatUsd = (v: number) => `$${v.toFixed(v < 1 ? 4 : 2)}`;
+
+/** "1:50": a length to the second. */
+export const formatLength = (ms: number) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};

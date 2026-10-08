@@ -15,10 +15,12 @@ import { useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { api } from '../api.ts';
 import { JobStatusBadge, MockBadge, StatusBadge } from '../components/badges.tsx';
+import { NextStepCard } from '../components/NextStep.tsx';
 import { ProjectNav, hasScriptPage, hasStoryPage, hasVoicePage } from '../components/ProjectNav.tsx';
 import { ProgressBar, StagePipeline } from '../components/StagePipeline.tsx';
 import { StoryboardStatusBadge } from '../components/storyboard.tsx';
 import { formatDate, formatDuration, formatRuntime, formatUsd } from '../format.ts';
+import { ANCHORS, nextStep } from '../next-step.ts';
 import { generationHeld, hasStoryboardPage, rollupText, summaryLine } from '../storyboard-plan.ts';
 
 export function ProjectPage() {
@@ -47,6 +49,7 @@ export function ProjectPage() {
         </div>
         {p.workingTitle && <p className="text-stone-600 italic">{p.workingTitle}</p>}
         <ProjectNav project={p} />
+        <NextStepCard project={p} />
         <dl className="mt-3 grid gap-x-6 gap-y-1 text-sm text-stone-600 sm:grid-cols-2">
           <Meta label="Topic">{p.topic}</Meta>
           <Meta label="Category">{p.category ?? '—'}</Meta>
@@ -289,16 +292,18 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
   const heldJobs = p.actions.runnableJobs.filter(held);
   const storyPage = `/projects/${p.slug}/story`;
   const scriptPage = `/projects/${p.slug}/script`;
-  const voicePage = `/projects/${p.slug}/voice`;
   const storyboardPage = `/projects/${p.slug}/storyboard`;
   const storyboardGate = p.actions.gate?.gate === 'STORYBOARD' && storyboardOnItsPage;
+  // Real narration is approved on the Voice page, where what stops it is said (an audition is never the narration).
+  const voiceGate = p.actions.gate?.gate === 'VOICE' && voiceOnItsPage;
+  const guided = health.data ? nextStep(p, realStages) : null;
 
   return (
     <Card title="Next actions">
       <div className="space-y-4">
         {p.status === 'FAILED' && (
           <p className="rounded-md bg-red-50 p-3 text-sm text-red-800">
-            Failed during <strong>{p.failedFromStatus ? STATUS_LABELS[p.failedFromStatus] : 'an unknown phase'}</strong>. Retry the failed job below, or rewind.
+            Failed during <strong>{p.failedFromStatus ? STATUS_LABELS[p.failedFromStatus] : 'an unknown phase'}</strong>. {guided ? 'Start it again from its page (the next step above), or rewind.' : 'Retry the failed job below, or rewind.'}
           </p>
         )}
 
@@ -334,38 +339,11 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
           </div>
         )}
 
-        {voiceOnItsPage && (p.status === 'SCRIPT_APPROVED' || p.status === 'VOICE_GENERATING' || p.status === 'VOICE_REVIEW') && (
-          <div className="rounded-md border border-sky-200 bg-sky-50 p-3">
-            <p className="text-sm font-medium text-sky-950">{p.status === 'SCRIPT_APPROVED' ? 'Your turn: narrate the approved script' : p.status === 'VOICE_GENERATING' ? 'Narration is being generated' : 'Your turn: review the narration'}</p>
-            <p className="mt-1 text-sm text-sky-900">The Voice page plans small natural chunks, shows what each would send and cost before anything is generated, and keeps every take for your review.</p>
-            <Link to={voicePage} className={`${button} mt-2 inline-block bg-sky-700 text-white hover:bg-sky-600`}>
-              Open the Voice page →
-            </Link>
-          </div>
-        )}
-
-        {storyboardOnItsPage && ['VOICE_REVIEW', 'VOICE_COMPLETE', 'VISUAL_PLANNING', 'STORYBOARD_REVIEW', 'STORYBOARD_APPROVED'].includes(p.status) && (
-          <div className="rounded-md border border-sky-200 bg-sky-50 p-3" data-storyboard-next>
-            <p className="text-sm font-medium text-sky-950">
-              {p.status === 'VISUAL_PLANNING'
-                ? active.some((j) => j.type === 'VISUAL_PLAN')
-                  ? 'The storyboard is being planned'
-                  : 'The storyboard is back with you: plan it again'
-                : p.status === 'STORYBOARD_REVIEW'
-                  ? 'Your turn: review the storyboard'
-                  : p.status === 'STORYBOARD_APPROVED'
-                    ? 'The storyboard is approved'
-                    : p.storyboard
-                      ? 'Your turn: review the storyboard'
-                      : 'Your turn: plan the storyboard'}
-            </p>
-            <p className="mt-1 text-sm text-sky-900">
-              The Storyboard page plans visual beats and shots on the narration's real audio{p.status === 'VOICE_REVIEW' ? ' (a preview while the narration is reviewed)' : ''}, with the evidence behind each picture and a forecast of its cost, and keeps every version for your review. Nothing is generated.
-            </p>
-            <Link to={storyboardPage} className={`${button} mt-2 inline-block bg-sky-700 text-white hover:bg-sky-600`}>
-              Open the Storyboard page →
-            </Link>
-          </div>
+        {/* Narration and the storyboard: the Next step card under the title says what to do and goes there. */}
+        {guided && (
+          <p className="text-sm text-stone-600" data-next-step-pointer>
+            Next: {guided.text}
+          </p>
         )}
 
         {heldJobs.length > 0 && (
@@ -398,7 +376,17 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
           </div>
         )}
 
-        {p.actions.gate && (
+        {/* The film's final narration is decided on the Voice page: a note here, not a second call to action beside the next step. */}
+        {voiceGate && (
+          <p className="rounded-md bg-stone-100 p-3 text-sm text-stone-700" data-voice-gate-note>
+            The film's final narration is approved on the Voice page, once the whole script is narrated and every take is approved: an audition is never the final narration.{' '}
+            <Link to={`/projects/${p.slug}/voice#${ANCHORS.gate}`} className="font-medium underline">
+              Final narration approval
+            </Link>
+          </p>
+        )}
+
+        {p.actions.gate && !voiceGate && (
           <div className="rounded-md border border-violet-200 bg-violet-50 p-3">
             <p className="text-sm font-medium text-violet-900">Human approval required: {GATE_LABELS[p.actions.gate.gate]}</p>
             {p.actions.gate.gate === 'RESEARCH' && p.research && (
@@ -459,7 +447,7 @@ function NextActions({ project: p }: { project: ProjectDetailView }) {
           </div>
         )}
 
-        {runnableJobs.length === 0 && heldJobs.length === 0 && !p.actions.gate && p.status !== 'FAILED' && p.status !== 'STORY_SELECTION' && (
+        {runnableJobs.length === 0 && heldJobs.length === 0 && !p.actions.gate && !guided && p.status !== 'FAILED' && p.status !== 'STORY_SELECTION' && (
           <p className="text-sm text-stone-500">{p.status === 'PUBLISHED' ? 'Published. Nothing left to do.' : 'No actions available in this status.'}</p>
         )}
 

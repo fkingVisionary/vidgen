@@ -3,6 +3,7 @@ import {
   DEFAULT_PERFORMANCE_RULES,
   DEFAULT_VOICE_PROFILE_CONFIG,
   EARLIER_PERFORMANCE_RULES,
+  type ProjectDetailView,
   type VoicePlanView,
   type VoiceProductionView,
   type VoiceProfileHistoryView,
@@ -314,6 +315,9 @@ describe('saved voice profiles through the API', () => {
     const houseId = run.configuration.profile.familyId!;
     expect((await get<VoiceProfileLibraryView>('/api/voice/profiles')).families.find((f) => f.id === houseId)).toMatchObject({ name: 'House narrator', versions: 1, runs: 1, current: { version: 1, runs: 1 } });
 
+    // The project's chosen run: the newest, its takes still to review.
+    expect((await get<ProjectDetailView>(`/api/projects/${id}`)).narration).toEqual({ runs: 1, chosen: { id: run.id, number: 1, kind: 'AUDITION', label: run.label, variant: null, takes: { approved: 0, total: run.chunkCount }, durationMs: run.assembly!.totalDurationMs, stale: false, reason: 'NEWEST' }, full: null });
+
     // Save it as a new profile and use it: production follows it, the project's override is cleared (it is in what was saved) and returned.
     const saved = await send('POST', `/api/voice/runs/${run.id}/save-profile`, { name: 'Tulip narrator', description: 'The accepted take on the opening', use: true });
     expect(saved.statusCode).toBe(201);
@@ -324,6 +328,8 @@ describe('saved voice profiles through the API', () => {
     expect(body.production).toMatchObject({ mode: 'FOLLOW', revision: 2, family: { id: body.profile.id }, profile: { id: body.profile.current!.id }, overrides: {}, provenance: {} });
     expect(body.production.effective).toEqual(run.configuration.effective);
     expect(await get<VoiceProductionView>(selection)).toEqual(body.production);
+    // The run its production profile was saved from is the project's chosen run now.
+    expect((await get<ProjectDetailView>(`/api/projects/${id}`)).narration.chosen).toMatchObject({ id: run.id, number: 1, reason: 'PROFILE' });
     expect(of('voice profile saved from a run')).toEqual([expect.objectContaining({ actor: 'dashboard', familyId: body.profile.id, versionId: body.profile.current!.id, version: 1, runId: run.id, generationId: null, selected: true })]);
     const events = await db.projectEvent.findMany({ where: { projectId: id, type: { in: ['VOICE_PROFILE_CREATED', 'VOICE_PROFILE_SELECTED'] } } });
     expect(events.map((e) => e.type).sort()).toEqual(['VOICE_PROFILE_CREATED', 'VOICE_PROFILE_SELECTED', 'VOICE_PROFILE_SELECTED']);

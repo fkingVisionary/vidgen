@@ -18,7 +18,7 @@ export async function projectRoutes(app: FastifyInstance, c: AppContainer): Prom
     return project;
   };
   const detail = async (id: string) => {
-    const d = await loadProjectDetail(c.db, c.projects, c.storyboards, id);
+    const d = await loadProjectDetail(c.db, c.projects, c.storyboards, c.providers, id);
     if (!d) throw new NotFoundError('Project', id);
     return d;
   };

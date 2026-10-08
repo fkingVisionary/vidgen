@@ -13,10 +13,12 @@ import {
   SELECTION_MODE_LABELS,
   VOICE_ACCEPTANCE_EXPERIMENT,
   VOICE_RUN_KIND_LABELS,
+  chosenRun,
   type EffectiveVoiceConfig,
   type PerformanceStrategy,
   type PronunciationMethod,
   type PronunciationStatus,
+  type ProjectDetailView,
   type VoicePlanChunkView,
   type VoicePlanView,
   type VoiceProductionView,
@@ -30,23 +32,28 @@ import {
 } from '@docengine/core';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router';
+import { Link, useLocation, useParams, useSearchParams } from 'react-router';
 import { api } from '../api.ts';
 import { StatusBadge } from '../components/badges.tsx';
 import { Section } from '../components/evidence.tsx';
+import { NextStepCard, useAnchor } from '../components/NextStep.tsx';
 import { ProjectNav } from '../components/ProjectNav.tsx';
 import { AssemblyStatus, ChunkCard, choiceProblem, choiceRequest, Findings, Length, NumberedText, Player, RUN_CHOICE, TakeChoiceFields, button, clock, link, pill, secondary, seconds, useVoiceRequest, type ChunkContext, type TakeChoice } from '../components/voice.tsx';
 import { ConfigTable, isConflict, OverridesEditor, SaveAsProfile, type OverrideField } from '../components/voice-profiles.tsx';
 import { formatDate, formatUsd } from '../format.ts';
+import { ANCHORS, storyboardRun } from '../next-step.ts';
 import {
   CHUNK_SIZES,
   CONTEXTS,
+  FINAL_NARRATION,
   NO_CONTEXT,
+  approveAllText,
   contextLabel,
   costText,
   costWords,
   describeOverrides,
   experimentRuns,
+  finalNote,
   isEmptyOverrides,
   outsideNatural,
   overrideProblems,
@@ -55,8 +62,10 @@ import {
   profileLabel,
   profileNameFor,
   pruneOverrides,
+  runOption,
   sameOverrides,
   sizeLabel,
+  splitFindings,
   takesEstimate,
   versionEffective,
   type EditedOverrides,
@@ -82,8 +91,22 @@ export function VoicePage() {
     refetchInterval: (q) => (q.state.data?.jobs.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING') ? 1_500 : 10_000),
   });
   const running = project.data?.jobs.some((j) => j.type === 'VOICE' && (j.status === 'QUEUED' || j.status === 'RUNNING')) ?? false;
-  const voice = useQuery({ queryKey: ['voice', id, runNumber], queryFn: () => api.voice(id, runNumber), refetchInterval: running ? 2_000 : false });
-  const [tab, setTab] = useState<Tab>('run');
+  // No run named: the project's chosen run (core's chosenRun), read with the project, so the page opens on it —
+  // and stays on it while open (a newer run, or a profile saved from another, moves the ★, not the page).
+  const opened = useRef<{ id: string; run: number | undefined } | null>(null);
+  if (project.data && opened.current?.id !== id) opened.current = { id, run: project.data.narration.chosen?.number };
+  const shown = runNumber ?? (opened.current?.id === id ? opened.current.run : undefined);
+  const voice = useQuery({ queryKey: ['voice', id, shown], queryFn: () => api.voice(id, shown), enabled: runNumber !== undefined || project.isSuccess, refetchInterval: running ? 2_000 : false });
+  const linkedTab = params.get('tab') === 'generate' ? 'generate' : null;
+  const [tab, setTab] = useState<Tab>(linkedTab ?? 'run');
+  const { hash, key } = useLocation();
+  // A link (a next step) opens the tab it names: a run's takes are on the run tab.
+  useEffect(() => {
+    if (hash === `#${ANCHORS.takes}`) setTab('run');
+    else if (linkedTab) setTab(linkedTab);
+  }, [hash, key, linkedTab]);
+  // The takes are on the run tab: opened there once it shows.
+  useAnchor(voice.isSuccess && (hash !== `#${ANCHORS.takes}` || tab === 'run'));
   const stamp = project.data ? `${project.data.status}|${project.data.jobs.filter((j) => j.type === 'VOICE').map((j) => `${j.id}:${j.status}`).join(',')}` : null;
   const queryClient = useQueryClient();
   const last = useRef<string | null>(null);
@@ -101,10 +124,13 @@ export function VoicePage() {
   const showRun = (n: number) => {
     const next = new URLSearchParams(params);
     next.set('run', String(n));
+    next.delete('tab');
+    next.delete('scope');
     setParams(next);
     setTab('run');
   };
   const pending = v.pronunciations.filter((x) => x.status !== 'APPROVED' && !x.withdrawn).length;
+  const chosen = chosenRun(v.runs, v.production.profile?.origin, v.project.id)?.run.number ?? null;
   const tabs: [Tab, string][] = [
     ['run', v.run ? `Voice run ${v.run.number}` : 'Runs'],
     ['generate', 'Audition & generate'],
@@ -124,14 +150,24 @@ export function VoicePage() {
             <select value={v.run?.number ?? ''} onChange={(e) => showRun(Number(e.target.value))} className="max-w-full min-w-0 rounded-md border border-stone-300 px-2 py-1 text-sm" aria-label="Voice run">
               {v.runs.map((r) => (
                 <option key={r.id} value={r.number}>
-                  Run {r.number} — {r.label}
-                  {r.stale ? ' (stale)' : ''}
+                  {runOption(r, r.number === chosen)}
                 </option>
               ))}
             </select>
           )}
+          {v.run && chosen !== null &&
+            (v.run.number === chosen ? (
+              <span className={`${pill} bg-amber-100 text-amber-900`} data-chosen-run title="The run your production voice profile was saved from (or the newest with every take approved)">
+                ★ your chosen run
+              </span>
+            ) : (
+              <button onClick={() => showRun(chosen)} className={link} data-chosen-run>
+                ★ Go to your chosen run (run {chosen})
+              </button>
+            ))}
         </div>
         <ProjectNav project={p} />
+        <NextStepCard project={p} />
         <p className="mt-2 text-xs text-stone-500">
           {v.script ? `Narration of the approved script v${v.script.version}.` : 'No approved script yet.'} Generated in small chunks of natural speech, each take kept and reviewed on its own; the script is never changed — spoken forms and performance directions are derived and shown beside it. Real audio timing, not a words-per-minute estimate, is what the storyboard will be timed against.
         </p>
@@ -161,8 +197,8 @@ export function VoicePage() {
         ))}
       </div>
       <div role="tabpanel" id="voice-panel" aria-labelledby={`voice-tab-${tab}`}>
-        {tab === 'run' && (v.run ? <RunTab key={v.run.id} view={v} run={v.run} projectId={p.id} projectRef={id} running={running} onOpen={showRun} /> : <p className="text-sm text-stone-500">No voice run yet: start with an audition of the opening.</p>)}
-        {tab === 'generate' && <GenerateTab view={v} projectId={p.id} onQueued={showRun} />}
+        {tab === 'run' && (v.run ? <RunTab key={v.run.id} view={v} run={v.run} project={p} projectRef={id} running={running} onOpen={showRun} onTab={setTab} /> : <p className="text-sm text-stone-500">No voice run yet: start with an audition of the opening.</p>)}
+        {tab === 'generate' && <GenerateTab view={v} projectId={p.id} onQueued={showRun} scope={params.get('scope') === 'full' ? 'FULL' : undefined} />}
         {tab === 'pronunciation' && <PronunciationTab items={v.pronunciations} />}
         {tab === 'profile' && <ProductionTab view={v} projectId={p.id} />}
       </div>
@@ -199,7 +235,7 @@ function Gate({ view: v, projectId }: { view: VoiceView; projectId: string }) {
   const decide = useVoiceRequest((decision: 'APPROVED' | 'REJECTED') => api.approve(projectId, { gate: 'VOICE', decision, ...(notes ? { notes } : {}) }));
   if (v.project.status !== 'VOICE_REVIEW' && v.project.status !== 'VOICE_COMPLETE') return null;
   return (
-    <Section title="Narration approval (VOICE gate)">
+    <Section title="Final narration approval" id={ANCHORS.gate}>
       {v.project.status === 'VOICE_COMPLETE' ? (
         <p className="text-sm text-emerald-800">The narration is approved.</p>
       ) : !v.editorial.approve.allowed ? (
@@ -223,9 +259,9 @@ function Gate({ view: v, projectId }: { view: VoiceView; projectId: string }) {
   );
 }
 
-function RunTab({ view: v, run: r, projectId, projectRef, running, onOpen }: { view: VoiceView; run: VoiceRunView; projectId: string; projectRef: string; running: boolean; onOpen: (run: number) => void }) {
-  const approveAll = useVoiceRequest(() => api.approveAllTakes(r.id));
-  const blocking = r.qa.filter((f) => f.severity === 'BLOCKING');
+function RunTab({ view: v, run: r, project, projectRef, running, onOpen, onTab }: { view: VoiceView; run: VoiceRunView; project: ProjectDetailView; projectRef: string; running: boolean; onOpen: (run: number) => void; onTab: (tab: Tab) => void }) {
+  const projectId = project.id;
+  const findings = splitFindings(r.qa);
   const canGenerate = v.editorial.generate.allowed && !r.stale;
   const [at, setAt] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
@@ -237,6 +273,7 @@ function RunTab({ view: v, run: r, projectId, projectRef, running, onOpen }: { v
   return (
     <div className="space-y-4">
       {r.staleNote && <p className="rounded-md bg-red-50 p-3 text-sm text-red-900">{r.staleNote}. Stale audio is never reused: start a new run for the current script.</p>}
+      <TakesReview run={r} project={project} findings={findings} />
       <Section title={`Voice run ${r.number} — ${VOICE_RUN_KIND_LABELS[r.kind]}${r.variant ? ` · ${r.variant}` : ''}`}>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
           <Stat label="Script" value={`v${r.scriptVersion}`} />
@@ -342,19 +379,34 @@ function RunTab({ view: v, run: r, projectId, projectRef, running, onOpen }: { v
           {moment.error && <p className="mt-1 text-xs text-red-700">{moment.error.message}</p>}
         </Section>
       )}
-      <Section title={`Voice QA (${blocking.length} blocking, ${r.qa.length - blocking.length} to check)`}>
-        <Findings findings={r.qa} />
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <button disabled={approveAll.isPending} onClick={() => approveAll.mutate(undefined)} className={secondary}>
-            Approve all takes without blocking findings
-          </button>
-          {approveAll.data && (
-            <span className="text-xs text-stone-600">
-              {approveAll.data.approved} approved{approveAll.data.skipped ? `, ${approveAll.data.skipped} left for a closer listen` : ''}
-            </span>
-          )}
-        </div>
-      </Section>
+      {findings.final.length > 0 && (
+        <Section title="Before this can be the final narration">
+          <p className="mb-2 text-sm text-stone-700" data-final-note>
+            {finalNote(r)}
+          </p>
+          <ul className="space-y-2 text-sm" data-final-findings>
+            {findings.final.map((f, i) => (
+              <li key={i} className="min-w-0 rounded-md border border-stone-200 bg-stone-50 p-2">
+                <p className="font-medium text-stone-900">{FINAL_NARRATION[f.kind]}</p>
+                <p className="text-xs break-words text-stone-600">
+                  {f.ref ? `${f.ref} — ` : ''}
+                  {f.detail}
+                </p>
+                {f.kind === 'PRONUNCIATION_UNRESOLVED' && (
+                  <button onClick={() => onTab('pronunciation')} className={link}>
+                    Decide them on the Pronunciation tab
+                  </button>
+                )}
+                {(f.kind === 'INCOMPLETE_NARRATION' || f.kind === 'STALE_SCRIPT') && (
+                  <button onClick={() => onTab('generate')} className={link}>
+                    Narrate it on the Audition &amp; generate tab
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
       {canGenerate && <RegeneratePanel context={context} selected={selected} mock={v.provider.mock} onDone={() => setSelected([])} />}
       <div className="space-y-3">
         {r.chunks.map((c) => (
@@ -368,6 +420,72 @@ function RunTab({ view: v, run: r, projectId, projectRef, running, onOpen }: { v
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * A run's takes at a glance, first on the run tab: how many are approved,
+ * "Approve all takes" and what it did, what stops approving a take, and
+ * "Storyboard this run →" once every take is approved (the reason, beside
+ * the approve button, until then). What stops the run becoming the film's
+ * final narration is apart, lower down: it stops neither.
+ */
+function TakesReview({ run: r, project, findings }: { run: VoiceRunView; project: ProjectDetailView; findings: ReturnType<typeof splitFindings> }) {
+  const health = useQuery({ queryKey: ['health'], queryFn: api.health });
+  const approveAll = useVoiceRequest(() => api.approveAllTakes(r.id));
+  const approved = r.takes.APPROVED ?? 0;
+  const all = r.chunkCount > 0 && approved === r.chunkCount;
+  const board = health.data ? storyboardRun(project, r, health.data.realStages) : null;
+  return (
+    <Section title={`Takes of run ${r.number}`} id={ANCHORS.takes}>
+      <p className="text-sm text-stone-800" data-takes-approved>
+        <span className="font-semibold">
+          {approved}/{r.chunkCount} takes approved
+        </span>
+        {all ? ' — every take of this run is approved.' : findings.toReview ? ` · ${findings.toReview} to review: listen below, approve each, or approve them all.` : ''}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {!all && (
+          <button disabled={approveAll.isPending} onClick={() => approveAll.mutate(undefined)} className={`${button} bg-emerald-600 text-white hover:bg-emerald-700`}>
+            {approveAll.isPending ? 'Approving…' : 'Approve all takes without blocking findings'}
+          </button>
+        )}
+        {board &&
+          (board.to ? (
+            <Link to={board.to} className={`${button} inline-flex min-h-9 items-center bg-sky-700 text-white hover:bg-sky-600`} data-storyboard-run>
+              Storyboard this run →
+            </Link>
+          ) : (
+            <span className="inline-flex flex-wrap items-center gap-2" data-storyboard-run>
+              <button disabled className={secondary}>
+                Storyboard this run →
+              </button>
+              <span className="text-xs text-stone-600">{board.reason}</span>
+            </span>
+          ))}
+      </div>
+      {approveAll.data && (
+        <p className="mt-2 text-sm font-medium text-stone-900" role="status" data-approve-all-result>
+          {approveAllText(approveAll.data)}
+        </p>
+      )}
+      {approveAll.error && <p className="mt-2 text-sm text-red-700">{approveAll.error.message}</p>}
+      {findings.takes.length > 0 && (
+        <div className="mt-3" data-take-findings>
+          <h3 className="text-sm font-medium text-stone-800">What stops approving a take</h3>
+          <p className="mb-1 text-xs text-stone-500">Regenerate these chunks below, or listen and decide each one.</p>
+          <Findings findings={findings.takes} />
+        </div>
+      )}
+      {findings.checks.length > 0 && (
+        <details className="mt-2">
+          <summary className="inline-flex min-h-6 cursor-pointer items-center text-xs text-stone-600 underline">Worth a listen ({findings.checks.length})</summary>
+          <div className="mt-1">
+            <Findings findings={findings.checks} />
+          </div>
+        </details>
+      )}
+    </Section>
   );
 }
 
@@ -662,7 +780,7 @@ function houseDefault(v: VoiceView): EffectiveVoiceConfig {
 
 const RUN_FIELDS: OverrideField[] = ['numberStyle', 'settings'];
 
-function GenerateTab({ view: v, projectId, onQueued }: { view: VoiceView; projectId: string; onQueued: (run: number) => void }) {
+function GenerateTab({ view: v, projectId, onQueued, scope: linked }: { view: VoiceView; projectId: string; onQueued: (run: number) => void; scope?: VoiceScope['kind'] }) {
   const production = v.production;
   // Another saved profile, heard as saved at its current version (an audition); '' is the production profile. Any version of
   // production's own family takes this project's overrides, so a newer one (production pinned) is not "another": it is chosen on the Production profile tab.
@@ -672,7 +790,8 @@ function GenerateTab({ view: v, projectId, onQueued }: { view: VoiceView; projec
   const config = chosen ? versionEffective(chosen.current) : (production.effective ?? houseDefault(v));
   const named = productionName(production) ?? 'the house profile, made at the first plan';
   const defaultWord = chosen ? `${chosen.name} v${chosen.current.version}` : 'Production profile';
-  const [kind, setKind] = useState<VoiceScope['kind']>('AUDITION');
+  // A next step to narrate the whole script opens with the whole script chosen.
+  const [kind, setKind] = useState<VoiceScope['kind']>(linked ?? 'AUDITION');
   const [secondsWanted, setSeconds] = useState(100);
   const [section, setSection] = useState(1);
   const [blocks, setBlocks] = useState('');

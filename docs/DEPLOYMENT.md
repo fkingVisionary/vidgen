@@ -342,26 +342,55 @@ and the regeneration test are the operator's (below).
 
 ### Operator runbook: the accepted configuration as Tulip's profile, then the regeneration test
 
-1. **Save run 3.** Voice → run 3 (*Acceptance experiment — C expressive*)
-   → *Save this run's configuration as a voice profile* → a name (say
-   "Tulip narrator") → *Save profile*. It is saved as v1 of a new profile
-   (origin: voice run 3 of tulip-mania, reconstructed), with EXPRESSIVE,
-   20–30 words, 200 / 120 characters of context, `eleven_v4` and the House
-   narrator v1 voice and settings. It does not become the library default:
-   other documentaries keep House narrator.
+In production steps 1 and 2 are done: run 3 was saved as "House
+Documentary — Expressive", made the library default and used for Tulip.
+Start at step 3 to check it.
+
+1. **Save run 3.** Voice → pick *Run 3 · C expressive* in the run list at
+   the top → *Save this run's configuration as a voice profile* → a name →
+   *Save profile*. It is saved as v1 of a new profile (origin: voice run 3
+   of tulip-mania, reconstructed), with EXPRESSIVE, 20–30 words, 200 / 120
+   characters of context, `eleven_v4` and the House narrator v1 voice and
+   settings. It becomes the library default only if you make it so.
 2. **Use it for this project.** *Use for this project*. The *Production
-   profile* tab shows it, following its current version, revision 1; the
-   project's events record the choice ("Voice profile for en: Tulip
-   narrator, follows the current version (v1)…"). There were no project
-   overrides to clear.
-3. **The regeneration test.** On a run of the opening, a chunk card →
-   *Regenerate with…* → *The production profile now* (or *A temporary
-   override*, e.g. stability 0.3) → regenerate. One new take of one chunk,
-   labelled "production profile · Tulip narrator v1" (or "temporary
-   override · stability 0.3"); the profile is unchanged. The job's `voice
-   regeneration summary` names the take's configuration (base, override,
-   profile, differs) and its cost ("sent … characters; provider reported …
-   (character-cost header)").
+   profile* tab shows it, following its current version; the project's
+   events record the choice ("Voice profile for en: …, follows the current
+   version (v1)…"). There were no project overrides to clear.
+3. **Run 3 is now "your chosen run".** It is the run the project's voice
+   profile was saved from, so every page treats it as the producer's
+   choice: the run list reads "Run 3 · C expressive · a/11 approved · ★
+   your chosen run" (every run shows how many of its takes are approved),
+   the Voice page opens on it when you come from the tabs, and the
+   Overview's *Next step* card, under the title, names it ("Approve the
+   takes of Voice run 3 (C expressive): a of 11 approved." with *Approve
+   run 3's takes →*, or, once they are, "Plan the storyboard for Voice run
+   3 (C expressive)."). If another run carries the ★, the project's
+   profile is no longer the version saved from run 3 (it was edited into a
+   new version, or another profile is in use): the ★ then goes to the
+   newest run with every take approved, else the newest run. Pick run 3 in
+   the list anyway; *★ Go to your chosen run* returns to the starred one.
+   Read-only check: `GET /api/projects/tulip-mania` has `narration.chosen`
+   with `number: 3`, `variant: "C expressive"`, `reason: PROFILE` and its
+   `takes`.
+4. **The regeneration test.** On another run of the opening (pick *Run 2
+   · B restrained* in the list), so that run 3 — the one to storyboard —
+   keeps its takes and its assembly (a regenerated chunk re-assembles its
+   run, and a storyboard planned on the earlier assembly no longer
+   matches): a chunk card → *Regenerate with…* → *The production profile
+   now* (or *A temporary override*, e.g. stability 0.3) → regenerate. One
+   new take of one chunk, labelled "production profile · House
+   Documentary — Expressive v1" (or "temporary override · stability 0.3"),
+   *To review* (approve it on its card if you keep it); the profile is
+   unchanged. The job's `voice regeneration summary` names the take's
+   configuration (base, override, profile, differs) and its cost ("sent …
+   characters; provider reported … (character-cost header)").
+
+Lower on an audition's page, *Before this can be the final narration*
+lists what only the film's final narration needs (*Narrate the whole
+script*: "An audition run narrates 10 of 80 blocks…"; *Decide how names
+are said*: "Pronunciations to decide: …"), each with a link to the tab
+that does it. None of it stops approving takes or storyboarding this
+audition.
 
 ## Deploying Storyboard Engine V1
 
@@ -464,19 +493,47 @@ EVIDENCE_MISSING findings). Check the Anthropic credit balance.
 Nothing below generates a picture, a video or audio. The only paid step is
 planning (step 3), a few model calls under the ceiling.
 
+Follow the *Next step* card under the project's title (on the Overview,
+Voice and Storyboard pages, visible on a phone without scrolling): one
+sentence and one button, worked out from where the project stands, with
+run 3 — "your chosen run", the run the project's voice profile was saved
+from (★ in the Voice page's run list) — already picked. "→" on the button
+opens another page; "↓" goes further down the page you are on, and the
+part it opens is outlined for a moment.
+
 1. **Visual profile.** *Visual profiles* (header): pick the library default
    if you want another, then on the Storyboard page's inputs strip *Change* →
    the profile for Tulip → save (or keep the library default, Cinematic
    History). The project's events record the choice.
-2. **Approve run 3's takes** (recommended before planning; no spend).
-   Voice → run 3 → *Approve all*. Note how many were approved and whether
-   any was skipped (a take with a blocking QA finding is skipped; handle it
-   on the Voice page). Approving takes does not rebuild the assembly, so a
-   storyboard planned before or after stays valid.
-3. **Plan.** Storyboard → voice run 3 and its newest assembly → tick the
-   confirmation (the planning ceiling is shown) → *Plan the storyboard
-   (preview)*. A STORYBOARD_PREVIEW job runs; the project stays in
-   VOICE_REVIEW.
+2. **Approve run 3's takes** (recommended before planning; no spend). The
+   card reads "Approve the takes of Voice run 3 (C expressive): a of 11
+   approved." → *Approve run 3's takes →* opens the Voice page on run 3 at
+   *Takes of run 3* → listen, then *Approve all takes without blocking
+   findings*. The line under it says what happened: "Approved 11 takes",
+   "All 11 takes were already approved", or "Approved 9; 2 need a look
+   first (blocking findings on #4, #7)" — those chunks are listed under
+   *What stops approving a take*: listen and approve each on its card, or
+   regenerate it. When all are approved the box reads "11/11 takes approved
+   — every take of this run is approved." and the approve button goes.
+   Approving takes does not rebuild the assembly, so a storyboard planned
+   before or after stays valid. Leave *Before this can be the final
+   narration* lower down (the audition narrates 10 of 80 blocks;
+   pronunciations to decide): it is for the film's final narration and
+   stops neither this step nor the next.
+3. **Plan.** *Storyboard this run →* in the same box (greyed, with "Approve
+   this run's takes first", until every take is approved), or the card's
+   *Plan the storyboard →* ("Plan the storyboard for Voice run 3 (C
+   expressive).") opens the Storyboard page at *Plan the storyboard*, run 3
+   chosen and named: "Voice run 3 · C expressive · 11/11 takes approved ·
+   1:50 · ★ your chosen run" (its newest assembly; another run or
+   approach under *Change the narration or the approach*, not needed here).
+   Tick the confirmation (a paid planning job, at most the planning
+   ceiling, $5.00 by default; nothing generated) → *Plan the storyboard
+   (preview)*. A STORYBOARD_PREVIEW job runs and the card reads "In
+   progress — The storyboard is being planned…"; the project stays in
+   VOICE_REVIEW. (Planned while takes are still to review, the version is
+   timed on real audio but provisional, and cannot be approved until they
+   are.)
 4. **The summary line.** In Railway's logs, filter by the job id: one line
    `storyboard summary: v1 PARTIAL run 3 assembly v1 fp=… 0–109.8 s · beats …
    · shots … · avg … · treatments {…} · relations {…} · cost $… (MIXED,
@@ -497,11 +554,17 @@ planning (step 3), a few model calls under the ceiling.
    - continuity: "Requires … continuity asset" on fictional and recurring
      subjects;
    - the model's output: the QA tab's normalization list, empty or explained.
-6. **Approve v1** (if the takes are approved and nothing blocks): the
-   decision panel → *Approve*. Refused otherwise, with the reason ("the
-   narration it is timed against is not approved (takes a/11 approved)", a
-   blocking finding, a rejected shot). The project's status does not change;
-   this is not the STORYBOARD gate.
+6. **Approve v1** (if the takes are approved and nothing blocks): the card
+   reads "Review storyboard v1 and approve it." → *Review storyboard v1*
+   → *Your decision on v1 (a preview)* → *Approve v1*. Anything that still
+   stops it is listed above the button under *Approval needs* (takes to
+   approve, a blocking finding, a rejected shot), and the button stays
+   greyed until it is dealt with (the server refuses it too: "the
+   narration it is timed against is not approved (takes a/11 approved)").
+   Approved, the card moves on to "Storyboard v1 is approved.
+   Narrate the whole script…": that is the next milestone, not this
+   runbook. The project's status does not change; this is not the film's
+   storyboard approval (the STORYBOARD gate).
 7. **v1's digest, before the edit** (read-only; repeat after step 8, the two
    must be equal — only v1's status columns may change):
 
@@ -692,7 +755,8 @@ approved script version and is in *Script approved* or a *Voice* status. No
 other voice job is queued or running.
 
 **1. Plan the acceptance experiment** (nothing is generated, nothing is
-paid). Project page → **Voice** → *Audition & generate* → the panel
+paid). Project page → the *Next step* card's *Audition voices →* (or the
+**Voice** tab → *Audition & generate*) → the panel
 *Acceptance experiment — eleven_v4* → **Plan the acceptance experiment
 (nothing is generated)**. The first plan creates the ElevenLabs voice
 profile ("House narrator", the library default) from the configured voice,
@@ -729,7 +793,9 @@ assembly reads *To review*. In the logs, the job has a `voice chunk` line
 per chunk, a `voice run summary` per variant and one `voice experiment
 comparison` (ARCHITECTURE.md §16, *Acceptance logging*).
 
-**4. Regenerate one chunk.** Open run **B restrained** (the house default).
+**4. Regenerate one chunk.** Pick *Run 2 · B restrained* (the house
+default) in the run list at the top (the page opens on the run marked ★
+your chosen run).
 Note its assembly (*Assembled narration v1 — m:ss*) and pick one chunk.
 Press **Regenerate** on that chunk's card: one new take of one chunk (a few
 hundred characters, below the confirmation threshold, so no confirmation
@@ -792,7 +858,9 @@ database (`scripts/ui/storyboard-fixture.ts`: every provider MOCK and a
 scripted model; two projects with an approved script and a narrated
 audition, one with its takes approved and a preview storyboard v1 with no
 blocking finding, one still to plan with an old failed placeholder
-generation job), serves it with the job worker and clicks through
+generation job; and two left as Tulip Mania was — seven auditions, run 3
+saved as the production profile, its takes to review, a name to decide),
+serves it with the job worker and clicks through
 (`scripts/ui/storyboard-ui.mjs`): every tab at 1280, 412 and 360 px (no page
 overflow — the timeline scrolls inside its own box, or is a list on
 phones — 24 px targets, no console errors); at 1280 shot decisions, v1
@@ -802,7 +870,12 @@ split, merge, move cut and reorder, request changes, restore, a cheaper
 alternative applied, the profile changed and the version re-costed, a
 switch of approach and a preview planned with its confirmation (which never
 carries to another version), the held generation job (no Retry; the server
-answers 409); edits on phones; the visual profile library at every width.
+answers 409); edits on phones; the visual profile library at every width;
+and, at 412 and 1280 px, the guided route a producer takes: the Overview's
+*Next step* → the Voice page on the chosen run (★) at its takes → *Approve
+all takes…* and what it says → *Storyboard this run →* → the Storyboard
+page with that run named → planned → the next step to review and approve
+v1 (screenshots of each step in `$STORYBOARD_UI_OUT/guided`).
 It prints `ok` / `FAIL` per check, ends with "every check passed" and exits
 non-zero on any failure. Nothing is paid, no key is read, no picture is
 generated.
@@ -813,6 +886,8 @@ generated.
 | `STORYBOARD_UI_PORT` | `3103` | Port the fixture serves on |
 | `STORYBOARD_UI_OUT` | `$TMPDIR/storyboard-ui` (else `/tmp/storyboard-ui`) | Screenshots and the build, migration and server logs |
 | `STORYBOARD_UI_SKIP_BUILD` | — | `1` reuses `apps/web/dist` instead of building |
+| `STORYBOARD_UI_ONLY` | — | `guided` runs only the guided route |
+| `GUIDED_OUT` | `$STORYBOARD_UI_OUT/guided` | Where the guided route's screenshots go |
 | `PLAYWRIGHT_MODULE` | — | As for the Voice page |
 
 ## Scaling the worker (later)

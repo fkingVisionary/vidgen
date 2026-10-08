@@ -1623,6 +1623,28 @@ approved script with every current take approved and nothing blocking;
 earlier approved narrations are kept, superseded. An audition is never the
 narration.
 
+The Voice page shows a run's QA in two kinds: what stops approving a take
+(its blocking findings; takes still to review are a count) beside "Approve
+all takes" — whose answer says what it did: approved, already approved,
+left for a closer listen (with the chunks), and chunks with no take to
+approve — and, apart under "Before this can be the final narration", the
+blocking findings about the narration as a whole (blocks without
+narration, an older script, pronunciations to decide, the assembly out of
+date): they stop the VOICE gate, never approving a take or storyboarding an
+audition; a take made with another voice is a warning, worth a listen. "Storyboard this run →" opens the Storyboard
+page on the run once every current take is approved.
+
+**The chosen run.** A project's next steps refer to one run unless another
+is named (core `chosenRun`): the run its production profile was saved from
+(the version's `origin`), when that run is the project's and narrates the
+approved script; otherwise the newest run whose current takes are all
+approved; otherwise the newest run (runs of an older script only when there
+is no other). The project view carries it (`narration`: runs, the chosen
+run with its takes approved and length, the newest full run); the Voice page
+opens on it without `?run=N` and stars it in the run picker, which lists
+every run's approved takes; the Storyboard page plans on it by default
+(`?run=N` names another).
+
 ### Regeneration, A/B, experiments
 
 Every cost-bearing request is one VOICE job (one per project at a time);
@@ -2595,8 +2617,25 @@ beat → narration → blocks → architecture → claims → sources — decisi
 every edit), Costs (rollups, alternatives, the frozen prices), Evidence,
 Continuity and QA (live and saved findings, rhythm, normalization). The
 Visual profiles library mirrors the voice library. The project page shows a
-storyboard card and next step, links the stage, and hides the generation
-buttons.
+storyboard card, links the stage, and hides the generation buttons. With
+nothing planned, the plan comes first: the voice run named in words
+("Voice run 3 · C expressive · 11/11 takes approved · 1:50") — `?run=N`, the
+gate's narration while the phase is open, else the project's chosen run —
+the planning ceiling and the confirmation, the other choices folded.
+
+**Next step.** The Overview, Voice and Storyboard pages carry a card under
+their title: one sentence and one button that goes there, the run chosen
+and the part of the page opened (`apps/web/src/next-step.ts`). From an
+approved script to an approved storyboard: audition voices; approve the
+chosen run's takes; plan the storyboard for it; review and approve the
+version (or approve the takes it is timed on first); then the whole
+narration, its takes and the VOICE gate; the whole storyboard; done; a
+failed narration or planning job is started again from its page. A job
+running says so; other stages, and a stage whose engine is a MOCK
+placeholder, keep their own next actions. The project's tabs mark the page
+the next step goes to; its button reads "↓" when that is further down the
+same page, and the part it opens is ringed for a moment. The Voice page
+stays on the run it opened on while the chosen run changes (the ★ moves).
 
 ### Acceptance logging
 

@@ -292,6 +292,8 @@ export interface StoryboardInputsView {
     number: number;
     kind: VoiceRunKind;
     label: string;
+    /** The comparison variant it was made as ("C expressive"), or null. */
+    variant: string | null;
     scopeBlockKeys: string[];
     /** The run narrates the approved script. */
     current: boolean;

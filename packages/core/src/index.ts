@@ -17,6 +17,7 @@ export * from './contracts/voice.ts';
 export * from './contracts/writing.ts';
 export * from './story.ts';
 export * from './script.ts';
+export * from './narration.ts';
 export * from './views.ts';
 export * from './voice-views.ts';
 export * from './storyboard-views.ts';

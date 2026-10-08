@@ -13,7 +13,9 @@ import {
 } from '@docengine/core';
 import type { Approval, Database, Job, Project, ProjectEvent } from '@docengine/database';
 import type { ProjectService } from '@docengine/pipeline';
+import type { ProviderSet } from '@docengine/providers';
 import type { StoryboardService } from '@docengine/storyboard';
+import { loadNarrationSummary } from '@docengine/voice';
 import { loadScriptSummary } from './script-views.ts';
 import { loadStorySummary } from './story-views.ts';
 
@@ -142,12 +144,13 @@ export async function loadProjectDetail(
   db: Database,
   projects: ProjectService,
   storyboards: Pick<StoryboardService, 'summary'>,
+  providers: Pick<ProviderSet, 'voice'>,
   idOrSlug: string,
 ): Promise<ProjectDetailView | null> {
   const project = await findProject(db, idOrSlug);
   if (!project) return null;
 
-  const [languageVersions, jobs, approvals, events, costs, phaseJobsComplete, rt, latestDossier, story, script, storyboard] = await Promise.all([
+  const [languageVersions, jobs, approvals, events, costs, phaseJobsComplete, rt, latestDossier, story, script, storyboard, narration] = await Promise.all([
     db.languageVersion.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'asc' } }),
     db.job.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50, omit: JOB_VIEW_OMIT }),
     db.approval.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
@@ -159,6 +162,7 @@ export async function loadProjectDetail(
     loadStorySummary(db, project.id),
     loadScriptSummary(db, project.id),
     storyboards.summary(project.id),
+    loadNarrationSummary({ db, providers }, project),
   ]);
 
   const actions = getAvailableActions(project.status, { failedFrom: project.failedFromStatus });
@@ -193,5 +197,6 @@ export async function loadProjectDetail(
     story,
     script,
     storyboard,
+    narration,
   };
 }

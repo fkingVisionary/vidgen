@@ -12,7 +12,8 @@ import {
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { api } from '../api.ts';
-import { approvalNeeds, assemblyText, blockRange, inputsStrip, planDefaults, planKind, productionText, sameSettings, statusWords } from '../storyboard-plan.ts';
+import { ANCHORS } from '../next-step.ts';
+import { approvalNeeds, assemblyText, blockRange, inputsStrip, planDefaults, planKind, planRunText, productionText, sameSettings, statusWords } from '../storyboard-plan.ts';
 import { ReplanBeats } from './storyboard-shots.tsx';
 import { RaceNotice, Why, useEdits, useStoryboardRequest, versionRace, type EditContext } from './storyboard.tsx';
 import { ProductionLine, VisualSelectionForm } from './visual-profiles.tsx';
@@ -104,7 +105,7 @@ function Recost({ version: v, production, ctx }: { version: StoryboardVersionVie
 
 // ── Actions ──────────────────────────────────────────────────────────────────
 
-export function StoryboardActions({ project: p, view, inputs, onQueued, onSaved, onReload }: { project: ProjectDetailView; view: StoryboardView; inputs: StoryboardInputsView; onQueued: () => void; onSaved: (view: StoryboardView) => void; onReload: () => void }) {
+export function StoryboardActions({ project: p, view, inputs, named = null, onQueued, onSaved, onReload }: { project: ProjectDetailView; view: StoryboardView; inputs: StoryboardInputsView; named?: number | null; onQueued: () => void; onSaved: (view: StoryboardView) => void; onReload: () => void }) {
   const v = view.storyboard;
   const jobs = storyboardJobs(p);
   const active = view.activeJob;
@@ -112,7 +113,7 @@ export function StoryboardActions({ project: p, view, inputs, onQueued, onSaved,
   const progress = active ? p.events.find((e) => e.type === 'JOB_PROGRESS') : null;
   const sentBack = !active && p.status === 'VISUAL_PLANNING' && v?.scope === 'FULL';
   return (
-    <section className="space-y-3 rounded-lg border border-stone-200 bg-white p-4" data-storyboard-actions>
+    <section id={ANCHORS.plan} className={`scroll-mt-4 space-y-3 rounded-lg bg-white p-4 ${v ? 'border border-stone-200' : 'border-2 border-sky-300'}`} data-storyboard-actions>
       {!view.realStage && <p className="text-sm text-amber-800">The storyboard is planned by the model, which is not configured here (MOCK): nothing would be planned.</p>}
       {active && (
         <div className="rounded-md bg-sky-50 p-3 text-sm text-sky-900" role="status" data-running>
@@ -125,15 +126,16 @@ export function StoryboardActions({ project: p, view, inputs, onQueued, onSaved,
       {!active && latest && (latest.status === 'FAILED' || latest.status === 'CANCELLED') && <FailedJob job={latest} />}
       {sentBack && (
         <p className="rounded-md bg-amber-50 p-3 text-sm text-amber-900" data-sent-back>
-          The STORYBOARD gate sent the storyboard back for re-planning (the project is “{statusWords(p.status)}”). Plan it again — a paid job, below — to bring it back to review: an edit saved meanwhile is decided only after that re-plan.
+          The film’s storyboard was rejected and sent back for re-planning (the project is “{statusWords(p.status)}”). Plan it again — a paid job, below — to bring it back to review: an edit saved meanwhile is decided only after that re-plan.
         </p>
       )}
       {!v ? (
-        <PlanForm project={p} inputs={inputs} allowed={view.editorial.generate} onQueued={onQueued} />
+        <PlanForm project={p} inputs={inputs} allowed={view.editorial.generate} named={named} onQueued={onQueued} />
       ) : (
         <>
           <DecisionPanel project={p} view={view} version={v} onReload={onReload} />
-          <details className="text-sm" data-more>
+          {/* Opened by a link naming another run than this version's ("Storyboard this run →"): its plan is in here. */}
+          <details className="text-sm" data-more open={named !== null && named !== v.narration.runNumber}>
             <summary className={summary}>Plan again, re-plan beats, switch approach, re-time or restore…</summary>
             <div className="mt-2 space-y-4">
               <MoreAction title={`Re-plan beats of v${v.version}`} allowed={view.editorial.regenerateBeats}>
@@ -149,7 +151,7 @@ export function StoryboardActions({ project: p, view, inputs, onQueued, onSaved,
                 <Restore version={v} newest={view.versions[0]!.version} onSaved={onSaved} onReload={onReload} />
               </MoreAction>
               <MoreAction title="Plan a new storyboard" allowed={view.editorial.generate}>
-                <PlanForm project={p} inputs={inputs} allowed={view.editorial.generate} onQueued={onQueued} again />
+                <PlanForm key={named ?? 'chosen'} project={p} inputs={inputs} allowed={view.editorial.generate} named={named} onQueued={onQueued} again />
               </MoreAction>
             </div>
           </details>
@@ -189,11 +191,14 @@ function FailedJob({ job }: { job: JobView }) {
 /**
  * Plan a storyboard of a voice run's narration: a preview while the
  * narration is reviewed, the phase job on the narration the VOICE gate
- * approved. A paid planning job, so the confirmation belongs to exactly
- * this request: any change of narration, approach or profile asks again.
+ * approved. The run is named in words — the one the page was opened with,
+ * the gate's, or the project's chosen run — and can be changed. A paid
+ * planning job, so the confirmation belongs to exactly this request: any
+ * change of narration, approach or profile asks again.
  */
-function PlanForm({ project: p, inputs, allowed, onQueued, again = false }: { project: ProjectDetailView; inputs: StoryboardInputsView; allowed: { allowed: boolean; reason: string | null }; onQueued: () => void; again?: boolean }) {
-  const defaults = planDefaults(p, inputs);
+function PlanForm({ project: p, inputs, allowed, named, onQueued, again = false }: { project: ProjectDetailView; inputs: StoryboardInputsView; allowed: { allowed: boolean; reason: string | null }; named: number | null; onQueued: () => void; again?: boolean }) {
+  const chosen = p.narration.chosen?.number ?? null;
+  const defaults = planDefaults(p, inputs, named, chosen);
   const [runId, setRunId] = useState(defaults?.runId ?? '');
   const run = inputs.runs.find((r) => r.id === runId) ?? null;
   const [assemblyId, setAssemblyId] = useState(defaults?.assemblyId ?? '');
@@ -211,60 +216,72 @@ function PlanForm({ project: p, inputs, allowed, onQueued, again = false }: { pr
   const blocked = inputs.blocked ?? (allowed.allowed ? null : allowed.reason);
   const profileApproach = inputs.profile.effective?.approach ?? null;
   if (blocked) return <p className="text-sm text-stone-600" data-plan-blocked>{blocked}</p>;
+  const choices = (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <label className="block min-w-0">
+        <span className="block text-xs text-stone-500">Narration (voice run)</span>
+        <select
+          value={runId}
+          onChange={(e) => {
+            const r = inputs.runs.find((x) => x.id === e.target.value);
+            setRunId(e.target.value);
+            setAssemblyId(r?.assemblies.find((a) => a.gateApproved)?.id ?? r?.assemblies[0]?.id ?? '');
+          }}
+          aria-label="Voice run"
+          className={input}
+        >
+          {!runId && <option value="">Choose a voice run</option>}
+          {inputs.runs.map((r) => (
+            <option key={r.id} value={r.id} disabled={!r.current || !r.assemblies.length}>
+              {planRunText(r, r.assemblies[0] ?? null, r.number === chosen)} · blocks {blockRange(r.scopeBlockKeys)}
+              {!r.current ? ' (another script)' : !r.assemblies.length ? ' (not assembled)' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block min-w-0">
+        <span className="block text-xs text-stone-500">Assembled narration</span>
+        <select value={assemblyId} onChange={(e) => setAssemblyId(e.target.value)} aria-label="Assembly" className={input}>
+          {(run?.assemblies ?? []).map((a) => (
+            <option key={a.id} value={a.id}>
+              {assemblyText(a)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block min-w-0">
+        <span className="block text-xs text-stone-500">Approach planned in full (the others are costed beside it)</span>
+        <select value={approach} onChange={(e) => setApproach(e.target.value as VisualApproach | '')} aria-label="Approach" className={input}>
+          <option value="">{profileApproach ? `The visual profile's (${profileApproach} — ${VISUAL_APPROACH_LABELS[profileApproach]})` : "The visual profile's"}</option>
+          {VISUAL_APPROACHES.map((a) => (
+            <option key={a} value={a}>
+              {a} — {VISUAL_APPROACH_LABELS[a]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="min-w-0 self-end text-xs break-words text-stone-500">
+        Visual profile: {productionText(inputs.profile)} (revision {inputs.profile.revision})
+      </p>
+    </div>
+  );
   return (
     <div className="space-y-3 text-sm" data-plan-form>
-      {!again && (
-        <p className="text-stone-700">
-          The Storyboard Engine turns the narration's real audio into visual beats and shots: what is on screen, when, why, and how it would be produced, with a forecast of its cost. It is planned by the model (a paid job, within the ceiling below) and stops for your review. Nothing is generated: no picture, video, voice or render.
-        </p>
-      )}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block min-w-0">
-          <span className="block text-xs text-stone-500">Narration (voice run)</span>
-          <select
-            value={runId}
-            onChange={(e) => {
-              const r = inputs.runs.find((x) => x.id === e.target.value);
-              setRunId(e.target.value);
-              setAssemblyId(r?.assemblies.find((a) => a.gateApproved)?.id ?? r?.assemblies[0]?.id ?? '');
-            }}
-            aria-label="Voice run"
-            className={input}
-          >
-            {!runId && <option value="">Choose a voice run</option>}
-            {inputs.runs.map((r) => (
-              <option key={r.id} value={r.id} disabled={!r.current || !r.assemblies.length}>
-                {r.label} · blocks {blockRange(r.scopeBlockKeys)}
-                {!r.current ? ' (another script)' : !r.assemblies.length ? ' (not assembled)' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block min-w-0">
-          <span className="block text-xs text-stone-500">Assembled narration</span>
-          <select value={assemblyId} onChange={(e) => setAssemblyId(e.target.value)} aria-label="Assembly" className={input}>
-            {(run?.assemblies ?? []).map((a) => (
-              <option key={a.id} value={a.id}>
-                {assemblyText(a)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block min-w-0">
-          <span className="block text-xs text-stone-500">Approach planned in full (the others are costed beside it)</span>
-          <select value={approach} onChange={(e) => setApproach(e.target.value as VisualApproach | '')} aria-label="Approach" className={input}>
-            <option value="">{profileApproach ? `The visual profile's (${profileApproach} — ${VISUAL_APPROACH_LABELS[profileApproach]})` : "The visual profile's"}</option>
-            {VISUAL_APPROACHES.map((a) => (
-              <option key={a} value={a}>
-                {a} — {VISUAL_APPROACH_LABELS[a]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className="min-w-0 self-end text-xs break-words text-stone-500">
-          Visual profile: {productionText(inputs.profile)} (revision {inputs.profile.revision})
+      {!again && <h2 className="text-base font-semibold text-stone-900">Plan the storyboard</h2>}
+      <div className="min-w-0">
+        <p className="text-xs text-stone-500">{kind.kind === 'PHASE' ? "On the film's approved narration" : 'On the narration of'}</p>
+        <p className="font-medium break-words text-stone-900" data-plan-run>
+          {run ? planRunText(run, assembly, run.number === chosen) : 'No voice run chosen'}
         </p>
       </div>
+      {again ? (
+        choices
+      ) : (
+        <details className="text-sm" data-plan-choices>
+          <summary className={summary}>Change the narration or the approach</summary>
+          <div className="mt-2">{choices}</div>
+        </details>
+      )}
       {assembly && assembly.takes.approved < assembly.takes.total && (
         <p className="text-xs text-amber-900">
           Takes {assembly.takes.approved}/{assembly.takes.total} approved: the timing is real audio but provisional, and approving the storyboard needs every take approved (on the Voice page; approving a take changes no timing, so nothing is planned again).
@@ -280,12 +297,17 @@ function PlanForm({ project: p, inputs, allowed, onQueued, again = false }: { pr
               I confirm a paid planning job{kind.kind === 'PREVIEW' ? ' (a preview: the project status does not change)' : ''}: model calls only, at most {usd(inputs.planningCeilingUsd)} (the planning ceiling). Nothing is generated: no picture, video, voice or render.
             </span>
           </label>
-          <button type="button" disabled={send.isPending || confirmed !== key} onClick={() => send.mutate(undefined)} className={primary}>
+          <button type="button" disabled={send.isPending || confirmed !== key} onClick={() => send.mutate(undefined)} className={`${primary} min-h-10 px-4`}>
             {kind.kind === 'PREVIEW' ? 'Plan the storyboard (preview)' : 'Plan the storyboard'}
           </button>
         </>
       )}
       {send.error && <p className="text-sm break-words text-red-700">{send.error.message}</p>}
+      {!again && (
+        <p className="text-xs text-stone-500">
+          The Storyboard Engine turns the narration's real audio into visual beats and shots: what is on screen, when, why, and how it would be produced, with a forecast of its cost. It is planned by the model and stops for your review. Nothing is generated: no picture, video, voice or render.
+        </p>
+      )}
     </div>
   );
 }
@@ -397,8 +419,8 @@ function DecisionPanel({ project: p, view, version: v, onReload }: { project: Pr
   const needs = approvalNeeds(v);
   const race = versionRace(decide.error);
   return (
-    <div className={`rounded-md border-2 p-3 ${allowed.allowed ? 'border-violet-300 bg-violet-50' : 'border-stone-200 bg-stone-50'}`} data-decision>
-      <p className="font-semibold text-violet-900">{gate ? `STORYBOARD gate — v${v.version} (the whole script)` : `Your decision on v${v.version} (a preview)`}</p>
+    <div id={ANCHORS.decision} className={`scroll-mt-4 rounded-md border-2 p-3 ${allowed.allowed ? 'border-violet-300 bg-violet-50' : 'border-stone-200 bg-stone-50'}`} data-decision>
+      <p className="font-semibold text-violet-900">{gate ? `Storyboard approval — v${v.version} (the whole script)` : `Your decision on v${v.version} (a preview)`}</p>
       {!allowed.allowed ? (
         <p className="mt-1 text-sm text-stone-600">{allowed.reason}</p>
       ) : (
@@ -406,7 +428,7 @@ function DecisionPanel({ project: p, view, version: v, onReload }: { project: Pr
           <p className="text-sm text-violet-900">
             {gate
               ? `Approve → ${statusWords('STORYBOARD_APPROVED')}: nothing is generated or queued (visual generation is the next milestone). Request changes keeps it in review for edits; Reject sends the project back to planning — a paid re-plan.`
-              : 'A preview is approved at version level: it never passes the project’s STORYBOARD gate, and approving it starts nothing. Request changes keeps it open for edits; Reject is final for this version.'}
+              : `Approving this preview records your decision on v${v.version} and starts nothing: the film’s storyboard is approved later, on the whole script. Request changes keeps it open for edits; Reject is final for this version.`}
           </p>
           {needs.length > 0 && (
             <div className="text-sm text-red-800" data-approval-needs>
@@ -444,7 +466,7 @@ function DecisionPanel({ project: p, view, version: v, onReload }: { project: Pr
           )}
         </div>
       )}
-      {p.status === 'STORYBOARD_APPROVED' && gate && <p className="mt-2 text-sm text-emerald-800">The storyboard is approved at the STORYBOARD gate. Visual generation is the next milestone: it starts only after the storyboard is reviewed and accepted.</p>}
+      {p.status === 'STORYBOARD_APPROVED' && gate && <p className="mt-2 text-sm text-emerald-800">The film’s storyboard is approved. Visual generation is the next milestone: it starts only after the storyboard is reviewed and accepted.</p>}
     </div>
   );
 }

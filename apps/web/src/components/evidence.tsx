@@ -12,9 +12,9 @@ export interface SourceLike {
   sourceType: SourceType;
 }
 
-export function Section({ title, children, className = '' }: { title: ReactNode; children: ReactNode; className?: string }) {
+export function Section({ title, children, className = '', id }: { title: ReactNode; children: ReactNode; className?: string; id?: string }) {
   return (
-    <section className={`rounded-lg border border-stone-200 bg-white p-4 ${className}`}>
+    <section id={id} className={`scroll-mt-4 rounded-lg border border-stone-200 bg-white p-4 ${className}`}>
       <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">{title}</h2>
       {children}
     </section>

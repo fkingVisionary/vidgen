@@ -1,5 +1,8 @@
 import { PROJECT_STATUSES, type ProjectDetailView, type ProjectStatus } from '@docengine/core';
+import { useQuery } from '@tanstack/react-query';
 import { NavLink } from 'react-router';
+import { api } from '../api.ts';
+import { nextStep, stepPage } from '../next-step.ts';
 import { hasStoryboardPage, storyboardNote } from '../storyboard-plan.ts';
 
 const PROJECT_ORDER: readonly ProjectStatus[] = PROJECT_STATUSES;
@@ -66,8 +69,11 @@ function voiceNote(p: ProjectDetailView): string | null {
       return 'ready to audition';
     case 'VOICE_GENERATING':
       return 'generating…';
-    case 'VOICE_REVIEW':
-      return 'review takes';
+    case 'VOICE_REVIEW': {
+      // The takes a next step names: the whole narration's once there is one, else the chosen run's.
+      const r = p.narration.full ?? p.narration.chosen;
+      return r && r.takes.total > 0 && r.takes.approved === r.takes.total ? 'takes approved' : 'review takes';
+    }
     case 'VOICE_COMPLETE':
       return 'approved';
     default:
@@ -84,9 +90,17 @@ interface NavItem {
   end?: boolean;
 }
 
-/** Links between a project's pages (overview, research dossier, story, script, voice, storyboard), shown under each page's title. */
+/**
+ * Links between a project's pages (overview, research dossier, story,
+ * script, voice, storyboard), shown under each page's title. Where the
+ * project has a next step (next-step.ts), the page it goes to is the one
+ * marked; elsewhere each stage's own rule.
+ */
 export function ProjectNav({ project: p }: { project: ProjectDetailView }) {
   const base = `/projects/${p.slug}`;
+  const health = useQuery({ queryKey: ['health'], queryFn: api.health });
+  const step = health.data ? nextStep(p, health.data.realStages) : null;
+  const marked = (to: string, own: boolean) => (step ? step.tone === 'TODO' && stepPage(step) === to : own);
   const items: NavItem[] = [{ to: base, label: 'Overview', note: null, attention: false, end: true }];
   if (p.research) {
     const review = p.status === 'RESEARCH_REVIEW';
@@ -99,10 +113,10 @@ export function ProjectNav({ project: p }: { project: ProjectDetailView }) {
     items.push({ to: `${base}/script`, label: 'Script', note: scriptNote(p), attention: p.status === 'SCRIPT_REVIEW' || (p.status === 'STORY_APPROVED' && !p.script) });
   }
   if (hasVoicePage(p)) {
-    items.push({ to: `${base}/voice`, label: 'Voice', note: voiceNote(p), attention: p.status === 'SCRIPT_APPROVED' || p.status === 'VOICE_REVIEW' });
+    items.push({ to: `${base}/voice`, label: 'Voice', note: voiceNote(p), attention: marked(`${base}/voice`, p.status === 'SCRIPT_APPROVED' || p.status === 'VOICE_REVIEW') });
   }
   if (hasStoryboardPage(p)) {
-    items.push({ to: `${base}/storyboard`, label: 'Storyboard', note: storyboardNote(p), attention: p.status === 'STORYBOARD_REVIEW' || (p.status === 'VOICE_COMPLETE' && !p.storyboard) });
+    items.push({ to: `${base}/storyboard`, label: 'Storyboard', note: storyboardNote(p), attention: marked(`${base}/storyboard`, p.status === 'STORYBOARD_REVIEW' || (p.status === 'VOICE_COMPLETE' && !p.storyboard)) });
   }
   return (
     <nav aria-label="Project pages" className="mt-3 flex flex-wrap gap-2">

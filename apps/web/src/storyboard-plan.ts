@@ -68,6 +68,7 @@ import {
   type VisualStyleProfileConfig,
   type VisualTreatment,
 } from '@docengine/core';
+import { formatLength } from './format.ts';
 
 /**
  * The Storyboard page's arithmetic, kept out of the components: the
@@ -308,7 +309,7 @@ export function summaryLine(s: StoryboardSummaryView): string {
 
 /** A person's decision as read: "Approved by Ana — carried from v1: “steady”". */
 export function decisionText(d: Pick<StoryboardDecisionView, 'decision' | 'decidedBy' | 'carriedFromVersion' | 'note' | 'approvalId'>): string {
-  return `${STORYBOARD_DECISION_LABELS[d.decision]}${d.decidedBy ? ` by ${d.decidedBy}` : ''}${d.approvalId ? ' at the STORYBOARD gate' : ''}${d.carriedFromVersion ? ` — carried from v${d.carriedFromVersion}` : ''}${d.note ? `: “${d.note}”` : ''}`;
+  return `${STORYBOARD_DECISION_LABELS[d.decision]}${d.decidedBy ? ` by ${d.decidedBy}` : ''}${d.approvalId ? ' (the film’s storyboard approval)' : ''}${d.carriedFromVersion ? ` — carried from v${d.carriedFromVersion}` : ''}${d.note ? `: “${d.note}”` : ''}`;
 }
 
 /**
@@ -641,29 +642,35 @@ export function planKind(p: Pick<ProjectDetailView, 'status' | 'failedFromStatus
   return {
     kind: null,
     reason: phaseOpen(p)
-      ? `In “${STATUS_LABELS[p.status]}” the storyboard is planned on the narration the VOICE gate approved`
+      ? `In “${STATUS_LABELS[p.status]}” the storyboard is planned on the film’s approved narration`
       : `A storyboard is planned while the narration is reviewed or after it is approved, and before visual generation (the project is “${STATUS_LABELS[p.status]}”)`,
   };
 }
 
 /**
- * The narration offered first: while the phase is open, the run and
- * assembly the VOICE gate approved; otherwise the newest run of the
- * approved script that has one, at its latest assembly. Null: none.
+ * The narration offered first: the run named (?run=N on the page), then
+ * while the phase is open the run and assembly the VOICE gate approved,
+ * then the project's chosen run, else the newest run of the approved script
+ * that has one — at the gate's assembly where it has it, else its latest.
+ * Runs of another script or not assembled are never offered. Null: none.
  */
-export function planDefaults(p: Pick<ProjectDetailView, 'status' | 'failedFromStatus'>, inputs: Pick<StoryboardInputsView, 'runs'>): { runId: string; assemblyId: string } | null {
-  if (phaseOpen(p))
-    for (const r of inputs.runs) {
-      const gate = r.assemblies.find((a) => a.gateApproved);
-      if (gate) return { runId: r.id, assemblyId: gate.id };
-    }
-  const run = inputs.runs.find((r) => r.current && r.assemblies.length);
-  return run ? { runId: run.id, assemblyId: run.assemblies[0]!.id } : null;
+export function planDefaults(p: Pick<ProjectDetailView, 'status' | 'failedFromStatus'>, inputs: Pick<StoryboardInputsView, 'runs'>, named?: number | null, chosen?: number | null): { runId: string; assemblyId: string } | null {
+  const usable = inputs.runs.filter((r) => r.current && r.assemblies.length);
+  const at = (r: (typeof usable)[number]) => ({ runId: r.id, assemblyId: (phaseOpen(p) ? r.assemblies.find((a) => a.gateApproved) : undefined)?.id ?? r.assemblies[0]!.id });
+  const byNumber = (n: number | null | undefined) => (n ? usable.find((r) => r.number === n) : undefined);
+  const gate = phaseOpen(p) ? usable.find((r) => r.assemblies.some((a) => a.gateApproved)) : undefined;
+  const run = byNumber(named) ?? gate ?? byNumber(chosen) ?? usable[0];
+  return run ? at(run) : null;
+}
+
+/** "Voice run 3 · C expressive · 11/11 takes approved · 1:50 · ★ your chosen run": a run and its assembly in words, as the plan form names them. */
+export function planRunText(r: Pick<StoryboardInputsView['runs'][number], 'number' | 'variant' | 'label'>, a: Pick<StoryboardAssemblyOptionView, 'takes' | 'totalDurationMs'> | null, chosen = false): string {
+  return [`Voice run ${r.number}`, r.variant ?? r.label, a ? `${a.takes.approved}/${a.takes.total} takes approved` : 'not assembled', a ? formatLength(a.totalDurationMs) : null, chosen ? '★ your chosen run' : null].filter(Boolean).join(' · ');
 }
 
 /** "Assembly v2 · 1:49.8 · takes 11/11 approved · mock audio" as the plan form lists it. */
 export function assemblyText(a: Pick<StoryboardAssemblyOptionView, 'version' | 'totalDurationMs' | 'takes' | 'mock' | 'gateApproved' | 'complete'>): string {
-  return [`Assembly v${a.version}`, clock(a.totalDurationMs), `takes ${a.takes.approved}/${a.takes.total} approved`, a.gateApproved ? 'approved at the VOICE gate' : null, a.complete ? 'the whole script' : null, a.mock ? 'mock audio' : null].filter(Boolean).join(' · ');
+  return [`Assembly v${a.version}`, clock(a.totalDurationMs), `takes ${a.takes.approved}/${a.takes.total} approved`, a.gateApproved ? 'the film’s approved narration' : null, a.complete ? 'the whole script' : null, a.mock ? 'mock audio' : null].filter(Boolean).join(' · ');
 }
 
 // ── Decisions ────────────────────────────────────────────────────────────────
@@ -682,7 +689,7 @@ export function approvalNeeds(v: Pick<StoryboardVersionView, 'qa' | 'shots' | 'n
   if (blocking) out.push(`${blocking} blocking finding${blocking === 1 ? '' : 's'} to resolve (see QA)`);
   const rejected = v.shots.filter((s) => s.review === 'REJECTED').map((s) => s.key);
   if (rejected.length) out.push(`${rejected.join(', ')} ${rejected.length === 1 ? 'is' : 'are'} rejected: edit ${rejected.length === 1 ? 'it' : 'them'}, or clear the decision`);
-  if (v.scope === 'FULL' && v.narration.approval !== 'GATE_APPROVED') out.push('plan it on the narration the VOICE gate approved: the STORYBOARD gate passes only that narration');
+  if (v.scope === 'FULL' && v.narration.approval !== 'GATE_APPROVED') out.push('plan it on the film’s approved narration: the film’s storyboard is approved only on that narration');
   else if (v.narration.approval === 'UNREVIEWED') {
     const t = takesApproved(v.narrationLane);
     out.push(`approve the takes it is timed on first (${t.approved}/${t.total} approved, on the Voice page)`);
