@@ -773,13 +773,13 @@ export const ApproachSummary = z
     /** Runtime per treatment, in ms. */
     treatmentMix: z.partialRecord(z.enum(VISUAL_TREATMENTS), Ms),
     generatedVideoShare: Share,
-    /** Beat durations over the profile density's target shot length. */
+    /** The planned shots of the beats this approach keeps, plus the durations of those it changes over the profile density's target shot length. */
     estimatedShots: z.number().int().min(0),
     /** The priced part (null: nothing priced). */
     estimatedCostUsd: z.number().min(0).nullable(),
     costBasis: RollupBasis,
     unpricedShots: z.number().int().min(0),
-    /** Share of beats with a SHOWS_SOURCE or DATA claim. */
+    /** Share of the timed beats whose treatment under this approach shows a record or data (DEPICTION_FOR is RECORD or DATA) and that rest on at least one claim (any role). */
     evidenceShare: Share,
     /** Options replaced by the beat's seed treatment (outside the class matrix). */
     replacedOptions: z.number().int().min(0),
@@ -865,7 +865,12 @@ export const StoryboardContent = z.object({
   inputs: StoryboardInputs,
   provenance: StoryboardProvenance,
   scope: StoryboardScopeInfo,
-  approaches: z.object({ chosen: z.enum(VISUAL_APPROACHES), options: z.array(ApproachSummary) }),
+  approaches: z.object({
+    chosen: z.enum(VISUAL_APPROACHES),
+    options: z.array(ApproachSummary),
+    /** The other approaches count the beats they keep from the planned shots (absent: saved before, every beat estimated at the profile's density). */
+    keptAsPlanned: z.literal(true).optional(),
+  }),
   alternatives: z.array(CostAlternative),
   rhythm: RhythmStats,
   costs: CostRollup,

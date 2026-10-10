@@ -5,7 +5,7 @@ import { markUnplanned } from './normalize.ts';
 import { planStoryboard } from './plan.ts';
 import { checkStoryboard } from './rules.ts';
 import { DOMAIN_FILMS, domainFilm, profileSnapshot, sketchDraft, subject, syntheticFacts, withRowIds, type BeatSketch, type ShotSketch } from './testing.ts';
-import { syntheticDraft, syntheticScope } from '@docengine/script/testing';
+import { syntheticDraft, syntheticScope, type SyntheticSpec } from '@docengine/script/testing';
 
 /**
  * The QA rules on five synthetic films: one failing fixture for each
@@ -469,12 +469,16 @@ describe('warnings for a person to weigh', () => {
   });
 
   it('MUST_SHOW_DROPPED: the script\'s must-show over a block, unless a shot over it carries it', () => {
-    expect(warned(historyPlan(), 'MUST_SHOW_DROPPED').map((f) => f.detail)).toEqual(['The script asks to show "the burning warehouses" over 1.2; no shot does']);
+    expect(warned(historyPlan(), 'MUST_SHOW_DROPPED').map((f) => f.detail)).toEqual(['The script asks to show "the burning warehouses" over 1.2; no shot over those words names it']);
     const kept = historyPlan({}, { first: { claims: [{ claimKey: 'H1', role: 'DEPICTS' }], spec: { mustShow: [{ detail: 'The burning warehouses', claimKeys: ['H1'], origin: 'SCRIPT' }] } } });
     expect(warned(kept, 'MUST_SHOW_DROPPED')).toEqual([]);
     // An empty or bare must-show carries nothing; part of the wanted one, or more than it, still does.
     const dropped = (detail: string) => warned(historyPlan({}, { first: { claims: [{ claimKey: 'H1', role: 'DEPICTS' }], spec: { mustShow: [{ detail, claimKeys: [], origin: 'STORYBOARD' }] } } }), 'MUST_SHOW_DROPPED').length;
     expect(['', 'the', 'a', 'warehouses', 'burning warehouses at night', 'the harbour'].map(dropped)).toEqual([1, 1, 1, 0, 0, 1]);
+    // What a shot shows carries it when one sentence names it, not words scattered over the description.
+    const described = (description: string) => warned(historyPlan({}, { first: { claims: [{ claimKey: 'H1', role: 'DEPICTS' }], spec: { description } } }), 'MUST_SHOW_DROPPED');
+    expect(described('The burning warehouses light the harbour.')).toEqual([]);
+    expect(described('Warehouses line the quay at dusk; a burning brazier warms the guards.')).toHaveLength(1);
   });
 
   it('FRAMING_FACTUAL_VISUAL: a record over framing narration with no context claim', () => {
@@ -517,3 +521,122 @@ describe('warnings for a person to weigh', () => {
 function profileSnapshotWith(over: Parameters<typeof profileSnapshot>[0]) {
   return profileSnapshot(over);
 }
+
+/**
+ * The warnings' precision on a tavern scene like the Tulip Mania opening
+ * (Haarlem, winter 1636): plans a model writes for it — candlelight "with no
+ * electric light", the same period clothing in shot after shot, a notary seen
+ * by his hands, a must-show worded in the singular — carry no false warning
+ * and no warning twice, and the genuine ones still fire beside them.
+ */
+describe('warning precision on a Haarlem tavern, winter 1636', () => {
+  const warned = (p: PlannedStoryboard, kind: StoryboardFindingKind) => p.qa.filter((f) => f.kind === kind && f.severity === 'WARNING').map((f) => `${f.ref}: ${f.detail}`);
+  const setting = (date: string) => ({ location: { value: 'Haarlem', basis: 'DOCUMENTED' as const }, date: { value: date, basis: 'DOCUMENTED' as const }, timeOfDay: { value: 'evening', basis: 'RECONSTRUCTION' as const } });
+  const SPEC: SyntheticSpec = {
+    question: 'Why did people pay a fortune for flowers they never saw?',
+    claims: [
+      { key: 'T1', statement: 'In the winter of 1636 tulip bulbs were traded in the taverns of Haarlem.' },
+      { key: 'T2', statement: 'Buyers signed promissory notes for bulbs that were still in the ground.' },
+      { key: 'T6', statement: 'Prices collapsed at an auction in Haarlem in February 1637.' },
+    ],
+    sequences: [
+      {
+        title: 'The tavern colleges',
+        setting: setting('winter 1636'),
+        visual: { mustShow: [{ detail: 'promissory notes changing hands', claimKeys: ['T2'] }], mustAvoid: ['electric light'] },
+        beats: [{ id: '1.1', basis: 'DOCUMENTED', claimKeys: ['T1'] }, { id: '1.2', basis: 'DOCUMENTED', claimKeys: ['T2'] }, { id: '1.3', basis: 'DOCUMENTED', claimKeys: ['T2'] }],
+      },
+      { title: 'The auction', setting: setting('February 1637'), beats: [{ id: '2.1', basis: 'DOCUMENTED', claimKeys: ['T6'] }] },
+    ],
+  };
+  const visual = (mustShow: { detail: string; claimKeys: string[] }[] = []) => ({ intent: 'CINEMATIC_RECONSTRUCTION' as const, mustShow, mustAvoid: [], priority: 'NORMAL' as const, note: '' });
+  /** Four blocks, one beat and one shot each; the second block may ask for the sequence's must-show itself. */
+  const tavern = (o: { ownMustShow?: boolean; shots?: Partial<Record<'1.1' | '1.2' | '1.3' | '2.1', ShotSketch>>; subjects?: DraftSubject[] } = {}) => {
+    const scope = syntheticScope(SPEC);
+    const script = withRowIds(
+      syntheticDraft(scope, [
+        [
+          { text: 'In the winter of 1636, men traded tulip bulbs in the taverns of Haarlem.', infoClass: 'DOCUMENTED', beatIds: ['1.1'], claimKeys: ['T1'], visual: visual() },
+          { text: 'They signed promissory notes for bulbs still in the ground.', infoClass: 'DOCUMENTED', beatIds: ['1.2'], claimKeys: ['T2'], visual: visual(o.ownMustShow ? [{ detail: 'promissory notes changing hands', claimKeys: ['T2'] }] : []) },
+          { text: 'The notes passed from hand to hand, again and again.', infoClass: 'DOCUMENTED', beatIds: ['1.3'], claimKeys: ['T2'], visual: visual() },
+        ],
+        [{ text: 'In February 1637, at an auction in Haarlem, nobody bid.', infoClass: 'DOCUMENTED', beatIds: ['2.1'], claimKeys: ['T6'], visual: visual() }],
+      ]),
+    );
+    const facts = syntheticFacts(scope, script);
+    const doublets = { detail: 'black wool doublets with flat white collars', kind: 'CLOTHING' as const, basis: 'PERIOD_GENERIC' as const, claimKeys: [] };
+    const shot = (block: '1.1' | '1.2' | '1.3' | '2.1', claim: string): ShotSketch => ({
+      claims: [{ claimKey: claim, role: 'DEPICTS' }],
+      ...o.shots?.[block],
+      spec: { description: 'Traders lean over a tavern table.', lighting: 'Warm candlelight and firelight only, no electric light.', specifics: [doublets], ...o.shots?.[block]?.spec },
+    });
+    return planStoryboard(
+      sketchDraft(
+        facts,
+        [
+          { to: '1.1:end', treatment: 'CINEMATIC_RECONSTRUCTION', shots: [shot('1.1', 'T1')] },
+          { to: '1.2:end', treatment: 'CINEMATIC_RECONSTRUCTION', shots: [shot('1.2', 'T2')] },
+          { to: '1.3:end', treatment: 'CINEMATIC_RECONSTRUCTION', shots: [shot('1.3', 'T2')] },
+          { to: '⟨end⟩', treatment: 'CINEMATIC_RECONSTRUCTION', shots: [shot('2.1', 'T6')] },
+        ],
+        { subjects: o.subjects ?? [] },
+      ),
+      facts,
+    );
+  };
+
+  it('plans with no blocking finding (the warnings below are the only findings in question)', () => {
+    expect(blocking(tavern())).toEqual([]);
+  });
+
+  it('ANACHRONISM_RISK: "no electric light" is not electric light; one period detail is one check per date, on its first shot', () => {
+    expect(warned(tavern(), 'ANACHRONISM_RISK')).toEqual([
+      "SH001: SH001 has period details resting on the period's look only (black wool doublets with flat white collars, also in SH002, SH003) in a sequence dated winter 1636: check against the period",
+      "SH004: SH004 has period details resting on the period's look only (black wool doublets with flat white collars) in a sequence dated February 1637: check against the period",
+    ]);
+    // A lamp that is really there still warns, on its own shot, though its doublets were reported on the first.
+    const lamp = tavern({ shots: { '1.3': { spec: { description: 'An electric light hangs over the tavern table.' } } } });
+    expect(warned(lamp, 'ANACHRONISM_RISK')).toContainEqual('SH003: SH003 shows what it must avoid (electric light): check against the period');
+  });
+
+  it('ANACHRONISM_RISK: a shot naming a period detail twice, however cased or punctuated, names it once and never itself among the others', () => {
+    const doublets = { detail: 'black wool doublets with flat white collars', kind: 'CLOTHING' as const, basis: 'PERIOD_GENERIC' as const, claimKeys: [] };
+    const twice = tavern({ shots: { '1.1': { spec: { specifics: [doublets, { ...doublets, detail: 'Black wool doublets, with flat white collars' }] } } } });
+    expect(warned(twice, 'ANACHRONISM_RISK')).toEqual([
+      "SH001: SH001 has period details resting on the period's look only (black wool doublets with flat white collars, also in SH002, SH003) in a sequence dated winter 1636: check against the period",
+      "SH004: SH004 has period details resting on the period's look only (black wool doublets with flat white collars) in a sequence dated February 1637: check against the period",
+    ]);
+  });
+
+  it('MUST_SHOW_DROPPED: a sequence must-show is asked once over all the blocks of its claim, and a block repeating it is not counted twice', () => {
+    expect(warned(tavern(), 'MUST_SHOW_DROPPED')).toEqual(['VB02: The sequence asks to show "promissory notes changing hands" over 1.2, 1.3; no shot over those words names it']);
+    expect(warned(tavern({ ownMustShow: true }), 'MUST_SHOW_DROPPED')).toEqual(['VB02: The script asks to show "promissory notes changing hands" over 1.2; no shot over those words names it']);
+  });
+
+  it('MUST_SHOW_DROPPED: carried by a must-show in the singular, over any block of the claim, or by what the shot shows; not by a shot saying it is absent', () => {
+    const carried = (block: '1.2' | '1.3', spec: ShotSketch['spec']) => warned(tavern({ shots: { [block]: { spec } } }), 'MUST_SHOW_DROPPED');
+    expect(carried('1.3', { mustShow: [{ detail: 'a promissory note changing hands', claimKeys: ['T2'], origin: 'STORYBOARD' }] })).toEqual([]);
+    expect(carried('1.2', { description: 'Close on the table: promissory notes changing hands between two traders.' })).toEqual([]);
+    expect(carried('1.2', { description: 'Traders wait; no promissory notes changing hands yet.' })).toHaveLength(1);
+    expect(carried('1.2', { mustShow: [{ detail: 'a notary sealing a contract', claimKeys: ['T2'], origin: 'STORYBOARD' }] })).toHaveLength(1);
+    // The words of a must-show spread over separate sentences name nothing together.
+    expect(carried('1.2', { description: 'A promissory clause is read aloud; notes pinned to the wall; the hands of a clock; changing light.' })).toHaveLength(1);
+  });
+
+  it('CONTINUITY_RISK: a figure seen by his hands in one shot and his face in another is not shown with different likenesses', () => {
+    const notary = subject('CS01', { name: 'A Haarlem notary', kind: 'CHARACTER', anonymous: true });
+    const seen = (likeness: 'NONE' | 'SILHOUETTE') =>
+      warned(
+        tavern({
+          subjects: [notary],
+          shots: { '1.2': { subjects: [{ subjectKey: 'CS01', detail: detail({ action: 'presses a seal into wax', likeness }) }] }, '1.3': { subjects: [{ subjectKey: 'CS01', detail: detail({ action: 'watches', likeness: 'PERIOD_GENERIC' }) }] } },
+        }),
+        'CONTINUITY_RISK',
+      );
+    expect(seen('NONE')).toEqual(['CS01: Requires A Haarlem notary continuity asset: it appears in SH002, SH003 and no reference exists yet']);
+    expect(seen('SILHOUETTE')).toEqual([
+      'CS01: Requires A Haarlem notary continuity asset: it appears in SH002, SH003 and no reference exists yet',
+      'CS01: A Haarlem notary is shown with different likenesses (SILHOUETTE, PERIOD_GENERIC)',
+    ]);
+  });
+});

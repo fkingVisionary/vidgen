@@ -28,6 +28,7 @@
     "@prisma/adapter-pg": "catalog:",
     "@prisma/client": "catalog:",
     "fastify": "5.12.5",
+    "pg": "catalog:",
     "pino": "10.4.0",
     "zod": "catalog:"
   },

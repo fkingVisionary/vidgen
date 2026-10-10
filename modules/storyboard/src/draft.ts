@@ -194,7 +194,7 @@ export interface PlannedStoryboard {
   subjects: PlannedSubject[];
   scope: StoryboardScopeInfo;
   runtimeMs: number;
-  approaches: { chosen: VisualApproach; options: ApproachSummary[] };
+  approaches: { chosen: VisualApproach; options: ApproachSummary[]; keptAsPlanned?: true };
   alternatives: CostAlternative[];
   rhythm: RhythmStats;
   costs: CostRollup;

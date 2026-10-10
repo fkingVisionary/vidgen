@@ -84,6 +84,8 @@ export function nextStep(p: Project, realStages: readonly string[]): NextStep | 
       case 'APPROVED':
         return voice.whole(`Storyboard v${s.version} is approved. `);
       default:
+        // An approved version stays approved while newer ones are edited (§18): a rejected edit leaves it standing.
+        if (s.approved && !s.approved.stale) return voice.whole(`Storyboard v${s.version} was ${s.status === 'REJECTED' ? 'rejected' : 'not reviewed'}; v${s.approved.version} stays approved. `);
         return board.plan(`Storyboard v${s.version} was ${s.status === 'REJECTED' ? 'rejected' : 'not reviewed'}: plan the storyboard for ${runName(chosen)} again.`, chosen.number);
     }
   }

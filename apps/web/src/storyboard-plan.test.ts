@@ -6,20 +6,26 @@ import {
   STORYBOARD_STATUS_TONES,
   VISUAL_TREATMENT_TONES,
   VISUAL_TREATMENTS,
+  type ApproachSummaryView,
   type CutPointView,
   type ProjectDetailView,
   type RhythmStats,
   type ShotView,
   type StoryboardInputsView,
+  type StoryboardDecisionView,
   type StoryboardSummaryView,
   type StoryboardVersionView,
   type VisualCostEstimate,
 } from '@docengine/core';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { formatDate } from './format.ts';
 import {
+  APPROACH_SHOTS_HINT,
   CLASS_BAR,
   VISUAL_FIELDS,
   VISUAL_ROW_PATHS,
+  approachMixLine,
+  approachesNote,
   approvalNeeds,
   assemblyText,
   changesLines,
@@ -78,6 +84,7 @@ import {
   shotForm,
   shotFormProblems,
   shotPatch,
+  statusNoteText,
   storyboardNote,
   summaryLine,
   takesApproved,
@@ -252,6 +259,28 @@ describe('the narration clock and the timeline lanes', () => {
       { treatment: 'MAP_ANIMATION', share: 0.25 },
     ]);
   });
+
+  it("labels an approach card's mix by runtime and says how much the cut hides", () => {
+    expect(approachMixLine({ CINEMATIC_RECONSTRUCTION: 32_000, ENVIRONMENT: 24_000, DOCUMENT_ANIMATION: 16_000, TIMELINE: 8_000, ARCHIVAL_IMAGE: 7_000, CHARACTER_VISUAL: 7_000, MOTION_GRAPHIC: 6_000 })).toBe(
+      'By runtime: Cinematic reconstruction 32% · Environment 24% · Document animation 16% · Timeline 8% · +3 more (20%)',
+    );
+    expect(approachMixLine({ CINEMATIC_RECONSTRUCTION: 90_000, CHARACTER_VISUAL: 10_000 })).toBe('By runtime: Cinematic reconstruction 90% · Character visual 10%');
+    expect(approachMixLine({})).toBe('');
+    expect(approachMixLine({ ENVIRONMENT: 3_000, TIMELINE: 1_000 }, 1, 'By runtime (the planned shots)')).toBe('By runtime (the planned shots): Environment 75% · +1 more (25%)');
+  });
+
+  it('say how the approach cards were estimated, as the version saved them', () => {
+    const cards = (other: ApproachSummaryView['estimate']) => ({ approach: 'C' as const, approaches: (['A', 'B', 'C'] as const).map((approach) => ({ approach, chosen: approach === 'C', estimate: approach === 'C' ? ('PLANNED' as const) : other }) as ApproachSummaryView) });
+    expect(approachesNote(cards('KEPT_AS_PLANNED'))).toBe(
+      "The C card is this version's own forecast. For the others, beats they keep are counted from this version's shots, and beats they change are estimated at the profile's density. Switching re-plans only those beats (a paid planning job); this version is kept.",
+    );
+    // A version saved before (production v1): its A and B cards estimated every beat at the density.
+    expect(approachesNote(cards('DENSITY'))).toBe(
+      "The C card is this version's own forecast. The others were estimated when this version was saved, every beat at the profile's density. Switching re-plans only the beats whose treatment changes (a paid planning job); this version is kept.",
+    );
+    expect(cards('DENSITY').approaches.map((a) => APPROACH_SHOTS_HINT[a.estimate])).toEqual(["every beat at the profile's shot length", "every beat at the profile's shot length", "this version's shots"]);
+    expect(APPROACH_SHOTS_HINT.KEPT_AS_PLANNED).toBe("kept beats as planned, changed beats at the profile's shot length");
+  });
 });
 
 describe('relations', () => {
@@ -363,7 +392,7 @@ describe('versions, inputs and the project page', () => {
   });
 
   it('show the Storyboard pill once narration is under review, with what needs doing', () => {
-    const p = (status: ProjectDetailView['status'], storyboard: StoryboardSummaryView | null = null, failedFromStatus: ProjectDetailView['failedFromStatus'] = null) => ({ status, storyboard, failedFromStatus });
+    const p = (status: ProjectDetailView['status'], storyboard: StoryboardSummaryView | null = null, failedFromStatus: ProjectDetailView['failedFromStatus'] = null) => ({ status, storyboard: storyboard && { ...storyboard, approved: null }, failedFromStatus });
     expect(hasStoryboardPage(p('SCRIPT_APPROVED'))).toBe(false);
     expect(hasStoryboardPage(p('VOICE_REVIEW'))).toBe(true);
     expect(hasStoryboardPage(p('FAILED', null, 'VISUAL_PLANNING'))).toBe(true);
@@ -842,5 +871,33 @@ describe('visual profile forms', () => {
     expect(productionText({ mode: 'FOLLOW', family: { name: 'Dark True Crime' }, profile: { version: 3 }, newer: null })).toBe('Dark True Crime v3 · follows its current version');
     expect(productionText({ mode: 'PIN', family: { name: 'Dark True Crime' }, profile: { version: 1 }, newer: { version: 3 } })).toBe('Dark True Crime v1 · pinned to v1 (v3 available)');
     expect(productionText({ mode: 'DEFAULT', family: null, profile: null, newer: null })).toMatch(/^none yet/);
+  });
+});
+
+describe("status note in the viewer's time zone", () => {
+  const saved = process.env.TZ;
+  beforeAll(() => {
+    process.env.TZ = 'Australia/Brisbane';
+  });
+  afterAll(() => {
+    if (saved === undefined) delete process.env.TZ;
+    else process.env.TZ = saved;
+  });
+  const at = '2026-10-09T23:56:12.000Z'; // the production approval: 10 Oct, 09:56 in UTC+10
+  const approved = { decision: 'APPROVED', decidedBy: 'admin', createdAt: at } as unknown as StoryboardDecisionView;
+
+  it('dates an approval as the Approval hint and the Versions list do', () => {
+    expect(new Date(at).getDate()).toBe(10); // the zone switch took effect
+    const note = statusNoteText({ version: 1, status: 'APPROVED', decidedBy: 'admin', decidedAt: at, newer: { version: 2, status: 'IN_REVIEW', changedShots: 1 }, decisions: [approved], supersededBy: null });
+    expect(note).toBe(`Approved by admin on ${formatDate(at)}; the approval applies to v1: v2 differs in 1 shot(s)`);
+    expect(note).not.toContain('2026-10-09');
+  });
+
+  it("dates the supersede in the viewer's zone, with and without a decision", () => {
+    const later = '2026-10-09T23:59:00.000Z';
+    expect(statusNoteText({ version: 1, status: 'SUPERSEDED', decidedBy: 'admin', decidedAt: at, newer: null, decisions: [approved], supersededBy: { version: 3, at: later } })).toBe(
+      `Approved by admin on ${formatDate(at)}, superseded by v3 on ${formatDate(later)}`,
+    );
+    expect(statusNoteText({ version: 2, status: 'SUPERSEDED', decidedBy: null, decidedAt: null, newer: null, decisions: [], supersededBy: { version: 3, at: later } })).toBe(`Superseded by v3 on ${formatDate(later)}`);
   });
 });

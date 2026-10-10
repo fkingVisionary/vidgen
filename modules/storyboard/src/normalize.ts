@@ -500,10 +500,38 @@ export const REPAIRABLE: readonly StoryboardQaFinding['kind'][] = [
   'EVIDENCE_MISSING',
 ];
 
-/** The beats with repairable blocking findings (a finding on a shot counts for its beat). */
-export function beatsToRepair(draft: Pick<StoryboardDraft, 'shots'>, qa: readonly StoryboardQaFinding[]): string[] {
+/** The repairable blocking findings by the beat they fall in (a finding on a shot counts for its beat), beats in the order of their first finding. */
+export function repairFindings(draft: Pick<StoryboardDraft, 'shots'>, qa: readonly StoryboardQaFinding[]): Map<string, StoryboardQaFinding[]> {
   const beatOf = new Map(draft.shots.map((s) => [s.key, s.beatKey]));
-  return [...new Set(qa.filter((f) => f.severity === 'BLOCKING' && REPAIRABLE.includes(f.kind) && f.ref).flatMap((f) => (beatOf.get(f.ref!) ? [beatOf.get(f.ref!)!] : /^VB\d+$/.test(f.ref!) ? [f.ref!] : [])))];
+  const out = new Map<string, StoryboardQaFinding[]>();
+  for (const f of qa) {
+    if (f.severity !== 'BLOCKING' || !REPAIRABLE.includes(f.kind) || !f.ref) continue;
+    const beat = beatOf.get(f.ref) ?? (/^VB\d+$/.test(f.ref) ? f.ref : null);
+    if (beat) out.set(beat, [...(out.get(beat) ?? []), f]);
+  }
+  return out;
+}
+
+/** The beats with repairable blocking findings (a finding on a shot counts for its beat). */
+export const beatsToRepair = (draft: Pick<StoryboardDraft, 'shots'>, qa: readonly StoryboardQaFinding[]): string[] => [...repairFindings(draft, qa).keys()];
+
+/** Why each beat goes to the repair: "VB09 (CLAIM_INVALID), VB17 (EVIDENCE_MISSING ×2; not tiled by the model's shots)". */
+export function repairReasons(beats: readonly string[], findings: ReadonlyMap<string, readonly StoryboardQaFinding[]>, partition: readonly string[]): string {
+  return beats
+    .map((k) => {
+      const kinds = new Map<string, number>();
+      for (const f of findings.get(k) ?? []) kinds.set(f.kind, (kinds.get(f.kind) ?? 0) + 1);
+      const why = [...(kinds.size ? [[...kinds].map(([kind, n]) => (n > 1 ? `${kind} ×${n}` : kind)).join(', ')] : []), ...(partition.includes(k) ? ["not tiled by the model's shots"] : [])];
+      return `${k} (${why.join('; ')})`;
+    })
+    .join(', ');
+}
+
+/** What the repair changed, beat by beat: the beats that take its replacement shots, and those that take none (a beat no shot tiled had no first plan to keep). */
+export function repairOutcome(beats: readonly string[], kept: readonly string[]): string {
+  const refused = beats.filter((k) => !kept.includes(k));
+  const parts = [...(kept.length ? [`replacement shots kept for ${kept.join(', ')}`] : []), ...(refused.length ? [`no replacement kept for ${refused.join(', ')}`] : [])];
+  return `Repair of ${beats.join(', ')}: ${parts.join('; ')} (a replacement is kept only when it removes blocking findings and adds none)`;
 }
 
 /** Blocking findings as counts by what they say, shot keys masked (a replacement shot has a new key but may say the same). */

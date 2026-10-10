@@ -19,7 +19,7 @@ import {
 } from '@docengine/core';
 import type { DraftBlock } from '@docengine/script';
 import { checkFigures, checkPerson, extractFigures, isYear, mentionsName, nameTokens, normalize, quoteFoundIn, unknownProperNouns, wordTokens } from '@docengine/story/shared';
-import { avoidedMatches, avoidWords, periodDetails, visibleText } from './anachronism.ts';
+import { avoidedMatches, avoidWords, periodDetails, showsAll, visibleText } from './anachronism.ts';
 import { droppedReferences, type PlannedShot, type PlannedStoryboard, type PlannedSubject, type StoryboardFacts } from './draft.ts';
 import { beatBases, claimFacts, contextClaims, coveredClaims, inheritedMustAvoid, inheritedMustShow, isFictional, isReal, labelObligation, shownClaimKeys, shownFacts, type ClaimFact } from './inherit.ts';
 import { rhythmFindings } from './rhythm.ts';
@@ -472,7 +472,8 @@ function warnings(p: PlannedStoryboard, facts: StoryboardFacts, subjects: Readon
   // Continuity.
   for (const s of p.subjects) {
     if (s.appearances.length >= 2 && s.spec.referenceAsset.required) out.push(finding('CONTINUITY_RISK', s.key, `Requires ${s.spec.name} continuity asset: it appears in ${s.appearances.join(', ')} and no reference exists yet`));
-    const modes = new Set(p.shots.flatMap((x) => x.subjects.filter((y) => y.subjectKey === s.key).map((y) => y.detail.likeness)));
+    // NONE shows no face (hands, a back, an object): it cannot contradict a face shown elsewhere.
+    const modes = new Set(p.shots.flatMap((x) => x.subjects.filter((y) => y.subjectKey === s.key && y.detail.likeness !== 'NONE').map((y) => y.detail.likeness)));
     if (modes.size > 1) out.push(finding('CONTINUITY_RISK', s.key, `${s.spec.name} is shown with different likenesses (${[...modes].join(', ')})`));
   }
   for (const b of p.beats) {
@@ -483,6 +484,8 @@ function warnings(p: PlannedStoryboard, facts: StoryboardFacts, subjects: Readon
   }
 
   // What the picture implies, beyond its evidence.
+  const flat = (s: string) => normalize(s).replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const anachronisms: { key: string; matches: string[]; period: string[]; date: string }[] = [];
   const castNames = new Set([...scope.cast.values()].flatMap((c) => normalize(c.member.name).split(/[^a-z0-9]+/)));
   for (const shot of p.shots) {
     if (shot.unplanned) continue;
@@ -517,36 +520,55 @@ function warnings(p: PlannedStoryboard, facts: StoryboardFacts, subjects: Readon
 
     const avoid = [...shot.direction.mustAvoid.map((m) => m.text), ...inheritedMustAvoid(ctx.blocks, ctx.sequences).map((m) => m.text)];
     const matches = avoidedMatches(text, [...new Set(avoid)]);
-    const period = periodDetails(shot.direction, ctx.sequence);
-    if (matches.length || period.length) {
-      const parts = [...(matches.length ? [`shows what it must avoid (${matches.join('; ')})`] : []), ...(period.length ? [`has period details resting on the period's look only (${period.join('; ')}) in a sequence dated ${ctx.sequence!.setting.date.value}`] : [])];
-      out.push(finding('ANACHRONISM_RISK', shot.key, `${shot.key} ${parts.join('; ')}: check against the period`));
-    }
+    // Once per shot, however it is cased or punctuated: a shot never names itself among the others.
+    const period = periodDetails(shot.direction, ctx.sequence).filter((d, i, all) => all.findIndex((x) => flat(x) === flat(d)) === i);
+    if (matches.length || period.length) anachronisms.push({ key: shot.key, matches, period, date: ctx.sequence?.setting.date.value ?? '' });
     const framing = ctx.narrationClasses.length > 0 && ctx.narrationClasses.every((c) => c === 'FRAMING');
     if (framing && shot.treatment && FACTUAL_TREATMENTS.includes(shot.treatment) && !ctx.claims.some((c) => c.role === 'CONTEXT')) {
       out.push(finding('FRAMING_FACTUAL_VISUAL', shot.key, `${shot.key} is a ${shot.treatment} over framing narration with no context claim`));
     }
   }
+  // What a shot must avoid is its own; a period detail is one check against its date however many shots show it: on the first, naming the others.
+  const showing = new Map<string, string[]>();
+  for (const a of anachronisms) for (const d of a.period) showing.set(`${flat(d)}\u0000${a.date}`, [...(showing.get(`${flat(d)}\u0000${a.date}`) ?? []), a.key]);
+  for (const a of anachronisms) {
+    const period = a.period.flatMap((d) => {
+      const [first, ...others] = showing.get(`${flat(d)}\u0000${a.date}`)!;
+      return first === a.key ? [others.length ? `${d}, also in ${others.join(', ')}` : d] : [];
+    });
+    if (!a.matches.length && !period.length) continue;
+    const parts = [...(a.matches.length ? [`shows what it must avoid (${a.matches.join('; ')})`] : []), ...(period.length ? [`has period details resting on the period's look only (${period.join('; ')}) in a sequence dated ${a.date}`] : [])];
+    out.push(finding('ANACHRONISM_RISK', a.key, `${a.key} ${parts.join('; ')}: check against the period`));
+  }
 
-  // Must-shows the script or the sequence asked for over these words. One carries another when either names every content word of the other: an empty or a bare "the" carries nothing.
-  const flat = (s: string) => normalize(s).replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // Must-shows the script or the sequence asked for over these words, each asked once: a block's own over its words; a sequence's over
+  // all the words that tell its claims, however many blocks tell them. One carries another when either names every content word of
+  // the other (an empty or a bare "the" carries nothing); a shot carries one too when any one sentence of what it shows names every
+  // content word of it, outside a negation (words spread over separate sentences name nothing). Words are all code can compare: a
+  // paraphrase in other words, or words joined only by a comma, can still mislead.
   const carries = (shown: string, wanted: string) => {
     const a = avoidWords(shown);
     const b = avoidWords(wanted);
     if (!a.length) return false;
     return b.length ? b.every((w) => a.includes(w)) || a.every((w) => b.includes(w)) : flat(shown) === flat(wanted);
   };
+  const shows = (shot: PlannedShot, wanted: string) => showsAll(visibleText(shot.direction, shot.subjects.map((s) => s.detail.action)), avoidWords(wanted));
+  const asks = new Map<string, { detail: string; origin: 'SCRIPT' | 'SEQUENCE'; blocks: string[] }>();
+  const own = (blockKey: string, detail: string) => `SCRIPT\u0000${blockKey}\u0000${flat(detail)}`;
   for (const b of facts.spine.blocks) {
-    const seq = scope.sequences.get(b.sequence) ?? null;
-    const wanted = inheritedMustShow(scope, b.block, seq);
-    if (!wanted.length) continue;
-    const covering = p.shots.filter((s) => s.blocks.some((r) => r.blockKey === b.key));
-    const shown = covering.flatMap((s) => s.direction.mustShow.map((m) => m.detail));
-    for (const m of wanted) {
-      if (!shown.some((x) => carries(x, m.detail))) {
-        const beat = p.beats.find((x) => x.blocks.some((r) => r.blockKey === b.key));
-        out.push(finding('MUST_SHOW_DROPPED', beat?.key ?? null, `The ${m.origin === 'SCRIPT' ? 'script' : 'sequence'} asks to show "${m.detail}" over ${b.key}; no shot does`));
-      }
+    for (const m of inheritedMustShow(scope, b.block, scope.sequences.get(b.sequence) ?? null)) {
+      const id = m.origin === 'SCRIPT' ? own(b.key, m.detail) : `SEQUENCE\u0000${b.sequence}\u0000${flat(m.detail)}`;
+      const ask = asks.get(id) ?? { detail: m.detail, origin: m.origin, blocks: [] };
+      if (!ask.blocks.includes(b.key)) ask.blocks.push(b.key);
+      asks.set(id, ask);
     }
+  }
+  for (const ask of asks.values()) {
+    // A block's own must-show of the same detail speaks for the sequence's: carried over that block, it carries the sequence's too; dropped, it is reported once.
+    if (ask.origin === 'SEQUENCE' && ask.blocks.some((k) => asks.has(own(k, ask.detail)))) continue;
+    const covering = p.shots.filter((s) => s.blocks.some((r) => ask.blocks.includes(r.blockKey)));
+    if (covering.some((s) => s.direction.mustShow.some((x) => carries(x.detail, ask.detail)) || shows(s, ask.detail))) continue;
+    const beat = p.beats.find((x) => x.blocks.some((r) => r.blockKey === ask.blocks[0]));
+    out.push(finding('MUST_SHOW_DROPPED', beat?.key ?? null, `The ${ask.origin === 'SCRIPT' ? 'script' : 'sequence'} asks to show "${ask.detail}" over ${ask.blocks.join(', ')}; no shot over those words names it`));
   }
 }

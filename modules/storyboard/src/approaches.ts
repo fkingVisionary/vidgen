@@ -6,13 +6,14 @@ import {
   VISUAL_APPROACHES,
   type ApproachSummary,
   type ContinuitySpec,
+  type CostRollup,
   type ScriptBlockClass,
   type VisualApproach,
   type VisualBeatContent,
   type VisualCostEstimate,
   type VisualTreatment,
 } from '@docengine/core';
-import type { DraftBeat, PlannedBeat, StoryboardDraft, StoryboardFacts } from './draft.ts';
+import type { DraftBeat, PlannedBeat, PlannedShot, StoryboardDraft, StoryboardFacts } from './draft.ts';
 import { isFictional, isReal } from './inherit.ts';
 import { rollupTotal, routeShot } from './route.ts';
 
@@ -20,9 +21,10 @@ import { rollupTotal, routeShot } from './route.ts';
  * Alternative visual approaches (§23, U6): A cinematic reconstruction, B
  * evidence-led (documents, maps, archival, graphics), C hybrid. Every beat
  * carries all three options, each checked against the class matrix; one
- * approach is planned in full and all three are costed and measured by the
- * same deterministic rules, so they compare fairly. Switching approach
- * re-plans only the beats whose treatment changes.
+ * approach is planned in full, and its card is the version's own forecast.
+ * Switching approach re-plans only the beats whose treatment changes, so
+ * another approach's card counts the planned shots of the beats it keeps and
+ * estimates the beats it changes by the same deterministic rules.
  */
 
 /** A treatment that may show this narrative class at all. */
@@ -73,11 +75,17 @@ const evidenceTreatment = (t: VisualTreatment) => DEPICTION_FOR[t] === 'RECORD' 
 
 /**
  * The three approaches measured across the version's beats: treatment mix,
- * generated-video share, shots at the profile's density, cost by the same
- * router and catalog (durations from the audio), and the share of beats
- * that show evidence (a record or data, with claims behind it).
+ * generated-video share, shots, cost by the same router and catalog
+ * (durations from the audio), and the share of beats that show evidence (a
+ * record or data, with claims behind it). A beat an approach keeps (its
+ * treatment is the planned one's) is counted from its planned shots, as a
+ * switch copies them; a beat it changes is estimated at the profile's
+ * density. The planned approach keeps every beat, so its card is the
+ * version's own forecast. A kept shot that reuses an asset made in a
+ * re-planned beat is still counted at $0, so a switch can be slightly
+ * under-estimated.
  */
-export function approachSummaries(beats: readonly PlannedBeat[], subjects: ReadonlyMap<string, { spec: ContinuitySpec }>, facts: StoryboardFacts, notes: readonly string[]): ApproachSummary[] {
+export function approachSummaries(beats: readonly PlannedBeat[], planned: readonly PlannedShot[], subjects: ReadonlyMap<string, { spec: ContinuitySpec }>, facts: StoryboardFacts, notes: readonly string[]): ApproachSummary[] {
   const profile = facts.profile.effective;
   const target = DENSITY_TARGETS[profile.density];
   const shotMs = ((target.averageShotSec.min + target.averageShotSec.max) / 2) * 1000;
@@ -91,6 +99,18 @@ export function approachSummaries(beats: readonly PlannedBeat[], subjects: Reado
     const costs: (VisualCostEstimate | null)[] = [];
     for (const b of timed) {
       const t = b.stored.options[approach].treatment;
+      if (evidenceTreatment(t) && b.claimRows.length > 0) evidence++;
+      if (t === b.treatment) {
+        // A beat this approach keeps is copied with its shots on a switch: counted as planned.
+        for (const s of planned.filter((x) => x.beatKey === b.key)) {
+          const len = s.startMs !== null && s.endMs !== null ? s.endMs - s.startMs : 0;
+          if (s.treatment && !s.unplanned) mix[s.treatment] = (mix[s.treatment] ?? 0) + len;
+          if (s.method && GENERATED_VIDEO_METHODS.includes(s.method)) generated += len;
+          shots++;
+          costs.push(s.cost);
+        }
+        continue;
+      }
       const ms = b.endMs - b.startMs;
       mix[t] = (mix[t] ?? 0) + ms;
       const people = beatPeople(b, subjects);
@@ -99,7 +119,6 @@ export function approachSummaries(beats: readonly PlannedBeat[], subjects: Reado
       const route = routeShot({ treatment: t, method: null, durationMs: Math.round(ms / n), ...people, recommendation: null, reuseOf: null }, profile, facts.catalog);
       if (GENERATED_VIDEO_METHODS.includes(route.method)) generated += ms;
       for (let i = 0; i < n; i++) costs.push(route.estimate);
-      if (evidenceTreatment(t) && b.claimRows.length > 0) evidence++;
     }
     const total = rollupTotal(costs);
     return {
@@ -114,6 +133,18 @@ export function approachSummaries(beats: readonly PlannedBeat[], subjects: Reado
       replacedOptions: replacedOptions(notes, approach),
     };
   });
+}
+
+/**
+ * The planned approach's card read from the version itself: its forecast,
+ * shots, generated-video share and the planned shots' runtime by treatment
+ * (all frozen with the version). A version saved before the card was the
+ * version's own forecast shows the same figures as the rest of the page.
+ */
+export function plannedCard(o: ApproachSummary, costs: Pick<CostRollup, 'totalUsd' | 'basis' | 'unpricedShots'>, shots: readonly PlannedShot[], generatedVideoShare: number): ApproachSummary {
+  const treatmentMix: Partial<Record<VisualTreatment, number>> = {};
+  for (const s of shots) if (s.treatment && !s.unplanned && s.startMs !== null && s.endMs !== null) treatmentMix[s.treatment] = (treatmentMix[s.treatment] ?? 0) + (s.endMs - s.startMs);
+  return { ...o, estimatedCostUsd: costs.totalUsd, costBasis: costs.basis, unpricedShots: costs.unpricedShots, estimatedShots: shots.length, generatedVideoShare, treatmentMix };
 }
 
 /** Whether a beat's subjects include a real person or a fictional character (the router's portrait rules). */

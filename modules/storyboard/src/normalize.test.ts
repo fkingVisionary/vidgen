@@ -3,7 +3,7 @@ import { fixtureDraft, fixtureScope } from '@docengine/script/testing';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { StoryboardDraft, StoryboardFacts } from './draft.ts';
-import { applyBeatRevisions, applyRepair, beatsToRepair, markUnplanned, resolveBeats, resolveShots } from './normalize.ts';
+import { applyBeatRevisions, applyRepair, beatsToRepair, markUnplanned, repairFindings, repairOutcome, repairReasons, resolveBeats, resolveShots } from './normalize.ts';
 import { planStoryboard } from './plan.ts';
 import { BeatsOutput, RepairOutput, ShotOutput, ShotsOutput, type BeatOutput, type SubjectOutput } from './schemas.ts';
 import { DOMAIN_FILMS, FakeStoryboardAI, domainFilm, fakeBeats, fakeShot, syntheticFacts, withRowIds, type DomainName } from './testing.ts';
@@ -271,6 +271,20 @@ describe('repair, and the placeholder', () => {
   it('sends beats with repairable blocking findings to the repair call', () => {
     const draft = start();
     expect(beatsToRepair(draft, planStoryboard(draft, facts).qa)).toEqual(['VB02']);
+  });
+
+  it('says why each beat goes to the repair, and after it which beats take the replacement and which do not', () => {
+    const draft = start();
+    const found = repairFindings(draft, planStoryboard(draft, facts).qa);
+    expect([...found.keys()]).toEqual(['VB02']);
+    // The section pass does not see these (its needRepair is about tiling only): judging the whole version does.
+    expect(repairReasons(['VB02', 'VB03'], found, ['VB03'])).toBe(`VB02 (${[...new Set(found.get('VB02')!.map((f) => f.kind))].join(', ')}), VB03 (not tiled by the model's shots)`);
+    expect(repairReasons(['VB02'], new Map([['VB02', [...found.get('VB02')!, ...found.get('VB02')!]]]), [])).toMatch(/^VB02 \([A-Z_]+ ×2\)$/);
+    // "kept" names the beats whose replacement shots replaced their first plan; the others took no replacement (a beat no shot tiled had no first plan to keep).
+    const rule = '(a replacement is kept only when it removes blocking findings and adds none)';
+    expect(repairOutcome(['VB09', 'VB17'], ['VB09', 'VB17'])).toBe(`Repair of VB09, VB17: replacement shots kept for VB09, VB17 ${rule}`);
+    expect(repairOutcome(['VB09', 'VB17'], ['VB09'])).toBe(`Repair of VB09, VB17: replacement shots kept for VB09; no replacement kept for VB17 ${rule}`);
+    expect(repairOutcome(['VB09', 'VB17'], [])).toBe(`Repair of VB09, VB17: no replacement kept for VB09, VB17 ${rule}`);
   });
 
   it('keeps a replacement that removes blocking findings and adds none; refuses one that adds any or fixes nothing', () => {

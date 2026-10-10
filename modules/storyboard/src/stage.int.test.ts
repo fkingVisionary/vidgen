@@ -324,6 +324,11 @@ describe('the storyboard job (scripted model, MOCK voice, real database)', () =>
     expect(await jobOf(projectId, 'STORYBOARD_PREVIEW')).toMatchObject({ status: 'SUCCEEDED', error: null });
     expect(s.ai.calls['storyboard.repair']).toBe(1);
     expect(s.ai.prompts['storyboard.repair']![0]).toMatch(/REAL_LIKENESS/);
+    // The log says why each beat went to the repair (VB01: a blocking finding of the judged version, which the section pass does not report; VB03: its shots), and which beats took the replacement.
+    const job = await jobOf(projectId, 'STORYBOARD_PREVIEW');
+    const progress = (await db.projectEvent.findMany({ where: { projectId, jobId: job.id, type: 'JOB_PROGRESS' } })).map((e) => e.message);
+    expect(progress).toContainEqual(expect.stringMatching(/^Sent to the repair: VB01 \((?:[A-Z_]+(?: ×\d+)?, )*REAL_LIKENESS(?: ×\d+)?(?:, [A-Z_]+(?: ×\d+)?)*\), VB03 \(not tiled by the model's shots\)$/));
+    expect(progress).toContain('Repair of VB01, VB03: replacement shots kept for VB01; no replacement kept for VB03 (a replacement is kept only when it removes blocking findings and adds none)');
     const row = await db.storyboard.findFirstOrThrow({ where: { projectId } });
     const content = StoryboardContent.parse(row.content);
     const notes = content.normalization.join('\n');

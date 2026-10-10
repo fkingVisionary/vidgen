@@ -335,7 +335,7 @@ export function planStoryboard(draft: StoryboardDraft, facts: StoryboardFacts, o
       outOfScopeBlocks: facts.spine.outOfScope.length,
     },
     runtimeMs,
-    approaches: { chosen: draft.approach, options: approachSummaries(beats, subjectSpecs, facts, notes) },
+    approaches: { chosen: draft.approach, options: approachSummaries(beats, shots, subjectSpecs, facts, notes), keptAsPlanned: true },
     alternatives: costAlternatives(shots, subjectSpecs, facts),
     rhythm: rhythmStats(shots, beats, facts),
     costs,

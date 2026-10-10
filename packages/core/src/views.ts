@@ -57,7 +57,7 @@ import type { CorpusManifest, Diagnostics, NarrationRecord, ScriptChangeReport, 
 import type { AvailableActions } from './pipeline.ts';
 import type { ScriptTiming } from './script.ts';
 import type { StageView } from './stages.ts';
-import type { StoryboardSummaryView } from './storyboard-views.ts';
+import type { ProjectStoryboardView } from './storyboard-views.ts';
 import type { NarrationSummaryView } from './voice-views.ts';
 
 /**
@@ -157,8 +157,8 @@ export interface ProjectDetailView extends ProjectSummaryView {
   story: StorySummaryView;
   /** Latest script version, if any. */
   script: ScriptSummaryView | null;
-  /** Latest storyboard version, if any (a preview included). */
-  storyboard: StoryboardSummaryView | null;
+  /** Latest storyboard version, if any (a preview included), with the approved version it leaves standing. */
+  storyboard: ProjectStoryboardView | null;
   /** The voice runs in brief: how many, the chosen one, the newest full run. */
   narration: NarrationSummaryView;
 }

@@ -166,6 +166,12 @@ async function tabs(width) {
     const overview = page.locator('[data-overview]');
     check(/Estimated visual cost\s*(~\$[\d.]+ estimate|Unpriced)/.test(await text(overview)) && /a forecast, never spend/.test(await text(overview)), `${tag}: the overview's forecast is an estimate, never spend`);
     check((await page.locator('[data-approach]').count()) === 3 && /planned/.test(await text(page.locator('[data-approach="C"]'))), `${tag}: approaches A, B and C costed, C planned`);
+    const cardForecast = await text(page.locator('[data-approach="C"] dt', { hasText: /^Forecast$/ }).locator('xpath=following-sibling::dd[1]'));
+    const versionForecast = await text(page.locator('[data-overview-cost]'));
+    check(cardForecast.includes(versionForecast), `${tag}: the planned approach's forecast is the version's own (${cardForecast} / ${versionForecast})`);
+    const cardC = await text(page.locator('[data-approach="C"]'));
+    check(/of the runtime/.test(cardC) && /By runtime \(the planned shots\):/.test(cardC) && /By runtime:/.test(await text(page.locator('[data-approach="A"]'))), `${tag}: an approach card says its shares are of the runtime`);
+    check(/this version's shots/.test(cardC) && /kept beats as planned, changed beats at the profile's shot length/.test(await text(page.locator('[data-approach="A"]'))), `${tag}: an approach card says how its shots were counted`);
     check((await page.locator('[data-version-row]').count()) >= 1 && /Actual cost: none yet, no assets/.test(await text(page.locator('[data-versions]'))), `${tag}: the versions list, with "actual cost: none yet"`);
     await overflow(page, `${tag} overview`);
     await tapTargetsIn(page, 'main', `${tag} overview`);
@@ -294,7 +300,7 @@ async function versions() {
     check(/SH003 changed: description/.test(await text(page.locator('[data-changes]'))), `${tag}: v2's overview lists what changed from v1 ("SH003 changed: description")`);
     await picker.selectOption('1');
     await showsVersion(page, 1, 'v1 shown again');
-    check(/Approved by \S+ on \d{4}-\d{2}-\d{2}; the approval applies to v1: v2 differs in 1 shot\(s\)/.test(await text(page.locator('[data-status-note]'))), `${tag}: v1 says its approval applies to v1, v2 differing in 1 shot`);
+    check(/Approved by \S+ on [^;]+; the approval applies to v1: v2 differs in 1 shot\(s\)/.test(await text(page.locator('[data-status-note]'))), `${tag}: v1 says its approval applies to v1, v2 differing in 1 shot`);
     await openTab(page, 'Shots');
     check(/Editing: v2 is the newest version: edit it, or restore this one first/.test(await text(page.locator('[role="tabpanel"]'))) && (await page.locator('article[data-shot] [data-shot-actions]').count()) === 0, `${tag}: v1 can no longer be edited (v2 is the newest), and says so`);
     await page.screenshot({ path: `${OUT}/1280-v1-after-edit.png`, fullPage: true });

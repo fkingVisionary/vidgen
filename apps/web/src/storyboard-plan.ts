@@ -35,6 +35,7 @@ import {
   VISUAL_TREATMENT_LABELS,
   VISUAL_TREATMENTS,
   VOICE_RUN_KIND_LABELS,
+  type ApproachSummaryView,
   type ContinuitySpec,
   type CostBucket,
   type CutPointView,
@@ -68,7 +69,7 @@ import {
   type VisualStyleProfileConfig,
   type VisualTreatment,
 } from '@docengine/core';
-import { formatLength } from './format.ts';
+import { formatDate, formatLength } from './format.ts';
 
 /**
  * The Storyboard page's arithmetic, kept out of the components: the
@@ -175,6 +176,37 @@ export function mixShares(mix: Partial<Record<VisualTreatment, number>>): { trea
 }
 
 export const percent = (share: number) => `${Math.round(share * 100)}%`;
+
+/**
+ * An approach card's mix line: share of the runtime per treatment (the
+ * planned shots of the beats the approach keeps, the option of each beat it
+ * changes), the largest `limit`, then how many more and their share.
+ */
+export function approachMixLine(mix: Partial<Record<VisualTreatment, number>>, limit = 4, label = 'By runtime'): string {
+  const shares = mixShares(mix);
+  if (!shares.length) return '';
+  const rest = shares.slice(limit);
+  const more = rest.length ? ` · +${rest.length} more (${percent(rest.reduce((n, m) => n + m.share, 0))})` : '';
+  return `${label}: ${shares
+    .slice(0, limit)
+    .map((m) => `${VISUAL_TREATMENT_LABELS[m.treatment]} ${percent(m.share)}`)
+    .join(' · ')}${more}`;
+}
+
+/** An approach card's "About N shots" hint: how its shots were counted, as the version saved them. */
+export const APPROACH_SHOTS_HINT: Record<ApproachSummaryView['estimate'], string> = {
+  PLANNED: "this version's shots",
+  KEPT_AS_PLANNED: "kept beats as planned, changed beats at the profile's shot length",
+  DENSITY: "every beat at the profile's shot length",
+};
+
+/** What the approach cards are: the planned one is this version's forecast; the others as this version saved them (before kept beats were counted as planned, every beat at the density). */
+export function approachesNote(v: Pick<StoryboardVersionView, 'approach' | 'approaches'>): string {
+  const others = v.approaches.some((a) => a.estimate === 'DENSITY')
+    ? "The others were estimated when this version was saved, every beat at the profile's density. Switching re-plans only the beats whose treatment changes"
+    : "For the others, beats they keep are counted from this version's shots, and beats they change are estimated at the profile's density. Switching re-plans only those beats";
+  return `The ${v.approach} card is this version's own forecast. ${others} (a paid planning job); this version is kept.`;
+}
 
 // ── Relations ────────────────────────────────────────────────────────────────
 
@@ -322,6 +354,28 @@ export function decidedText(v: Pick<StoryboardSummaryView, 'status' | 'decidedBy
   if (!v.decidedBy) return null;
   const what = v.status === 'APPROVED' || v.status === 'REJECTED' || v.status === 'CHANGES_REQUESTED' ? STORYBOARD_STATUS_LABELS[v.status].toLowerCase() : 'decided';
   return `${what} by ${v.decidedBy}`;
+}
+
+/** The version's status note with dates in the viewer's zone (the server's statusNote dates are UTC days). */
+export function statusNoteText(v: Pick<StoryboardVersionView, 'status' | 'version' | 'decidedBy' | 'decidedAt' | 'newer' | 'decisions' | 'supersededBy'>): string | null {
+  const decided = v.decidedBy ? ` by ${v.decidedBy} on ${formatDate(v.decidedAt)}` : '';
+  switch (v.status) {
+    case 'APPROVED':
+      return `Approved${decided}${v.newer ? `; the approval applies to v${v.version}: v${v.newer.version} differs in ${v.newer.changedShots} shot(s)` : ''}`;
+    case 'REJECTED':
+      return `Rejected${decided}`;
+    case 'CHANGES_REQUESTED':
+      return `Changes requested${decided}`;
+    case 'SUPERSEDED': {
+      const last = v.decisions[0]?.decision;
+      const what = last === 'APPROVED' ? 'Approved' : last === 'CHANGES_REQUESTED' ? 'Changes requested' : null;
+      return `${what ? `${what}${decided}, superseded` : 'Superseded'}${v.supersededBy ? ` by v${v.supersededBy.version} on ${formatDate(v.supersededBy.at)}` : ''}`;
+    }
+    case 'DRAFT':
+      return 'A draft: the project was rewound while it was planned, so it is not reviewed';
+    default:
+      return null;
+  }
 }
 
 /** Blocking findings and warnings counted. */

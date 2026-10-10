@@ -62,7 +62,7 @@ export { approachSummaries, beatPeople, beatsToReplan, checkOptions, chooseAppro
 export { costAlternatives } from './alternatives.ts';
 export { checkStoryboard, deviceRealized, shotContext, DATA_TREATMENTS, type CheckOptions, type ShotContext } from './rules.ts';
 export { isMoving, rhythmFindings, rhythmStats } from './rhythm.ts';
-export { avoidedMatches, periodDetails, visibleText } from './anachronism.ts';
+export { avoidedMatches, periodDetails, shownWords, visibleText } from './anachronism.ts';
 export { evidenceCoverage, planStoryboard, RECONSTRUCTION_LABEL } from './plan.ts';
 export { beatHash, canonical, sha256, shotHash, subjectHash } from './hash.ts';
 export { applyEdits, carriedDecisions, sameDuration, versionChanges, EditError, type DecidedShot, type EditOptions } from './edits.ts';
@@ -72,7 +72,10 @@ export {
   applyRepair,
   beatsToRepair,
   markUnplanned,
+  repairFindings,
+  repairOutcome,
   repairPartition,
+  repairReasons,
   resolveBeats,
   resolveShots,
   sortShots,

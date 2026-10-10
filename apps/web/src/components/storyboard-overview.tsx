@@ -14,7 +14,7 @@ import {
 import { useState } from 'react';
 import { api } from '../api.ts';
 import { formatDate } from '../format.ts';
-import { TONE_BAR, blockRange, changesLines, clock, decidedText, decisionText, findingCounts, mixShares, percent, rollupText, secondsText, staleFindings, takesApproved, treatmentMix, versionLabel } from '../storyboard-plan.ts';
+import { APPROACH_SHOTS_HINT, TONE_BAR, approachMixLine, approachesNote, blockRange, changesLines, clock, decidedText, decisionText, findingCounts, percent, rollupText, secondsText, staleFindings, statusNoteText, takesApproved, treatmentMix, versionLabel } from '../storyboard-plan.ts';
 import { NarrationApprovalBadge, Stat, StoryboardStatusBadge, ToneChip, Why, useStoryboardRequest } from './storyboard.tsx';
 import { link, pill, primary, secondary } from './ui.ts';
 
@@ -31,11 +31,12 @@ export function OverviewTab({ version: v, versions, approach, onVersion }: { ver
   const takes = takesApproved(v.narrationLane);
   const mix = treatmentMix(v.shots);
   const needingReference = v.continuity.filter((c) => c.requirement).length;
+  const note = statusNoteText(v);
   return (
     <div className="space-y-6">
-      {(v.statusNote || v.newer) && (
+      {(note || v.newer) && (
         <div className="space-y-1 rounded-md bg-stone-100 p-3 text-sm text-stone-800" data-status-note>
-          {v.statusNote && <p>{v.statusNote}.</p>}
+          {note && <p>{note}.</p>}
           {v.newer && v.status !== 'APPROVED' && (
             <p>
               v{v.newer.version} ({v.newer.status.toLowerCase().replace(/_/g, ' ')}) is newer: it differs in {v.newer.changedShots} shot{v.newer.changedShots === 1 ? '' : 's'}.{' '}
@@ -98,12 +99,12 @@ export function OverviewTab({ version: v, versions, approach, onVersion }: { ver
   );
 }
 
-/** The three approaches costed and measured on this version's beats; another one is a paid re-plan of the beats whose treatment changes. */
+/** The three approaches: the planned one is this version's own forecast, the others as the version saved them (approachesNote says how); choosing another is a paid re-plan of the beats it changes. */
 function Approaches({ version: v, allowed }: { version: StoryboardVersionView; allowed: EditorialAction }) {
   return (
     <section className="space-y-2" data-approaches>
       <h3 className="text-sm font-medium text-stone-800">Approaches A, B and C</h3>
-      <p className="text-xs text-stone-500">Each beat has an option in every approach; this version plans {v.approach} in full and costs the others from the same beats. Switching re-plans only the beats whose treatment changes (a paid planning job); this version is kept.</p>
+      <p className="text-xs text-stone-500">{approachesNote(v)}</p>
       <div className="grid gap-2 lg:grid-cols-3">
         {v.approaches.map((a) => (
           <ApproachCard key={a.approach} approach={a} version={v} allowed={allowed} />
@@ -134,16 +135,11 @@ function ApproachCard({ approach: a, version: v, allowed }: { approach: Approach
       <p className="mt-1 text-stone-500">{VISUAL_APPROACH_HELP[a.approach]}</p>
       <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
         <Stat label="Forecast" value={rollupText({ totalUsd: a.estimatedCostUsd, basis: a.costBasis, unpricedShots: a.unpricedShots })} />
-        <Stat label="Generated video" value={percent(a.generatedVideoShare)} />
-        <Stat label="About" value={`${a.estimatedShots} shots`} />
+        <Stat label="Generated video" value={`${percent(a.generatedVideoShare)} of the runtime`} />
+        <Stat label="About" value={`${a.estimatedShots} shots`} hint={APPROACH_SHOTS_HINT[a.estimate]} />
         <Stat label="Beats on evidence" value={percent(a.evidenceShare)} />
       </dl>
-      <p className="mt-1 break-words text-stone-600">
-        {mixShares(a.treatmentMix)
-          .slice(0, 4)
-          .map((m) => `${VISUAL_TREATMENT_LABELS[m.treatment]} ${percent(m.share)}`)
-          .join(' · ')}
-      </p>
+      <p className="mt-1 break-words text-stone-600">{approachMixLine(a.treatmentMix, 4, a.chosen ? 'By runtime (the planned shots)' : 'By runtime')}</p>
       {a.replacedOptions > 0 && <p className="mt-1 text-amber-900">{a.replacedOptions} option(s) outside what the evidence allows were replaced by the beat's own treatment.</p>}
       {!a.chosen && allowed.allowed && (
         <div className="mt-2 space-y-1">

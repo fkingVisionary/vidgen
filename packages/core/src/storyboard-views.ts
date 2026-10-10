@@ -84,6 +84,11 @@ export interface StoryboardSummaryView {
   createdAt: string;
 }
 
+/** The project page's storyboard: its newest version, and an older version of the same voice run and scope that stays approved while the newest is not (§18: an approval stands while newer versions are edited). */
+export interface ProjectStoryboardView extends StoryboardSummaryView {
+  approved: { version: number; stale: boolean } | null;
+}
+
 /** A cut point of the pinned narration: where a cut may fall, for "Move cut" and the timeline. */
 export interface CutPointView {
   id: string;
@@ -235,6 +240,8 @@ export interface CostRollupView extends CostRollup {
 export interface ApproachSummaryView extends ApproachSummary {
   label: string;
   chosen: boolean;
+  /** How its figures were found: this version's own (the planned one), kept beats as planned and changed ones at the density, or every beat at the density (a version saved before kept beats were counted as planned). */
+  estimate: 'PLANNED' | 'KEPT_AS_PLANNED' | 'DENSITY';
 }
 
 export interface CostAlternativeView extends CostAlternative {
@@ -264,8 +271,10 @@ export interface StoryboardVersionView extends StoryboardSummaryView {
   decisions: StoryboardDecisionView[];
   /** A newer version exists: an approval of this one still applies to this one ("v2 differs in k shots"). */
   newer: { version: number; status: StoryboardStatus; changedShots: number } | null;
-  /** The status and the decision explained ("approved by X on D, superseded by vN on D'"). */
+  /** The status and the decision explained ("approved by X on D, superseded by vN on D'"; D is the UTC day). */
   statusNote: string | null;
+  /** The save or approval that superseded this version (the STORYBOARD_SUPERSEDED event), or null. */
+  supersededBy: { version: number; at: string } | null;
 }
 
 /** A voice assembly a storyboard could be timed against. */

@@ -1,4 +1,4 @@
-import type { JobView, NarrationRunView, NarrationSummaryView, ProjectDetailView, StoryboardSummaryView } from '@docengine/core';
+import type { JobView, NarrationRunView, NarrationSummaryView, ProjectDetailView, ProjectStoryboardView } from '@docengine/core';
 import { describe, expect, it } from 'vitest';
 import { nextStep, runName, stepPage, storyboardRun } from './next-step.ts';
 
@@ -17,8 +17,8 @@ const run3 = (approved = 0, over: Partial<NarrationRunView> = {}): NarrationRunV
   ...over,
 });
 const narration = (chosen: NarrationRunView | null, over: Partial<NarrationSummaryView> = {}): NarrationSummaryView => ({ runs: chosen ? 7 : 0, chosen: chosen ? { ...chosen, reason: 'PROFILE' } : null, full: null, ...over });
-const board = (over: Partial<StoryboardSummaryView> = {}) =>
-  ({ id: 'sb-1', version: 1, status: 'IN_REVIEW', scope: 'PARTIAL', stale: false, narration: { runId: 'run-3', runNumber: 3, runKind: 'AUDITION', assemblyId: 'as-1', assemblyVersion: 1, approval: 'TAKES_APPROVED' }, ...over }) as StoryboardSummaryView;
+const board = (over: Partial<ProjectStoryboardView> = {}) =>
+  ({ id: 'sb-1', version: 1, status: 'IN_REVIEW', scope: 'PARTIAL', stale: false, narration: { runId: 'run-3', runNumber: 3, runKind: 'AUDITION', assemblyId: 'as-1', assemblyVersion: 1, approval: 'TAKES_APPROVED' }, approved: null, ...over }) as ProjectStoryboardView;
 const job = (type: JobView['type'], status: JobView['status'] = 'RUNNING') => ({ id: `job-${type}`, type, status }) as JobView;
 const project = (status: ProjectDetailView['status'], over: Partial<Pick<ProjectDetailView, 'failedFromStatus' | 'jobs' | 'storyboard' | 'narration'>> = {}) => ({ slug: 'tulip-mania', status, failedFromStatus: null, jobs: [], storyboard: null, narration: narration(run3()), ...over });
 
@@ -77,6 +77,20 @@ describe("a project's next step", () => {
     });
     expect(nextStep(project('VOICE_REVIEW', { narration: narration(run3(11)), storyboard: board({ stale: true }) }), REAL)).toMatchObject({ action: { label: 'Open storyboard v1', to: '/projects/tulip-mania/storyboard?v=1' } });
     expect(nextStep(project('VOICE_REVIEW', { narration: narration(run3(11)), storyboard: board({ status: 'REJECTED' }) }), REAL)).toMatchObject({ text: 'Storyboard v1 was rejected: plan the storyboard for Voice run 3 (C expressive) again.', action: { to: '/projects/tulip-mania/storyboard?run=3#plan' } });
+  });
+
+  it('a rejected edit of an approved preview: the approval stands, so narrate the whole script, not a re-plan', () => {
+    expect(nextStep(project('VOICE_REVIEW', { narration: narration(run3(11)), storyboard: board({ version: 2, status: 'REJECTED', approved: { version: 1, stale: false } }) }), REAL)).toEqual({
+      text: "Storyboard v2 was rejected; v1 stays approved. Narrate the whole script: an audition is not the film's final narration.",
+      action: { label: 'Narrate the whole script', to: '/projects/tulip-mania/voice?tab=generate&scope=full' },
+      tone: 'TODO',
+    });
+    for (const approved of [null, { version: 1, stale: true }]) {
+      expect(nextStep(project('VOICE_REVIEW', { narration: narration(run3(11)), storyboard: board({ version: 2, status: 'REJECTED', approved }) }), REAL)).toMatchObject({
+        text: 'Storyboard v2 was rejected: plan the storyboard for Voice run 3 (C expressive) again.',
+        action: { to: '/projects/tulip-mania/storyboard?run=3#plan' },
+      });
+    }
   });
 
   it('the preview approved: narrate the whole script; then its takes; then the VOICE gate', () => {

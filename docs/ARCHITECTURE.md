@@ -2501,10 +2501,17 @@ documentary.
 
 The beats call gives each beat three options: A cinematic reconstruction,
 B evidence-led (documents, maps, archival, graphics), C hybrid. The version
-plans one in full (the request's, else the profile's, else C) and costs and
-measures all three by the same rules (mix, generated-video share, shots at
-the profile's density, cost, evidence share). "Switch to approach X" is a
-confirmed, paid job that re-plans only the beats it changes.
+plans one in full (the request's, else the profile's, else C); its card is
+the version's own forecast (cost, shots, generated-video share and mix of
+the planned shots). The other two are measured by the same rules (mix,
+generated-video share, shots, cost, evidence share): the beats they keep are
+counted from the version's shots, the beats they change are estimated at
+the profile's density (a kept shot that reuses an asset made in a changed
+beat still counts at $0, so a switch can be slightly under-estimated). A
+version saved before this shows its planned card from its own forecast when
+read, and its other two as saved: every beat at the profile's density, which
+the page says (`content.approaches.keptAsPlanned` is absent). "Switch to
+approach X" is a confirmed, paid job that re-plans only the beats it changes.
 
 ### Versions, edits and decisions
 
@@ -2598,7 +2605,8 @@ GET   /api/voice/assemblies/:id/timeline               the narration timeline of
 
 Invalid input is a 400, an unknown id a 404, a refusal or a stale revision
 or version a 409 (a version race adds `latestVersion`). `GET /api/projects/:id`
-carries the newest version's summary; `/api/health` lists VISUAL_PLAN and
+carries the newest version's summary and the approved version it leaves
+standing (`approved`); `/api/health` lists VISUAL_PLAN and
 STORYBOARD_PREVIEW in `realStages` when they are real.
 
 ### Dashboard
@@ -2629,7 +2637,8 @@ and the part of the page opened (`apps/web/src/next-step.ts`). From an
 approved script to an approved storyboard: audition voices; approve the
 chosen run's takes; plan the storyboard for it; review and approve the
 version (or approve the takes it is timed on first); then the whole
-narration, its takes and the VOICE gate; the whole storyboard; done; a
+narration, its takes and the VOICE gate (also after a rejected edit of an
+approved preview: the approval stands); the whole storyboard; done; a
 failed narration or planning job is started again from its page. A job
 running says so; other stages, and a stage whose engine is a MOCK
 placeholder, keep their own next actions. The project's tabs mark the page
@@ -2670,7 +2679,15 @@ profile choice changed while it was planned.
   stale verdicts are snapshotted for a shot's own claims, not for the claims
   behind its details (live QA re-derives those).
 - The anachronism check is a short generic word list plus the scripts'
-  must-avoid items, and only warns.
+  must-avoid items, and only warns. A must-avoid item counts only where the
+  shot does not negate it ("no electric light"); a period detail is one
+  warning per sequence date, on the first shot showing it, naming the rest.
+- Must-shows are compared by content words (plurals folded), against a
+  shot's must-shows and any one sentence of what it shows (words spread
+  over separate sentences name nothing; a paraphrase in other words, or
+  words joined only by a comma, can still mislead). A sequence's must-show
+  is one warning over all the blocks of its claims, none when a block's own
+  must-show repeats it.
 - The Shot form does not edit must-show, the data requirement or per-shot
   style overrides; "vN differs in k shots" counts added plus removed keys.
 - The generic approvals route accepts a STORYBOARD decision without

@@ -1,4 +1,5 @@
 import { ShotTiming, StoryboardContent } from '@docengine/core';
+import { countOverlappingQueries } from '@docengine/database/testing';
 import { ConflictError, JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers } from '@docengine/pipeline';
 import { ALL_MOCK, createProviders, type ProviderSet } from '@docengine/providers';
 import { createScriptStage } from '@docengine/script';
@@ -194,7 +195,10 @@ describe('storyboard versions and decisions (scripted model, MOCK voice, real da
     await s.storyboards.decideShot(first.id, { decision: 'REJECTED' }, 'reviewer');
     await expect(decide(storyboardId, 1)).rejects.toThrow(new RegExp(`${first.shotKey} is rejected`));
     await s.storyboards.decideShot(first.id, { decision: 'CLEARED' }, 'reviewer');
-    expect(await decide(storyboardId, 1)).toMatchObject({ version: 1, status: 'APPROVED', viaGate: false });
+    // The decision loads the version in its transaction one query at a time (the production approval printed pg's warning about a query sent while another ran).
+    const decided = await countOverlappingQueries(() => decide(storyboardId, 1));
+    expect(decided.overlapping).toBe(0);
+    expect(decided.result).toMatchObject({ version: 1, status: 'APPROVED', viaGate: false });
     const v1 = await db.storyboard.findUniqueOrThrow({ where: { id: storyboardId } });
     expect(v1).toMatchObject({ status: 'APPROVED', decidedBy: 'reviewer' });
     expect((await db.project.findUniqueOrThrow({ where: { id: projectId } })).status).toBe('VOICE_REVIEW');
@@ -206,6 +210,7 @@ describe('storyboard versions and decisions (scripted model, MOCK voice, real da
     const old = await s.storyboards.view(projectId, 1);
     expect(old.storyboard!.newer).toEqual({ version: 2, status: 'IN_REVIEW', changedShots: 1 });
     expect(old.storyboard!.statusNote).toMatch(/^Approved by reviewer on .*; the approval applies to v1: v2 differs in 1 shot\(s\)$/);
+    expect(old.storyboard!.supersededBy).toBeNull();
     expect(old.editorial.decide.allowed).toBe(false);
     // Another edit supersedes v2, never approved; approving v3 supersedes v1. Each page says what superseded it.
     const v3 = await s.storyboards.edit(v2.storyboardId, { expectedVersion: 2, ops: [{ op: 'updateShot', shotKey: first.shotKey!, patch: { mood: 'Hushed (test).' } }] }, 'editor');
@@ -214,6 +219,8 @@ describe('storyboard versions and decisions (scripted model, MOCK voice, real da
     expect((await db.projectEvent.findMany({ where: { projectId, type: 'STORYBOARD_SUPERSEDED' } })).some((e) => /Approved storyboard v1 superseded by approving v3/.test(e.message))).toBe(true);
     expect((await s.storyboards.view(projectId, 1)).storyboard!.statusNote).toMatch(/^Approved by reviewer on \d{4}-\d\d-\d\d, superseded by v3 on \d{4}-\d\d-\d\d$/);
     expect((await s.storyboards.view(projectId, 2)).storyboard!.statusNote).toMatch(/^Superseded by v3 on \d{4}-\d\d-\d\d$/);
+    // What superseded each, with its time (the page writes the date in the viewer's zone).
+    for (const v of [1, 2]) expect((await s.storyboards.view(projectId, v)).storyboard!.supersededBy).toEqual({ version: 3, at: expect.stringMatching(/Z$/) });
     // Version decisions are append-only rows, never carried.
     expect((await db.storyboardDecision.findMany({ where: { projectId, shotId: null } })).map((d) => d.decision)).toEqual(['APPROVED', 'APPROVED']);
   });
@@ -498,5 +505,44 @@ describe('storyboard versions and decisions (scripted model, MOCK voice, real da
     expect(await summary()).toMatchObject({ status: 'APPROVED', stale: true, narration: { approval: 'UNREVIEWED' } });
     // Nothing was decided by itself: the one version decision is the reviewer's.
     expect(await db.storyboardDecision.count({ where: { projectId, shotId: null } })).toBe(1);
+  });
+
+  it('a rejected edit of an approved preview leaves the approval standing: the project card says so, until its narration changes', async () => {
+    const s = setup();
+    const { projectId, runId, storyboardId } = await preview(s);
+    await realTakes(runId);
+    await s.voice.approveAll(runId, 'editor');
+    await s.storyboards.decide(storyboardId, { decision: 'APPROVED', expectedVersion: 1 }, 'reviewer');
+    expect(await s.storyboards.summary(projectId)).toMatchObject({ version: 1, status: 'APPROVED', approved: null });
+    const first = (await shotsOf(storyboardId))[0]!;
+    const v2 = await s.storyboards.edit(storyboardId, { expectedVersion: 1, ops: [{ op: 'updateShot', shotKey: first.shotKey!, patch: { mood: 'Expectant (test).' } }] }, 'editor');
+    expect(await s.storyboards.summary(projectId)).toMatchObject({ version: 2, status: 'IN_REVIEW', approved: { version: 1, stale: false } });
+    await s.storyboards.decide(v2.storyboardId, { decision: 'REJECTED', expectedVersion: 2 }, 'reviewer');
+    expect(await s.storyboards.summary(projectId)).toMatchObject({ version: 2, status: 'REJECTED', stale: false, approved: { version: 1, stale: false } });
+    expect((await db.storyboard.findUniqueOrThrow({ where: { id: storyboardId } })).status).toBe('APPROVED');
+    // A take of its narration made again: the approval it left standing is stale now.
+    const run = await db.voiceRun.findUniqueOrThrow({ where: { id: runId }, include: { chunks: { orderBy: { chunkIndex: 'asc' } } } });
+    await s.voice.regenerate(runId, { chunkIds: [run.chunks[0]!.id] }, 'editor');
+    await s.runner.drain();
+    expect((await s.storyboards.summary(projectId))!.approved).toEqual({ version: 1, stale: true });
+  });
+
+  it("the planned approach's card shows the version's own forecast, even on a version saved with another", async () => {
+    const s = setup();
+    const { projectId, storyboardId } = await preview(s);
+    // Saved now: the others count the beats they keep from the planned shots.
+    const estimates = async () => Object.fromEntries((await s.storyboards.view(projectId, 1)).storyboard!.approaches.map((a) => [a.approach, a.estimate]));
+    expect(await estimates()).toEqual({ A: 'KEPT_AS_PLANNED', B: 'KEPT_AS_PLANNED', C: 'PLANNED' });
+    // A version saved before the card was the version's forecast: its own approach's card says something else, the others estimated every beat at the density.
+    const row = await db.storyboard.findUniqueOrThrow({ where: { id: storyboardId } });
+    const content = StoryboardContent.parse(row.content);
+    const options = content.approaches.options.map((o) => (o.approach === content.approaches.chosen ? { ...o, estimatedCostUsd: 0.01, costBasis: 'MIXED' as const, unpricedShots: 4, estimatedShots: 99 } : o));
+    await db.storyboard.update({ where: { id: storyboardId }, data: { content: { ...content, approaches: { chosen: content.approaches.chosen, options } } } });
+    const view = (await s.storyboards.view(projectId, 1)).storyboard!;
+    const card = view.approaches.find((a) => a.chosen)!;
+    expect({ usd: card.estimatedCostUsd, basis: card.costBasis, unpriced: card.unpricedShots, shots: card.estimatedShots }).toEqual({ usd: view.costs.totalUsd, basis: view.costs.basis, unpriced: view.costs.unpricedShots, shots: view.shots.length });
+    // The others are shown as saved, and say so.
+    expect(view.approaches.filter((a) => !a.chosen).map((a) => a.estimatedCostUsd)).toEqual(content.approaches.options.filter((o) => o.approach !== content.approaches.chosen).map((o) => o.estimatedCostUsd));
+    expect(await estimates()).toEqual({ A: 'DENSITY', B: 'DENSITY', C: 'PLANNED' });
   });
 });

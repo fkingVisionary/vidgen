@@ -1,5 +1,6 @@
 import { NarrationAlignment, PreparedNarration, VOICE_ACCEPTANCE_EXPERIMENT, VoiceRunConfig, VoiceTakeConfig, type JobType } from '@docengine/core';
 import { Prisma } from '@docengine/database';
+import { countOverlappingQueries } from '@docengine/database/testing';
 import { JobRunner, PostgresJobQueue, ProjectService, createMockStageHandlers } from '@docengine/pipeline';
 import { ALL_MOCK, MockVoiceProvider, ProviderError, createProviders, type NarrationRequest, type NarrationResult, type ProviderSet } from '@docengine/providers';
 import { ScriptEditing, createScriptStage } from '@docengine/script';
@@ -149,7 +150,8 @@ describe('voice engine (MOCK voice, real database)', () => {
     expect(r.qa.map((f) => f.kind)).toContain('INCOMPLETE_NARRATION');
     expect(r.qa.filter((f) => f.kind === 'TAKE_UNREVIEWED')).toHaveLength(r.chunks.length);
     expect(r.qa.map((f) => f.kind)).not.toContain('ASSEMBLY_MISMATCH');
-    await expect(s.projects.recordApproval(projectId, { gate: 'VOICE', decision: 'APPROVED' }, 'editor')).rejects.toThrow(/No full narration of script v1/);
+    // The gate reads its rows one query at a time on the approval transaction's one connection.
+    expect((await countOverlappingQueries(() => expect(s.projects.recordApproval(projectId, { gate: 'VOICE', decision: 'APPROVED' }, 'editor')).rejects.toThrow(/No full narration of script v1/))).overlapping).toBe(0);
     // "What is being said at 00:01?"
     const m = await s.service.moment(projectId, number, 1000);
     expect(m).toMatchObject({ run: number, chunk: 1, generation: 1, between: false });
@@ -359,7 +361,7 @@ describe('voice engine (MOCK voice, real database)', () => {
     expect(await statusOf(projectId)).toBe('VOICE_REVIEW');
     let r = (await view(s, projectId)).run!;
     expect(r.assembly).toMatchObject({ complete: true, status: 'IN_REVIEW' });
-    await expect(s.projects.recordApproval(projectId, { gate: 'VOICE', decision: 'APPROVED' }, 'editor')).rejects.toThrow(/not approved yet/);
+    expect((await countOverlappingQueries(() => expect(s.projects.recordApproval(projectId, { gate: 'VOICE', decision: 'APPROVED' }, 'editor')).rejects.toThrow(/not approved yet/))).overlapping).toBe(0);
     // One chunk retaken with a temporary override: kept with the take only, the profile unchanged, a warning (not a block) in QA.
     const profilesBefore = await db.voiceProfile.findMany({ orderBy: { id: 'asc' } });
     await s.service.regenerate(r.id, { chunkIds: [r.chunks[1]!.id], override: { providerSettings: { stability: 0.3 } } }, 'editor');
@@ -379,7 +381,9 @@ describe('voice engine (MOCK voice, real database)', () => {
     const narration = await loadNarrationSummary({ db, providers: s.providers }, project);
     expect(narration).toMatchObject({ runs: 1, chosen: { id: r.id, number: r.number, reason: 'APPROVED', takes: { approved: n, total: n }, durationMs: r.assembly!.totalDurationMs, stale: false }, full: { id: r.id, takes: { approved: n, total: n } } });
     // The VOICE gate (no providers: it reads what the takes stored) approves it.
-    const { approval } = await s.projects.recordApproval(projectId, { gate: 'VOICE', decision: 'APPROVED', notes: 'Narration approved (test).' }, 'editor');
+    const gated = await countOverlappingQueries(() => s.projects.recordApproval(projectId, { gate: 'VOICE', decision: 'APPROVED', notes: 'Narration approved (test).' }, 'editor'));
+    expect(gated.overlapping).toBe(0); // one query at a time on the transaction's connection
+    const { approval } = gated.result;
     expect(approval.voiceAssemblyId).toBe(r.assembly!.id);
     expect(await statusOf(projectId)).toBe('VOICE_COMPLETE');
     expect((await db.voiceAssembly.findUniqueOrThrow({ where: { id: r.assembly!.id } })).status).toBe('APPROVED');

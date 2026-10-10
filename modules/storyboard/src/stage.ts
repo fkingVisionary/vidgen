@@ -11,7 +11,7 @@ import { droppedNote, type DraftBeat, type DraftSubject, type PlannedStoryboard,
 import { versionChanges } from './edits.ts';
 import { InputError, resolveInputs, type ResolvedInputs } from './inputs.ts';
 import { summaryLine } from './log.ts';
-import { applyBeatRevisions, applyRepair, beatsToRepair, markUnplanned, resolveBeats, resolveShots, sortShots } from './normalize.ts';
+import { applyBeatRevisions, applyRepair, markUnplanned, repairFindings, repairOutcome, repairReasons, resolveBeats, resolveShots, sortShots } from './normalize.ts';
 import { planStoryboard } from './plan.ts';
 import { resolveVisualProduction } from './profiles.ts';
 import { PROMPT_VERSION, beatsSystemPrompt, repairSystemPrompt, shotsSystemPrompt } from './prompts.ts';
@@ -121,8 +121,17 @@ class StoryboardRun {
 
     // S5: judged over the whole version; S6: one repair round for what can be repaired, only of the beats this job plans (copied beats keep their shots).
     let planned = planStoryboard(draft, facts);
-    const toRepair = [...new Set([...beatsToRepair(draft, planned.qa), ...needRepair])].filter((k) => replanned.includes(k));
+    const found = repairFindings(draft, planned.qa);
+    const toRepair = [...new Set([...found.keys(), ...needRepair])].filter((k) => replanned.includes(k));
     if (toRepair.length) {
+      // What sends each beat: the section pass's needRepair covers only shots that do not tile a beat; blocking findings come from judging the whole version.
+      const partition = needRepair.filter((k) => toRepair.includes(k));
+      await ctx.progress(`Sent to the repair: ${repairReasons(toRepair, found, partition)}`, {
+        step: 'repair',
+        beats: toRepair,
+        partition,
+        findings: toRepair.flatMap((k) => (found.get(k) ?? []).map((f) => ({ beatKey: k, kind: f.kind, ref: f.ref, detail: f.detail }))),
+      });
       await this.ceiling.check();
       const beats = draft.beats.filter((b) => toRepair.includes(b.key));
       const out = await this.call('repair', 'storyboard.repair', RepairOutput, 'StoryboardRepair', repairSystemPrompt(facts.profile.effective), repairPrompt(facts, { title, beats, shots: draft.shots, subjects: draft.subjects, approach: draft.approach, findings: planned.qa, partition: needRepair }), (x) => ({ beats: x.beats.length, shots: x.beats.reduce((s, b) => s + b.shots.length, 0) }), `a repair of ${toRepair.join(', ')}`);
@@ -130,7 +139,7 @@ class StoryboardRun {
       for (const r of out.beats.filter((b) => !toRepair.includes(b.beatKey))) notes.push(droppedNote(`repair of ${r.beatKey}`, 'the replacement', 'the repair was not asked to re-plan this beat'));
       const repaired = applyRepair(draft, { beats: out.beats.filter((b) => toRepair.includes(b.beatKey)) }, facts, notes, { partition: needRepair, usedKeys: used });
       draft = repaired.draft;
-      await ctx.progress(`Repair of ${toRepair.join(', ')}: ${repaired.kept.length ? `kept for ${repaired.kept.join(', ')}` : 'nothing kept'} (a replacement is kept only when it removes blocking findings and adds none)`, { step: 'repair', beats: toRepair, kept: repaired.kept });
+      await ctx.progress(repairOutcome(toRepair, repaired.kept), { step: 'repair', beats: toRepair, kept: repaired.kept, notKept: toRepair.filter((k) => !repaired.kept.includes(k)) });
     } else await this.steps.skip('repair');
     draft = this.placeholders(draft, facts, notes, used);
     planned = planStoryboard(draft, facts);

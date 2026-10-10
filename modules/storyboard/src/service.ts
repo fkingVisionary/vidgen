@@ -12,7 +12,7 @@ import {
   type StoryboardDecisionInput,
   type StoryboardEditInput,
   type StoryboardInputsView,
-  type StoryboardSummaryView,
+  type ProjectStoryboardView,
   type StoryboardView,
   type UpdateVisualProfileFamilyInput,
   type VisualCatalog,
@@ -240,8 +240,8 @@ export class StoryboardService {
     return loadStoryboardInputs(this.viewDeps, project);
   }
 
-  /** The project page's storyboard card (null: no version yet). */
-  summary(projectId: string): Promise<StoryboardSummaryView | null> {
+  /** The project page's storyboard card (null: no version yet), with the approved version it leaves standing. */
+  summary(projectId: string): Promise<ProjectStoryboardView | null> {
     return storyboardSummary(this.db, projectId, this.deps.catalog);
   }
 

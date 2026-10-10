@@ -1,7 +1,7 @@
 import { ApproachSummary, CostAlternative, sumUsd } from '@docengine/core';
 import { describe, expect, it } from 'vitest';
 import { costAlternatives } from './alternatives.ts';
-import { beatsToReplan, checkOptions, chooseApproach, switchApproach } from './approaches.ts';
+import { beatsToReplan, checkOptions, chooseApproach, plannedCard, switchApproach } from './approaches.ts';
 import { applyEdits } from './edits.ts';
 import { planStoryboard } from './plan.ts';
 import { domainFilm, sketchDraft, subject, type BeatSketch } from './testing.ts';
@@ -48,9 +48,52 @@ describe('options and the approach', () => {
     expect(a!.estimatedCostUsd!).toBeGreaterThan(c!.estimatedCostUsd!);
     expect(b!.costBasis).toBe('MIXED'); // the filing is a sourced document: licence unpriced
     expect(b!.unpricedShots).toBeGreaterThan(0);
-    expect(b!.evidenceShare).toBe(0.75); // the money, the test results and the filing: data or a record, each with claims
+    // The money, the test results and the filing: data or a record, each with claims. The test results count though their only claim (B2) is
+    // DEPICTS: the share follows the option's treatment, not the claims' roles.
+    expect(b!.evidenceShare).toBe(0.75);
+    expect(c!.evidenceShare).toBe(0.5); // C's options: a chart, two reconstructions and the filing
     expect(a!.evidenceShare).toBe(0);
     expect(p.approaches.chosen).toBe('C');
+  });
+
+  const history = domainFilm('history');
+  const twoWays = { A: { treatment: 'CINEMATIC_RECONSTRUCTION' as const, concept: 'The fire (test)' }, B: { treatment: 'DOCUMENT_ANIMATION' as const, concept: 'The record (test)' } };
+  /** A reconstruction cut in two shots, then a long establishing view planned as one shot (the density estimate counts four). */
+  const multiShot = () =>
+    planStoryboard(
+      sketchDraft(history.facts, [
+        { to: '1.2:end', treatment: 'CINEMATIC_RECONSTRUCTION', options: twoWays, claimKeys: ['H1'], shots: [{ to: '1.2:2' }, {}] },
+        { to: '⟨end⟩', treatment: 'ENVIRONMENT', options: twoWays },
+      ]),
+      history.facts,
+    );
+
+  it("the planned approach's card is this version's own forecast; another counts the shots of the beats it keeps", () => {
+    const p = multiShot();
+    expect(p.approaches.keptAsPlanned).toBe(true); // saved with the version: the page tells these cards from older ones
+    const [a, b, c] = p.approaches.options.map((x) => ApproachSummary.parse(x));
+    expect(c!.approach).toBe(p.approaches.chosen);
+    expect({ usd: c!.estimatedCostUsd, basis: c!.costBasis, unpriced: c!.unpricedShots, shots: c!.estimatedShots, video: c!.generatedVideoShare }).toEqual({
+      usd: p.costs.totalUsd,
+      basis: p.costs.basis,
+      unpriced: p.costs.unpricedShots,
+      shots: p.shots.length,
+      video: p.rhythm.generatedVideoShare,
+    });
+    const view = p.beats[1]!;
+    expect(a!.estimatedShots).toBe(2 + Math.max(1, Math.round((view.endMs! - view.startMs!) / 6000))); // keeps VB01's two shots, estimates VB02
+    expect(b!.estimatedShots).toBe(p.beats.reduce((n, x) => n + Math.max(1, Math.round((x.endMs! - x.startMs!) / 6000)), 0)); // changes both beats
+    const runtime = p.beats.reduce((n, x) => n + (x.endMs! - x.startMs!), 0);
+    for (const x of [a!, b!, c!]) expect(Object.values(x.treatmentMix).reduce((n, v) => n + v!, 0)).toBe(runtime);
+  });
+
+  it("a version saved with a stale card for its own approach shows the version's forecast when read", () => {
+    const p = multiShot();
+    const chosen = p.approaches.options.find((o) => o.approach === p.approaches.chosen)!;
+    const stale = { ...chosen, estimatedCostUsd: 16.46, unpricedShots: 4, estimatedShots: 19, treatmentMix: { TIMELINE: 1 } };
+    const card = plannedCard(stale, p.costs, p.shots, p.rhythm.generatedVideoShare);
+    expect(card).toEqual(chosen);
+    expect([card.estimatedCostUsd, card.unpricedShots, card.estimatedShots]).toEqual([p.costs.totalUsd, p.costs.unpricedShots, p.shots.length]);
   });
 
   it('switches approach by re-planning only the beats whose treatment changes; the rest are copied as they were', () => {

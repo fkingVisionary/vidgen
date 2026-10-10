@@ -11,6 +11,7 @@ import {
   type JobView,
   type NarrationApproval,
   type NarrationLaneView,
+  type ProjectStoryboardView,
   type ProjectStatus,
   type ShotReviewState,
   type ShotView,
@@ -39,6 +40,7 @@ import type { Database, Project, StoryboardDecision, Tx, VisualProfile, VisualPr
 import { EVENT } from '@docengine/pipeline';
 import { approvedScript, narrationFingerprint } from '@docengine/voice';
 import { z } from 'zod';
+import { plannedCard } from './approaches.ts';
 import { continuityRequirement } from './continuity.ts';
 import type { PlannedShot, StoryboardFacts } from './draft.ts';
 import { applyEdits, EditError } from './edits.ts';
@@ -165,14 +167,26 @@ export async function storyboardSummaries(db: Db, projectId: string, catalog: Vi
   });
 }
 
-/** The project page's storyboard card: its newest version (null: none yet). */
-export async function storyboardSummary(db: Db, projectId: string, catalog: VisualCatalog): Promise<StoryboardSummaryView | null> {
-  const newest = await db.storyboard.findFirst({ where: { projectId }, orderBy: { version: 'desc' }, include: { shots: { select: { shotKey: true, evidence: true } } } });
+/**
+ * The project page's storyboard card: its newest version (null: none yet),
+ * and the older version of the same voice run and scope that stays approved
+ * while the newest is not (§18: an approval stands while newer versions are
+ * edited), with its staleness now.
+ */
+export async function storyboardSummary(db: Db, projectId: string, catalog: VisualCatalog): Promise<ProjectStoryboardView | null> {
+  const include = { shots: { select: { shotKey: true, evidence: true } } } as const;
+  const newest = await db.storyboard.findFirst({ where: { projectId }, orderBy: { version: 'desc' }, include });
   if (!newest) return null;
+  const prior = newest.status === 'APPROVED' ? null : await db.storyboard.findFirst({ where: { projectId, status: 'APPROVED', scope: newest.scope, voiceRunId: newest.voiceRunId, version: { lt: newest.version } }, orderBy: { version: 'desc' }, include });
+  const pinnedOf = (row: typeof newest, content: StoryboardContent) => pinnedFacts(row, content, row.shots.map((s) => ({ key: s.shotKey ?? '', evidence: (s.evidence ?? null) as PinnedFacts['shots'][number]['evidence'] })));
   const content = StoryboardContent.parse(newest.content);
-  const pinned = pinnedFacts(newest, content, newest.shots.map((s) => ({ key: s.shotKey ?? '', evidence: (s.evidence ?? null) as PinnedFacts['shots'][number]['evidence'] })));
-  const [live] = await liveFactsMany(db, projectId, [{ pinned, voiceRunId: newest.voiceRunId }], catalog);
-  return summaryOf(newest, content, { stale: isStale(staleFindings(pinned, live!)), approval: liveNarrationApproval(pinned, live!, live!.pinnedAssemblyStatus) });
+  const pinned = pinnedOf(newest, content);
+  const pinnedPrior = prior ? pinnedOf(prior, StoryboardContent.parse(prior.content)) : null;
+  const [live, livePrior] = await liveFactsMany(db, projectId, [{ pinned, voiceRunId: newest.voiceRunId }, ...(prior ? [{ pinned: pinnedPrior!, voiceRunId: prior.voiceRunId }] : [])], catalog);
+  return {
+    ...summaryOf(newest, content, { stale: isStale(staleFindings(pinned, live!)), approval: liveNarrationApproval(pinned, live!, live!.pinnedAssemblyStatus) }),
+    approved: prior ? { version: prior.version, stale: isStale(staleFindings(pinnedPrior!, livePrior!)) } : null,
+  };
 }
 
 // ── One version ──────────────────────────────────────────────────────────────
@@ -374,6 +388,7 @@ async function versionView(c: VersionContext): Promise<StoryboardVersionView> {
   });
 
   const newer = c.newer ? await newerOf(db, c.newer, planned.shots) : null;
+  const superseded = await supersededOf(db, row);
   const versionDecisions = decisions.filter((d) => !d.shotId).reverse();
   const summary = summaryOf(row, content, { stale: qa.stale, approval: qa.approval });
   return {
@@ -386,7 +401,12 @@ async function versionView(c: VersionContext): Promise<StoryboardVersionView> {
     shots,
     continuity,
     costs: { ...content.costs, catalogVersion: content.inputs.pricing.catalogVersion, pricingChanged: content.inputs.pricing.catalogVersion !== c.catalog.version, actualCostUsd: null },
-    approaches: content.approaches.options.map((o) => ({ ...o, label: VISUAL_APPROACH_LABELS[o.approach], chosen: o.approach === content.approaches.chosen })),
+    // The planned approach's card is the version's own forecast, read from what it froze (a version saved before that was so shows it too); the others as saved.
+    approaches: content.approaches.options.map((o) => {
+      const chosen = o.approach === content.approaches.chosen;
+      const estimate = chosen ? 'PLANNED' : content.approaches.keptAsPlanned ? 'KEPT_AS_PLANNED' : 'DENSITY';
+      return { ...(chosen ? plannedCard(o, content.costs, planned.shots, content.rhythm.generatedVideoShare) : o), label: VISUAL_APPROACH_LABELS[o.approach], chosen, estimate };
+    }),
     alternatives,
     rhythm: content.rhythm,
     evidenceCoverage: content.evidenceCoverage,
@@ -395,7 +415,8 @@ async function versionView(c: VersionContext): Promise<StoryboardVersionView> {
     changes: content.changes,
     decisions: versionDecisions.map((d) => decisionView(d, d.shotId ? (shotKeyOf.get(d.shotId) ?? null) : null, versionOf)),
     newer,
-    statusNote: await statusNote(db, row, newer, versionDecisions[0]),
+    statusNote: statusNote(row, newer, versionDecisions[0], superseded),
+    supersededBy: superseded ? { version: superseded.version, at: superseded.at.toISOString() } : null,
   };
 }
 
@@ -411,12 +432,21 @@ async function newerOf(db: Db, newer: { id: string; version: number; status: str
   return { version: newer.version, status: newer.status as StoryboardVersionView['status'], changedShots: changed };
 }
 
+/** The save or approval that superseded a version, as recorded when it happened (null unless it is superseded). */
+async function supersededOf(db: Db, row: LoadedStoryboard['row']): Promise<{ version: number; at: Date } | null> {
+  if (row.status !== 'SUPERSEDED') return null;
+  const event = await db.projectEvent.findFirst({ where: { projectId: row.projectId, type: EVENT.STORYBOARD_SUPERSEDED, data: { path: ['superseded'], array_contains: [row.version] } }, orderBy: { createdAt: 'asc' }, select: { data: true, createdAt: true } });
+  const by = z.object({ by: z.number().int() }).safeParse(event?.data);
+  return by.success ? { version: by.data.by, at: event!.createdAt } : null;
+}
+
 /**
  * "Approved by X on D, superseded by vN on D'": the version's last decision
- * (`last`, version-level), and the save or approval that superseded it, as
- * recorded when it happened.
+ * (`last`, version-level), and the save or approval that superseded it
+ * (`superseded`). D and D' are UTC days; the page writes the note again with
+ * dates in the viewer's zone.
  */
-async function statusNote(db: Db, row: LoadedStoryboard['row'], newer: StoryboardVersionView['newer'], last: StoryboardDecision | undefined): Promise<string | null> {
+function statusNote(row: LoadedStoryboard['row'], newer: StoryboardVersionView['newer'], last: StoryboardDecision | undefined, superseded: { version: number; at: Date } | null): string | null {
   const day = (d: Date | null) => d?.toISOString().slice(0, 10) ?? '';
   const decided = row.decidedBy ? ` by ${row.decidedBy} on ${day(row.decidedAt)}` : '';
   switch (row.status) {
@@ -427,10 +457,8 @@ async function statusNote(db: Db, row: LoadedStoryboard['row'], newer: Storyboar
     case 'CHANGES_REQUESTED':
       return `Changes requested${decided}`;
     case 'SUPERSEDED': {
-      const event = await db.projectEvent.findFirst({ where: { projectId: row.projectId, type: EVENT.STORYBOARD_SUPERSEDED, data: { path: ['superseded'], array_contains: [row.version] } }, orderBy: { createdAt: 'asc' }, select: { data: true, createdAt: true } });
-      const by = z.object({ by: z.number().int() }).safeParse(event?.data);
       const decision = last?.decision === 'APPROVED' ? 'Approved' : last?.decision === 'CHANGES_REQUESTED' ? 'Changes requested' : null;
-      return `${decision ? `${decision}${decided}, superseded` : 'Superseded'}${by.success ? ` by v${by.data.by} on ${day(event!.createdAt)}` : ''}`;
+      return `${decision ? `${decision}${decided}, superseded` : 'Superseded'}${superseded ? ` by v${superseded.version} on ${day(superseded.at)}` : ''}`;
     }
     case 'DRAFT':
       return 'A draft: the project was rewound while it was planned, so it is not reviewed';
