@@ -1,8 +1,14 @@
 # Status — what exists, honestly
 
-Last updated: Storyboard Engine V1 (2026-10-07) — built and tested, not yet
-deployed; its acceptance on Tulip's narrated opening is the operator's
-(DEPLOYMENT.md, *Operator runbook: the opening storyboard*). The storyboard
+Last updated: Storyboard Engine V1 (2026-10-10) — deployed and run live:
+Tulip's narrated opening planned as preview v1 and approved by the user
+(*STORYBOARD PREVIEW RUN* below); the last acceptance step, one edited shot,
+is the operator's (DEPLOYMENT.md, *Operator runbook: the opening
+storyboard*). Then a close-out from the live run: the planned approach's
+card is the version's own forecast, a transaction's queries reach pg one at
+a time, quieter QA warnings, a clearer repair log, dates in the viewer's
+zone. Earlier, the guided flow: one Next step card from the voice runs to
+the storyboard. The storyboard
 plans beats and shots on the narration's real audio clock, with
 provider-neutral treatments, evidence and class rules enforced by code,
 continuity subjects, cost forecasts priced from verified list prices (or
@@ -43,7 +49,7 @@ timing, not a words-per-minute estimate, now decides the real length).
 | Domain model | Status machine (26 statuses incl. VOICE_REVIEW and the STORYBOARD_APPROVED milestone, 7 transition kinds), pipeline table, side jobs (STORY_ANGLES, STORYBOARD_PREVIEW), stage derivation, progress, available actions | `packages/core/src/*.test.ts` |
 | Contracts | zod schemas: API inputs, story candidates and architecture (StoryCharacter, MythThread, StoryScores, StoryPackContent, StoryArchitectureContent), VoiceSettings, QaFindings, InfographicSpec (mandatory source, finite numbers, approximate flags, reference checks); the storyboard's (NarrationSpine, ShotTiming, ShotSpec, VisualCostEstimate, CostRollup, StoryboardContent, the edit operations, the treatment × class matrix and the other provider-neutral tables), the visual profile and the visual catalog contracts (ShotDirection is deprecated: `shots.direction` holds the ShotSpec) | `contracts.test.ts`, `contracts/storyboard.test.ts` |
 | Cost math | Usage × rate card in micro-dollars, unpriced-usage reporting, exact sums | `cost.test.ts` |
-| Database | Prisma 7 schema (50 tables, 49 enums), twelve migrations (initial; research engine; job checkpoint; story mining; story engine 2; story revisions; script engine; voice engine; writing engine 2; voice v4 production; voice saved profiles; storyboard engine — the last nine additive only), timestamptz, UUIDv7, cascade rules, enum parity test vs core | `enum-parity.test.ts`, integration tests (`storyboard-migration.int.test.ts`: every earlier row unchanged across the in-place status cast, no drift); `20261006120000_voice_saved_profiles` is applied in production; `20261007090000_storyboard_engine` is not yet deployed |
+| Database | Prisma 7 schema (50 tables, 49 enums), twelve migrations (initial; research engine; job checkpoint; story mining; story engine 2; story revisions; script engine; voice engine; writing engine 2; voice v4 production; voice saved profiles; storyboard engine — the last nine additive only), timestamptz, UUIDv7, cascade rules, enum parity test vs core | `enum-parity.test.ts`, integration tests (`storyboard-migration.int.test.ts`: every earlier row unchanged across the in-place status cast, no drift); `20261006120000_voice_saved_profiles` and `20261007090000_storyboard_engine` are applied in production |
 | Project service | Create (with master language version), enqueue, retry, approve/reject/flag (artifact version linked: dossier, story architecture, script, voice assembly, storyboard; a stale `artifactId` refused at every gate), rewind, restart a phase (rewind + enqueue), editor changes to story candidates, revise an architecture, explore angles (a side job that never moves the project), the storyboard's phase job and preview side job (one storyboard job at a time) and the STORYBOARD gate re-opened by an edit; row-locked transactions; audit events; stale-job protection | `project-service.int.test.ts`, `runner.int.test.ts`, `storyboard-service.int.test.ts` |
 | Job system | Postgres queue (`SKIP LOCKED`), runner with concurrency, heartbeat, exponential backoff, non-retryable errors, abandoned-job recovery, shutdown release, provider-call ledger | `runner.int.test.ts` |
 | API | Fastify: health, projects (list/create/detail by id or slug), jobs (enqueue/get/retry), approvals, rewind; zod validation; error mapping; Basic auth; security headers; static dashboard + SPA fallback; graceful shutdown | `app.int.test.ts`, `env.test.ts`, manual SIGTERM test |
@@ -88,7 +94,51 @@ timing, not a words-per-minute estimate, now decides the real length).
 | **Storyboard API + dashboard** (STORYBOARD) | `GET /api/projects/:id/storyboard[?v=N]`, `…/storyboard/inputs`, `POST …/storyboard/generate` (confirmed), `/api/storyboards/:id/regenerate-beats`, `…/approach`, `…/edits`, `…/retime`, `…/restore`, `…/decision`, `/api/shots/:id/decision`, `/api/visual/catalog`, the profile library and the project's selection, `/api/voice/assemblies/:id/timeline`; 400 / 404 / 409 with `latestVersion` on a version race. Hard stop: VISUAL_GENERATION and INFOGRAPHIC refused on enqueue and retry in every status and held in the worker while the storyboard is real; the generic job route sends storyboards to their route. Storyboard page: header with the inputs strip and profile control, actions (plan with a confirmation tied to the request, running job, retry, re-plan, switch approach, re-time, restore, decisions with what blocks approval), seven tabs (Overview, Timeline, Shots with the why-chain and every edit, Costs, Evidence, Continuity, QA); Visual profiles library; project page card, next step, stage links, generation buttons hidden | `storyboard.int.test.ts`, `app.int.test.ts`, `storyboard-plan.test.ts`; browser QA `sh scripts/ui/storyboard-ui.sh` (every provider MOCK): every check passed at 360, 412 and 1280 px |
 | **Story API + dashboard** (M3) | `GET /api/projects/:id/story`, `PATCH /api/story-candidates/:id`, `POST …/story/mine`, `POST …/story/architecture` (selection checked first); Story page: ranked candidates with scores and the ranking formula, arcs, myth threads, evidence (claims, quotes, sources), editor controls (approve/reject/flag, in-the-documentary, priority, notes), selection vs AI proposal, architecture with sequences and per-sequence evidence, both gate reports, cost; approval panel (Approve / Reject → Rework / Flag). Project pages are linked by an Overview · Research dossier · Story bar; the Research and Story stage boxes open their pages; new pages open at the top; pages fit a phone screen | `app.int.test.ts`; Playwright run on fake-AI data (editor actions, selection limits, rejection) with no console errors; Playwright at a 412 px phone viewport: every route into the Story page, no horizontal overflow |
 
-Test counts at time of writing: **1474 unit** (81 files) + **227 integration** (24 files), all passing; `pnpm typecheck` clean for all 12 packages; the dashboard and API build; the Docker image builds and serves `/api/health`. Browser QA (every provider MOCK) passes every check at 360, 412 and 1280 px: the Voice page and the voice profile library (`sh scripts/ui/voice-ui.sh`, 289 checks) and the Storyboard page and the visual profile library (`sh scripts/ui/storyboard-ui.sh`, 265 checks).
+Test counts at time of writing: **1522 unit** (84 files) + **230 integration** (25 files), all passing; `pnpm typecheck` clean for all 12 packages; the dashboard and API build; the Docker image builds and serves `/api/health`. Browser QA (every provider MOCK) passes every check at 360, 412 and 1280 px: the Voice page and the voice profile library (`sh scripts/ui/voice-ui.sh`, 289 checks) and the Storyboard page and the visual profile library (`sh scripts/ui/storyboard-ui.sh`, 376 checks, including the guided walk from the voice runs to an approved storyboard at 412 and 1280 px).
+
+## STORYBOARD PREVIEW RUN (Railway, 2026-10-08): the opening, live
+
+Tulip Mania, script v5, the narration of voice run 3 (C expressive; its 11
+takes approved by the user), assembly v1, fingerprint `60a14519384b`; visual
+profile Cinematic History v1 (the library default, approach C). One
+STORYBOARD_PREVIEW job, 02:42–02:52 UTC (558.8 s), attempt 1, not mock.
+From the job's `storyboard summary` line:
+
+- **Scope:** blocks 1.1–1.10 of 80, 0–109.8 s; the other 70 blocks out of
+  scope (a preview). The project stays in VOICE_REVIEW.
+- **17 beats, 19 shots,** 5.8 s a shot on average; all 19 timed to the
+  narration (no lead-in, tail-out or bridge).
+- **Treatments:** cinematic reconstruction 8, environment 5, document
+  animation 2, archival image 1, character visual 1, motion graphic 1,
+  timeline 1.
+- **Forecast:** about $17.30 to make the visuals (MIXED), 3 shots unpriced
+  and not in the total (archival and document cards have no rates). Nothing
+  is generated; actual visual cost $0.
+- **Planning:** 3 model calls (beats 201 s, shots 314 s, one repair of
+  VB09 and VB17 44 s whose replacement shots were kept), $1.61 estimated,
+  under the $5 ceiling; 3 normalizations (1 dropped model reference, 2
+  repaired beats).
+- **QA as saved:** 0 blocking, 30 warnings (anachronism risk 10, must-show
+  dropped 7, continuity risk 6, visual implication 4, unpriced 1, model
+  reference dropped 1, partial scope 1). The close-out found part of them
+  noise (plural matching, negated mentions, one period detail repeated per
+  shot, one ask repeated per block, a faceless shot counted as a likeness)
+  and fixed the detectors; the page's live QA recounts them, the saved
+  figures stay.
+- **Evidence:** 12 of 12 factual shots traced to their claims and sources.
+- **Continuity:** 10 subjects, 5 needing a reference asset (none can exist
+  before visual generation).
+- **Decision:** the user kept approach C and approved v1 on 2026-10-09
+  23:56 UTC. The approval needed the takes approved first.
+- The approval printed pg's "client is already executing a query"
+  deprecation: Prisma sends a transaction's included relations at once on
+  its one connection. Fixed: the pool's connections send one query at a
+  time; tests count overlapping queries around decide, edit and the gates.
+- The approach cards showed C at $16.46 / 4 unpriced against the version's
+  $17.30 / 3: the cards were estimated from the beats at the profile's
+  density. Fixed: the planned approach's card is the version's own forecast
+  (v1 included, on read); the other two count the beats they keep from the
+  planned shots.
 
 ## VOICE ACCEPTANCE RUN (Railway, 2026-10-06): the opening, seven ways
 
@@ -205,26 +255,22 @@ a retry two minutes later succeeded.
 
 ## NOT YET VERIFIED LIVE
 
-- **Storyboard Engine V1 has not run live.** Not yet deployed. Every test
-  uses a scripted model, the MOCK voice and synthetic data; no planning call
-  has gone to the real model. Pending the operator after the deploy
-  (DEPLOYMENT.md, *Deploying Storyboard Engine V1*): the pre-flight SQL, the
-  read-only checks, approving run 3's 11 takes, the preview of Tulip's
-  narrated opening (blocks 1.1–1.10 of script v5, run 3, assembly v1,
-  about 109.8 s; the rest of the script out of scope), its inspection, one
-  edited shot and the read-only "v1 intact" digest. Not verified live: the
-  real model's beats and shots on the Tulip brief (how many normalizations,
-  repairs or blocking findings it produces), the real planning cost against
-  the $5 ceiling, how many of the opening's factual shots can be traced (the
-  pre-flight counts the ceiling), and the forecast for real shots. The
-  project STORYBOARD gate stays closed for Tulip (an audition is never the
-  narration). The evidence will be the job's `storyboard summary` log line.
-- **Voice Engine V1: saved voice profiles are not yet used live.** The
-  acceptance experiment ran (above). Pending the operator after this deploy
-  (DEPLOYMENT.md, *Operator runbook: the accepted configuration as Tulip's
-  profile*): saving run 3 as Tulip's profile and using it, then the
-  regeneration test with the production profile (and optionally a temporary
-  override). Not verified live: a regeneration on ElevenLabs; a profile's
+- **Storyboard Engine V1: one acceptance step is the operator's.** The
+  preview ran live and v1 is approved (*STORYBOARD PREVIEW RUN* above).
+  Pending: editing one shot of v1 (Shots tab → a shot's *Edit* → change a
+  field → *Save … as a new version*), which makes v2 in review with v1
+  unchanged and still approved; approving v2 would supersede v1. Not
+  verified live: an approach switch or a re-plan of beats (paid jobs), a
+  re-timing, a whole-script storyboard (it needs the whole narration and
+  the VOICE gate), the STORYBOARD gate and STORYBOARD_APPROVED, and the
+  server's refusal of visual generation (tested, not tried live).
+- **Voice Engine V1: the regeneration test has not run live.** Run 3 was
+  saved as the profile "House Documentary — Expressive", made the library
+  default and used for Tulip, and its 11 takes were approved by the user.
+  Pending the operator: the regeneration test with the production profile
+  (and optionally a temporary override), on run 2 — a regeneration on run 3
+  would make the approved storyboard's narration stale. Not verified live:
+  a regeneration on ElevenLabs; a profile's
   settings other than the House narrator v1 voice settings; what
   `character-cost` counts under v4 (recorded raw, never priced); whether
   dictionary phonemes are read correctly written between slashes (no
